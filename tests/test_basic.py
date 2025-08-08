@@ -50,6 +50,27 @@ def test_get_response_images_dummy():
     assert responses and responses[0].startswith("DUMMY")
 
 
+def test_gpt5_temperature_warning(caplog):
+    """Ensure gpt-5 models ignore temperature and log a warning."""
+    with caplog.at_level("WARNING"):
+        params = openai_utils._build_params(
+            model="gpt-5-mini",
+            input_data=[{"role": "user", "content": "hi"}],
+            max_output_tokens=None,
+            system_instruction="test",
+            temperature=0.2,
+            tools=None,
+            tool_choice=None,
+            web_search=False,
+            search_context_size="medium",
+            json_mode=False,
+            expected_schema=None,
+            reasoning_effort="medium",
+        )
+    assert "temperature" not in params
+    assert any("does not support temperature" in r.message for r in caplog.records)
+
+
 def test_get_all_responses_dummy(tmp_path):
     df = asyncio.run(openai_utils.get_all_responses(
         prompts=["a", "b"],
