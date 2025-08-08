@@ -662,11 +662,21 @@ def _build_params(
         params["tools"] = all_tools
     if tool_choice is not None:
         params["tool_choice"] = tool_choice
-    # For o‑series models, reasoning_effort controls hidden reasoning tokens; for others, temperature
+    # For o‑series models, reasoning_effort controls hidden reasoning tokens.
+    # Most other models use ``temperature`` to influence randomness, but
+    # ``gpt-5`` variants do not support this parameter.  In that case we drop
+    # the temperature and warn if the caller supplied a custom value.
     if model.startswith("o"):
         params["reasoning"] = {"effort": reasoning_effort}
     else:
-        params["temperature"] = temperature
+        if "gpt-5" in model:
+            if temperature != 0.9:
+                logger.warning(
+                    f"Model {model} does not support temperature; ignoring provided value."
+                )
+            # Do not include a temperature parameter for gpt-5 models
+        else:
+            params["temperature"] = temperature
     params.update(extra)
     return params
 
