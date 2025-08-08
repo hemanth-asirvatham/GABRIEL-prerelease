@@ -1,0 +1,94 @@
+Consider the following text:
+
+BEGIN TEXT
+{{ text }}
+END TEXT
+
+Pay close attention to the entire text.
+This requires a thorough reading of the whole text.
+Do not skip any part of the text.
+In particular, do not fixate on the beginning or end of the text.
+Ensure the entire text, beginning, middle, and end, are all considered and given your full attention.
+
+Your task is to rate how much the text manifests each of the following attributes:
+
+BEGIN ATTRIBUTES
+{{ attributes | shuffled_dict }}
+END ATTRIBUTES
+
+Each attribute is a key in the dictionary provided above.
+If a definition is provided for an attribute, you must base your rating on the attribute as it has been defined above.
+If no definition is provided, use your own best and most consistent definition of the attribute.
+
+Use the following scale to rate the text:
+
+BEGIN RATING SCALE
+{% if scale %}
+{{ scale }}
+{% else %}
+All ratings are on a scale of 0 to 100, inclusive.
+A low rating means the attribute is absent or minimally manifested by the text.
+A high rating means the attribute is highly manifested by the text to an extreme degree.
+A rating in the middle means the attribute is exhibited by the text to a moderate but not extraordinary degree.
+Be precise to the nearest integer, not vaguely rounding to the nearest multiple of 5 or 10.
+A rating of 11 captures a meaningful difference from a rating of 23; a rating of 67 captures a meaningful difference from a rating of 74, and so on.
+0 is the absolute extreme of the lowest rating, and 100 is the absolute extreme of the highest rating.
+Robustly use every increment on the whole spectrum; do not confine yourself to a subset of the spectrum, or to the extremes.
+{% endif %}
+END RATING SCALE
+
+It is crucial that you stick to the scale provided above. 
+You must carefully consider the full range of the scale.
+You must avoid rounding. Be precise to every possible value in the scale, not just vague approximations.
+By thoroughly reading the text, you should be able to accomplish this subtle precision.
+Be willing and able to use the full range of the scale as needed.
+Do not round.
+Be willing to use the whole spectrum of the scale, not just the middle, the extremes, or any other small subset of the spectrum.
+Avoid giving an extreme rating on either end of the spectrum unless it is truly warranted; extremely high or low ratings should be rare and exceptional.
+Extremely low ratings only apply if the attribute is truly absent, or essentially absent.
+Extremely high ratings only apply if the attribute is present in abundant and overwhelming fashion.
+Unless these cases are clearly true, aim to accurately rate the attribute with nuance and precision, not just defaulting to the extremes.
+Before giving an extreme rating, double check yourself and your work on the attribute in question.
+
+First grasp the big picture on where broadly on the ratings spectrum the text falls for the attribute in question.
+Then, consider the subtleties of the text, and arrive at a precise and unrounded rating.
+Consider what each gradation means from lowest to slightly less low to middle to higher to highest.
+This goes from not manifesting the attribute at all, to manifesting it very faintly, to exhibiting it a little less faintly, to a clearer but still modest expression of the attribute, to manifesting it clearly but moderately, to manifesting it clearly and abundantly, to manifesting it to an extreme and extraordinary degree.
+Every increment on the whole ratings spectrum matters and deserves careful consideration.
+
+Again, the attributes your are measuring in the text are: {{ attributes.keys() | shuffled }}
+In your output, you must use these attribute names verbatim, with absolutely no modification.
+Same case, same spelling, same punctuation, same formatting exactly as they appear above.
+
+Your output must be a JSON object with the following format:
+
+{
+	"<insert attribute name here>": <insert the corresponding rating here>,
+	"<insert attribute name here>": <insert the corresponding rating here>,
+	...
+}
+
+Once more: the attributes your are evaluating are: {{ attributes.keys() | shuffled }}
+Ensure every attribute listed above is present in your output; do not omit any or add any.
+Your task is entirely focused on taking each attribute separately, deeply comprehending the text, and then rating the text on how much it manifests that attribute.
+It is absolutely crucial that you consider each attribute separately and independently.
+Even if multiple attributes are related, there are often subtle differences between them.
+This requires a deep understanding of the text as it pertains to each specific attribute, and it requires an independent evaluation of each attribute, no matter how related they may be.
+
+It is also essential that, when measuring an attribute, you are measuring it directly in the text.
+You must not draw indirect inferences on the attribute, or otherwise interpolate or infer the attribute from other attributes.
+It is crucial you are grounded in the text, and that you are purely and directly measuring the attribute in question as it specifically is manifested in the text.
+The only scientifically valid method here is to exclusively derive your rating from how the text directly manifests the attribute in question, not how the text manifests other attributes, and then drawing inferences from that.
+Consider each attribute in isolation, and directly measure it in the text.
+
+{% if additional_instructions %}
+The user has provided the following additional instructions or clarifications.
+Consider them carefully along with the rest of the instructions.
+If they are in conflict with the rest of the instructions, these user instructions take precedence.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
+
+Output the JSON with all the attributes and their ratings.
