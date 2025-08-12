@@ -26,16 +26,54 @@ Each task returns a `pandas.DataFrame` and saves raw responses to disk.  Set `us
 
 ### Image and audio inputs
 
-`get_response` and `get_all_responses` can optionally include images or audio with your prompts. Pass the `images` and/or `audio` parameters to `get_response` or mappings `prompt_images` and `prompt_audio` to `get_all_responses`, where each key is a prompt identifier and the value is a list preserving the order of the supplied media. Images should be base64 strings and audio entries should be dictionaries containing `data` and `format`. A helper `encode_image` is provided:
+`get_response` and `get_all_responses` can include images or audio with your prompts. Pass `images` and/or `audio` to `get_response` or supply `prompt_images` and `prompt_audio` mappings to `get_all_responses`. Images should be base64 strings and audio entries should be dictionaries containing `data` and `format`. The notebook‑ready cells below show how to fetch media from the web and make a request using `await`:
+
+#### Image example
 
 ```python
-from gabriel.utils import encode_image
+import aiohttp, base64
+from gabriel.utils import get_response
 
-img_b64 = encode_image("picture.jpg")
-responses = asyncio.run(
-    get_response("Describe this", images=[img_b64], use_dummy=True)
+# Download an image from the internet
+async with aiohttp.ClientSession() as session:
+    async with session.get(
+        "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png"
+    ) as resp:
+        img_bytes = await resp.read()
+img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+# Ask the model about the picture
+responses, _ = await get_response(
+    "What logo is this?", images=[img_b64], use_dummy=True
 )
+print(responses[0])
 ```
+
+#### Audio example
+
+```python
+import aiohttp, base64
+from gabriel.utils import get_response
+
+# Download an audio clip
+async with aiohttp.ClientSession() as session:
+    async with session.get(
+        "https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/samples/jfk.wav"
+    ) as resp:
+        audio_bytes = await resp.read()
+audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+# Transcribe the clip
+responses, _ = await get_response(
+    "Transcribe the clip",
+    audio=[{"data": audio_b64, "format": "wav"}],
+    model="gpt-4o-mini-audio-preview",
+    use_dummy=True,
+)
+print(responses[0])
+```
+
+Images are provided as base64 strings, while audio items are dictionaries with `data` and `format`. Helper functions `encode_image` and `encode_audio` are available for local files.
 
 
 ## Tasks
