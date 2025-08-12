@@ -35,6 +35,7 @@ class RateConfig:
     rating_scale: Optional[str] = None
     additional_instructions: Optional[str] = None
     modality: str = "text"
+    n_attributes_per_run: int = 8
 
 
 # ────────────────────────────
@@ -55,18 +56,17 @@ class Rate:
     # -----------------------------------------------------------------
     # Parse raw LLM output into {attribute: float}
     # -----------------------------------------------------------------
-    async def _parse(self, raw: Any) -> Dict[str, Optional[float]]:
+    async def _parse(self, raw: Any, attrs: List[str]) -> Dict[str, Optional[float]]:
         obj = await safest_json(raw)
         out: Dict[str, Optional[float]] = {}
         if isinstance(obj, dict):
-            for attr in self.cfg.attributes:
+            for attr in attrs:
                 try:
                     out[attr] = float(obj.get(attr)) if obj.get(attr) is not None else None
                 except Exception:
                     out[attr] = None
             return out
-
-        return {attr: None for attr in self.cfg.attributes}
+        return {attr: None for attr in attrs}
 
     # -----------------------------------------------------------------
     # Main entry point
@@ -86,29 +86,40 @@ class Rate:
         values = df_proc[column_name].tolist()
         texts = [str(v) for v in values]
 
-        prompts: List[str] = []
-        ids: List[str] = []
+        base_ids: List[str] = []
         id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
         id_to_val: Dict[str, Any] = {}
+        prompt_texts: Dict[str, str] = {}
 
-        # Build prompts, deduplicating identical items
         for row, (passage, orig) in enumerate(zip(texts, values)):
             sha8 = hashlib.sha1(passage.encode()).hexdigest()[:8]
             id_to_rows[sha8].append(row)
             if len(id_to_rows[sha8]) > 1:
                 continue
             id_to_val[sha8] = orig
-            prompt_text = passage if self.cfg.modality in {"text", "entity", "web"} else ""
-            prompts.append(
-                self.template.render(
-                    text=prompt_text,
-                    attributes=self.cfg.attributes,
-                    scale=self.cfg.rating_scale,
-                    additional_instructions=self.cfg.additional_instructions,
-                    modality=self.cfg.modality,
+            prompt_texts[sha8] = passage if self.cfg.modality in {"text", "entity", "web"} else ""
+            base_ids.append(sha8)
+
+        attr_items = list(self.cfg.attributes.items())
+        attr_batches: List[Dict[str, str]] = [
+            dict(attr_items[i : i + self.cfg.n_attributes_per_run])
+            for i in range(0, len(attr_items), self.cfg.n_attributes_per_run)
+        ]
+
+        prompts: List[str] = []
+        ids: List[str] = []
+        for batch_idx, batch_attrs in enumerate(attr_batches):
+            for ident in base_ids:
+                prompts.append(
+                    self.template.render(
+                        text=prompt_texts[ident],
+                        attributes=batch_attrs,
+                        scale=self.cfg.rating_scale,
+                        additional_instructions=self.cfg.additional_instructions,
+                        modality=self.cfg.modality,
+                    )
                 )
-            )
-            ids.append(sha8)
+                ids.append(f"{ident}_batch{batch_idx}")
 
         prompt_images: Optional[Dict[str, List[str]]] = None
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
@@ -129,7 +140,8 @@ class Rate:
                         else:
                             encoded.append(img)
                     if encoded:
-                        prompt_images[ident] = encoded
+                        for batch_idx in range(len(attr_batches)):
+                            prompt_images[f"{ident}_batch{batch_idx}"] = encoded
             if not prompt_images:
                 prompt_images = None
         elif self.cfg.modality == "audio":
@@ -150,9 +162,11 @@ class Rate:
                             elif isinstance(aud, dict):
                                 encoded_auds.append(aud)
                         if encoded_auds:
-                            prompt_audio[ident] = encoded_auds
+                            for batch_idx in range(len(attr_batches)):
+                                prompt_audio[f"{ident}_batch{batch_idx}"] = encoded_auds
                     elif isinstance(auds, list):
-                        prompt_audio[ident] = auds
+                        for batch_idx in range(len(attr_batches)):
+                            prompt_audio[f"{ident}_batch{batch_idx}"] = auds
             if not prompt_audio:
                 prompt_audio = None
 
@@ -232,15 +246,23 @@ class Rate:
 
         # parse each run and build disaggregated records
         full_records: List[Dict[str, Any]] = []
+        base_attrs = list(self.cfg.attributes.keys())
         for run_idx, df_resp in enumerate(df_resps, start=1):
-            id_to_ratings: Dict[str, Dict[str, Optional[float]]] = {}
-            for ident, raw in zip(df_resp.Identifier, df_resp.Response):
+            id_to_ratings: Dict[str, Dict[str, Optional[float]]] = {
+                ident: {attr: None for attr in base_attrs} for ident in base_ids
+            }
+            for ident_batch, raw in zip(df_resp.Identifier, df_resp.Response):
                 main = raw[0] if isinstance(raw, list) and raw else raw
-                id_to_ratings[ident] = await self._parse(main)
-            for ident in ids:
-                parsed = id_to_ratings.get(ident, {attr: None for attr in self.cfg.attributes})
+                base_ident, batch_part = ident_batch.rsplit("_batch", 1)
+                batch_idx = int(batch_part)
+                attrs = list(attr_batches[batch_idx].keys())
+                parsed = await self._parse(main, attrs)
+                for attr in attrs:
+                    id_to_ratings[base_ident][attr] = parsed.get(attr)
+            for ident in base_ids:
+                parsed = id_to_ratings.get(ident, {attr: None for attr in base_attrs})
                 rec = {"text": id_to_val[ident], "run": run_idx}
-                rec.update({attr: parsed.get(attr) for attr in self.cfg.attributes})
+                rec.update({attr: parsed.get(attr) for attr in base_attrs})
                 full_records.append(rec)
 
         full_df = pd.DataFrame(full_records).set_index(["text", "run"])
