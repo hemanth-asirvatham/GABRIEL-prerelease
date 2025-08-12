@@ -16,7 +16,7 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json
+from ..utils import safest_json, encode_image, encode_audio
 
 
 # ────────────────────────────
@@ -74,34 +74,34 @@ class Rate:
     async def run(
         self,
         df: pd.DataFrame,
-        text_column: str,
+        column_name: str,
         *,
         debug: bool = False,
         reset_files: bool = False,
-        image_column: Optional[str] = None,
-        audio_column: Optional[str] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """Return ``df`` with one column per attribute rating."""
 
         df_proc = df.reset_index(drop=True).copy()
-        texts = df_proc[text_column].astype(str).tolist()
+        values = df_proc[column_name].tolist()
+        texts = [str(v) for v in values]
 
         prompts: List[str] = []
         ids: List[str] = []
         id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
-        id_to_text: Dict[str, str] = {}
+        id_to_val: Dict[str, Any] = {}
 
-        # Build prompts, deduplicating identical passages
-        for row, passage in enumerate(texts):
+        # Build prompts, deduplicating identical items
+        for row, (passage, orig) in enumerate(zip(texts, values)):
             sha8 = hashlib.sha1(passage.encode()).hexdigest()[:8]
             id_to_rows[sha8].append(row)
             if len(id_to_rows[sha8]) > 1:
                 continue
-            id_to_text[sha8] = passage
+            id_to_val[sha8] = orig
+            prompt_text = passage if self.cfg.modality in {"text", "entity", "web"} else ""
             prompts.append(
                 self.template.render(
-                    text=passage,
+                    text=prompt_text,
                     attributes=self.cfg.attributes,
                     scale=self.cfg.rating_scale,
                     additional_instructions=self.cfg.additional_instructions,
@@ -111,22 +111,50 @@ class Rate:
             ids.append(sha8)
 
         prompt_images: Optional[Dict[str, List[str]]] = None
-        if image_column is not None and image_column in df_proc:
-            prompt_images = {}
-            img_list = df_proc[image_column].tolist()
-            for ident, rows in id_to_rows.items():
-                imgs = img_list[rows[0]]
-                if imgs:
-                    prompt_images[ident] = imgs
-
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
-        if audio_column is not None and audio_column in df_proc:
-            prompt_audio = {}
-            aud_list = df_proc[audio_column].tolist()
+
+        if self.cfg.modality == "image":
+            prompt_images = {}
             for ident, rows in id_to_rows.items():
-                auds = aud_list[rows[0]]
+                imgs = values[rows[0]]
+                if imgs:
+                    if isinstance(imgs, str):
+                        imgs = [imgs]
+                    encoded: List[str] = []
+                    for img in imgs:
+                        if isinstance(img, str) and os.path.exists(img):
+                            enc = encode_image(img)
+                            if enc:
+                                encoded.append(enc)
+                        else:
+                            encoded.append(img)
+                    if encoded:
+                        prompt_images[ident] = encoded
+            if not prompt_images:
+                prompt_images = None
+        elif self.cfg.modality == "audio":
+            prompt_audio = {}
+            for ident, rows in id_to_rows.items():
+                auds = values[rows[0]]
                 if auds:
-                    prompt_audio[ident] = auds
+                    if isinstance(auds, str) or (
+                        isinstance(auds, list) and auds and isinstance(auds[0], str)
+                    ):
+                        auds = [auds] if isinstance(auds, str) else auds
+                        encoded_auds: List[Dict[str, str]] = []
+                        for aud in auds:
+                            if isinstance(aud, str) and os.path.exists(aud):
+                                enc = encode_audio(aud)
+                                if enc:
+                                    encoded_auds.append(enc)
+                            elif isinstance(aud, dict):
+                                encoded_auds.append(aud)
+                        if encoded_auds:
+                            prompt_audio[ident] = encoded_auds
+                    elif isinstance(auds, list):
+                        prompt_audio[ident] = auds
+            if not prompt_audio:
+                prompt_audio = None
 
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
@@ -211,7 +239,7 @@ class Rate:
                 id_to_ratings[ident] = await self._parse(main)
             for ident in ids:
                 parsed = id_to_ratings.get(ident, {attr: None for attr in self.cfg.attributes})
-                rec = {"text": id_to_text[ident], "run": run_idx}
+                rec = {"text": id_to_val[ident], "run": run_idx}
                 rec.update({attr: parsed.get(attr) for attr in self.cfg.attributes})
                 full_records.append(rec)
 
@@ -223,7 +251,7 @@ class Rate:
         agg_df = full_df.groupby("text")[list(self.cfg.attributes)].mean()
 
         out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
-        result = df_proc.merge(agg_df, left_on=text_column, right_index=True, how="left")
+        result = df_proc.merge(agg_df, left_on=column_name, right_index=True, how="left")
         result.to_csv(out_path, index=False)
 
         # keep raw response files for reference

@@ -57,7 +57,7 @@ import pandas as pd
 # to adjust these imports accordingly.
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils.openai_utils import get_all_responses
-from gabriel.utils import safest_json
+from gabriel.utils import safest_json, encode_image, encode_audio
 
 
 @dataclass
@@ -607,8 +607,6 @@ class Rank:
         column_name: str,
         *,
         reset_files: bool = False,
-        image_column: Optional[str] = None,
-        audio_column: Optional[str] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """Execute the ranking procedure.
@@ -679,18 +677,50 @@ class Rank:
         df_proc = df.reset_index(drop=True).copy()
         # assign a unique identifier per row using the row index
         df_proc["_id"] = df_proc.index.astype(str)
-        # extract texts and build lookup
-        texts = list(zip(df_proc["_id"], df_proc[column_name].astype(str)))
+        # extract contents and build lookup
+        if self.cfg.modality in {"image", "audio"}:
+            texts = list(zip(df_proc["_id"], ["" for _ in df_proc[column_name]]))
+        else:
+            texts = list(zip(df_proc["_id"], df_proc[column_name].astype(str)))
         texts_by_id = {i: t for i, t in texts}
         item_ids = [i for i, _ in texts]
 
         images_by_id: Dict[str, List[str]] = {}
-        if image_column is not None and image_column in df_proc:
-            images_by_id = dict(zip(df_proc["_id"], df_proc[image_column]))
-
         audio_by_id: Dict[str, List[Dict[str, str]]] = {}
-        if audio_column is not None and audio_column in df_proc:
-            audio_by_id = dict(zip(df_proc["_id"], df_proc[audio_column]))
+        if self.cfg.modality == "image":
+            for rid, imgs in zip(df_proc["_id"], df_proc[column_name]):
+                if imgs:
+                    if isinstance(imgs, str):
+                        imgs = [imgs]
+                    encoded: List[str] = []
+                    for img in imgs:
+                        if isinstance(img, str) and os.path.exists(img):
+                            enc = encode_image(img)
+                            if enc:
+                                encoded.append(enc)
+                        else:
+                            encoded.append(img)
+                    if encoded:
+                        images_by_id[rid] = encoded
+        elif self.cfg.modality == "audio":
+            for rid, auds in zip(df_proc["_id"], df_proc[column_name]):
+                if auds:
+                    if isinstance(auds, str) or (
+                        isinstance(auds, list) and auds and isinstance(auds[0], str)
+                    ):
+                        auds = [auds] if isinstance(auds, str) else auds
+                        encoded_auds: List[Dict[str, str]] = []
+                        for aud in auds:
+                            if isinstance(aud, str) and os.path.exists(aud):
+                                enc = encode_audio(aud)
+                                if enc:
+                                    encoded_auds.append(enc)
+                            elif isinstance(aud, dict):
+                                encoded_auds.append(aud)
+                        if encoded_auds:
+                            audio_by_id[rid] = encoded_auds
+                    elif isinstance(auds, list):
+                        audio_by_id[rid] = auds
         # derive list of attributes
         if isinstance(self.cfg.attributes, dict):
             attr_keys = list(self.cfg.attributes.keys())

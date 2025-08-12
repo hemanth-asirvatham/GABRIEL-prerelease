@@ -31,8 +31,6 @@ async def rate(
     use_dummy: bool = False,
     file_name: str = "ratings.csv",
     modality: str = "text",
-    image_column: Optional[str] = None,
-    audio_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
@@ -53,8 +51,6 @@ async def rate(
         df,
         column_name,
         reset_files=reset_files,
-        image_column=image_column,
-        audio_column=audio_column,
     )
 
 async def classify(
@@ -72,8 +68,6 @@ async def classify(
     use_dummy: bool = False,
     file_name: str = "classify_responses.csv",
     modality: str = "text",
-    image_column: Optional[str] = None,
-    audio_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
@@ -95,8 +89,6 @@ async def classify(
         df,
         column_name,
         reset_files=reset_files,
-        image_column=image_column,
-        audio_column=audio_column,
     )
 
 
@@ -150,8 +142,6 @@ async def rank(
     file_name: str = "rankings",
     reset_files: bool = False,
     modality: str = "text",
-    image_column: Optional[str] = None,
-    audio_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -177,8 +167,6 @@ async def rank(
         df,
         column_name,
         reset_files=reset_files,
-        image_column=image_column,
-        audio_column=audio_column,
     )
 
 

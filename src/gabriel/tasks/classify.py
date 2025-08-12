@@ -13,7 +13,7 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json
+from ..utils import safest_json, encode_image, encode_audio
 
 
 # ────────────────────────────
@@ -57,30 +57,30 @@ class Classify:
         cfg.save_dir = str(expanded)
         self.cfg = cfg
         self.template = template or PromptTemplate.from_package(
-            "basic_classifier_prompt.jinja2"
+            "classification_prompt.jinja2"
         )
 
     # -----------------------------------------------------------------
     # Build prompts (deduplicating identical passages)
     # -----------------------------------------------------------------
-    def _build(self, texts: List[str]):
+    def _build(self, values: List[Any]):
         prompts: List[str] = []
         ids: List[str] = []
         id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
-        id_to_text: Dict[str, str] = {}
+        id_to_val: Dict[str, Any] = {}
 
-        for row, passage in enumerate(texts):
-            clean = " ".join(str(passage).split())
+        for row, val in enumerate(values):
+            clean = " ".join(str(val).split())
             sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
             id_to_rows[sha8].append(row)
             if len(id_to_rows[sha8]) > 1:
-                continue  # duplicate passage – no need to prompt again
-            id_to_text[sha8] = passage
-
+                continue  # duplicate item – no need to prompt again
+            id_to_val[sha8] = val
+            prompt_text = str(val) if self.cfg.modality in {"text", "entity", "web"} else ""
             prompts.append(
                 self.template.render(
-                    text=passage,
-                    labels=self.cfg.labels,
+                    text=prompt_text,
+                    attributes=self.cfg.labels,
                     additional_instructions=self.cfg.additional_instructions,
                     additional_guidelines=self.cfg.additional_guidelines,
                     modality=self.cfg.modality,
@@ -88,10 +88,10 @@ class Classify:
             )
             ids.append(sha8)
 
-        dup_ct = len(texts) - len(prompts)
+        dup_ct = len(values) - len(prompts)
         if dup_ct:
             print(f"[Classify] Skipped {dup_ct} duplicate prompt(s).")
-        return prompts, ids, id_to_rows, id_to_text
+        return prompts, ids, id_to_rows, id_to_val
 
     # -----------------------------------------------------------------
     # Helpers for parsing raw model output
@@ -139,37 +139,63 @@ class Classify:
     async def run(
         self,
         df: pd.DataFrame,
-        text_column: str,
+        column_name: str,
         *,
         reset_files: bool = False,
-        image_column: Optional[str] = None,
-        audio_column: Optional[str] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
-        """Classify texts in ``df[text_column]`` and return ``df`` with label columns."""
+        """Classify items in ``df[column_name]`` and return ``df`` with label columns."""
 
         df_proc = df.reset_index(drop=True).copy()
-        texts = df_proc[text_column].astype(str).tolist()
+        values = df_proc[column_name].tolist()
 
-        prompts, ids, id_to_rows, id_to_text = self._build(texts)
+        prompts, ids, id_to_rows, id_to_val = self._build(values)
 
         prompt_images: Optional[Dict[str, List[str]]] = None
-        if image_column is not None and image_column in df_proc:
-            prompt_images = {}
-            img_list = df_proc[image_column].tolist()
-            for ident, rows in id_to_rows.items():
-                imgs = img_list[rows[0]]
-                if imgs:
-                    prompt_images[ident] = imgs
-
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
-        if audio_column is not None and audio_column in df_proc:
-            prompt_audio = {}
-            aud_list = df_proc[audio_column].tolist()
+
+        if self.cfg.modality == "image":
+            prompt_images = {}
             for ident, rows in id_to_rows.items():
-                auds = aud_list[rows[0]]
+                imgs = values[rows[0]]
+                if imgs:
+                    if isinstance(imgs, str):
+                        imgs = [imgs]
+                    encoded: List[str] = []
+                    for img in imgs:
+                        if isinstance(img, str) and os.path.exists(img):
+                            enc = encode_image(img)
+                            if enc:
+                                encoded.append(enc)
+                        else:
+                            encoded.append(img)
+                    if encoded:
+                        prompt_images[ident] = encoded
+            if not prompt_images:
+                prompt_images = None
+        elif self.cfg.modality == "audio":
+            prompt_audio = {}
+            for ident, rows in id_to_rows.items():
+                auds = values[rows[0]]
                 if auds:
-                    prompt_audio[ident] = auds
+                    if isinstance(auds, str) or (
+                        isinstance(auds, list) and auds and isinstance(auds[0], str)
+                    ):
+                        auds = [auds] if isinstance(auds, str) else auds
+                        encoded_auds: List[Dict[str, str]] = []
+                        for aud in auds:
+                            if isinstance(aud, str) and os.path.exists(aud):
+                                enc = encode_audio(aud)
+                                if enc:
+                                    encoded_auds.append(enc)
+                            elif isinstance(aud, dict):
+                                encoded_auds.append(aud)
+                        if encoded_auds:
+                            prompt_audio[ident] = encoded_auds
+                    elif isinstance(auds, list):
+                        prompt_audio[ident] = auds
+            if not prompt_audio:
+                prompt_audio = None
 
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
@@ -258,7 +284,7 @@ class Classify:
             total_orphans += orphans
             for ident in ids:
                 parsed = id_to_labels.get(ident, {lab: None for lab in self.cfg.labels})
-                rec = {"text": id_to_text[ident], "run": run_idx}
+                rec = {"text": id_to_val[ident], "run": run_idx}
                 rec.update({lab: parsed.get(lab) for lab in self.cfg.labels})
                 full_records.append(rec)
 
@@ -292,7 +318,7 @@ class Classify:
         print("=================================\n")
 
         out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
-        result = df_proc.merge(agg_df, left_on=text_column, right_index=True, how="left")
+        result = df_proc.merge(agg_df, left_on=column_name, right_index=True, how="left")
         result.to_csv(out_path, index=False)
 
         # keep raw response files for reference
