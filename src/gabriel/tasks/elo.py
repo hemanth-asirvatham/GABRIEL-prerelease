@@ -45,6 +45,7 @@ class EloConfig:
     save_dir: str = os.path.expanduser("~/Documents/runs")
     run_name: str = f"elo_{datetime.now():%Y%m%d_%H%M%S}"
     seed: Optional[int] = None
+    modality: str = "text"
 
 
 class EloRater:
@@ -300,6 +301,8 @@ class EloRater:
         id_col: str,
         *,
         reset_files: bool = False,
+        image_column: Optional[str] = None,
+        audio_column: Optional[str] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
         final_path = os.path.join(self.save_path, self.cfg.final_filename)
@@ -311,6 +314,14 @@ class EloRater:
         texts = list(zip(df[id_col], df[text_col]))
         texts_by_id = {i: t for i, t in texts}
         item_ids = [i for i, _ in texts]
+
+        images_by_id: Dict[str, List[str]] = {}
+        if image_column is not None and image_column in df:
+            images_by_id = dict(zip(df[id_col], df[image_column]))
+
+        audio_by_id: Dict[str, List[Dict[str, str]]] = {}
+        if audio_column is not None and audio_column in df:
+            audio_by_id = dict(zip(df[id_col], df[audio_column]))
 
         if isinstance(self.cfg.attributes, dict):
             attr_keys = list(self.cfg.attributes.keys())
@@ -339,6 +350,8 @@ class EloRater:
 
             attr_batches = [attr_keys[i:i + 8] for i in range(0, len(attr_keys), 8)]
             prompts, ids = [], []
+            pair_images: Dict[str, List[str]] = {}
+            pair_audio: Dict[str, List[Dict[str, str]]] = {}
             for batch_idx, batch in enumerate(attr_batches):
                 attr_def_map = ({a: self.cfg.attributes[a] for a in batch}
                                 if isinstance(self.cfg.attributes, dict) else {a: "" for a in batch})
@@ -346,19 +359,43 @@ class EloRater:
                     add_instructions = self.cfg.instructions
                     if self.cfg.additional_guidelines:
                         add_instructions = (add_instructions + "\n" + self.cfg.additional_guidelines).strip()
+                    ident = f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}"
                     prompts.append(
                         self.template.render(
-                            passage_circle=t_a,
-                            passage_square=t_b,
+                            entry_circle=t_a,
+                            entry_square=t_b,
                             attributes=attr_def_map,
                             additional_instructions=add_instructions,
+                            modality=self.cfg.modality,
                         )
                     )
-                    ids.append(f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}")
+                    ids.append(ident)
+                    if images_by_id:
+                        imgs = []
+                        ia = images_by_id.get(id_a, [])
+                        ib = images_by_id.get(id_b, [])
+                        if ia:
+                            imgs.extend(ia)
+                        if ib:
+                            imgs.extend(ib)
+                        if imgs:
+                            pair_images[ident] = imgs
+                    if audio_by_id:
+                        auds = []
+                        aa = audio_by_id.get(id_a, [])
+                        ab = audio_by_id.get(id_b, [])
+                        if aa:
+                            auds.extend(aa)
+                        if ab:
+                            auds.extend(ab)
+                        if auds:
+                            pair_audio[ident] = auds
 
             resp_df = await get_all_responses(
                 prompts=prompts,
                 identifiers=ids,
+                prompt_images=pair_images or None,
+                prompt_audio=pair_audio or None,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
                 json_mode=True,

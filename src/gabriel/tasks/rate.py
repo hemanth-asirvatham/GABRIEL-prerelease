@@ -34,6 +34,7 @@ class RateConfig:
     timeout: float = 60.0
     rating_scale: Optional[str] = None
     additional_instructions: Optional[str] = None
+    modality: str = "text"
 
 
 # ────────────────────────────
@@ -77,6 +78,8 @@ class Rate:
         *,
         debug: bool = False,
         reset_files: bool = False,
+        image_column: Optional[str] = None,
+        audio_column: Optional[str] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """Return ``df`` with one column per attribute rating."""
@@ -102,9 +105,28 @@ class Rate:
                     attributes=self.cfg.attributes,
                     scale=self.cfg.rating_scale,
                     additional_instructions=self.cfg.additional_instructions,
+                    modality=self.cfg.modality,
                 )
             )
             ids.append(sha8)
+
+        prompt_images: Optional[Dict[str, List[str]]] = None
+        if image_column is not None and image_column in df_proc:
+            prompt_images = {}
+            img_list = df_proc[image_column].tolist()
+            for ident, rows in id_to_rows.items():
+                imgs = img_list[rows[0]]
+                if imgs:
+                    prompt_images[ident] = imgs
+
+        prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
+        if audio_column is not None and audio_column in df_proc:
+            prompt_audio = {}
+            aud_list = df_proc[audio_column].tolist()
+            for ident, rows in id_to_rows.items():
+                auds = aud_list[rows[0]]
+                if auds:
+                    prompt_audio[ident] = auds
 
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
@@ -116,6 +138,8 @@ class Rate:
             df_resp_all = await get_all_responses(
                 prompts=prompts,
                 identifiers=ids,
+                prompt_images=prompt_images,
+                prompt_audio=prompt_audio,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
                 save_path=csv_path,
@@ -133,9 +157,24 @@ class Rate:
                 prompts_all.extend(prompts)
                 ids_all.extend([f"{ident}_run{run_idx}" for ident in ids])
 
+            prompt_images_all: Optional[Dict[str, List[str]]] = None
+            if prompt_images:
+                prompt_images_all = {}
+                for ident, imgs in prompt_images.items():
+                    for run_idx in range(1, self.cfg.n_runs + 1):
+                        prompt_images_all[f"{ident}_run{run_idx}"] = imgs
+            prompt_audio_all: Optional[Dict[str, List[Dict[str, str]]]] = None
+            if prompt_audio:
+                prompt_audio_all = {}
+                for ident, auds in prompt_audio.items():
+                    for run_idx in range(1, self.cfg.n_runs + 1):
+                        prompt_audio_all[f"{ident}_run{run_idx}"] = auds
+
             df_resp_all = await get_all_responses(
                 prompts=prompts_all,
                 identifiers=ids_all,
+                prompt_images=prompt_images_all,
+                prompt_audio=prompt_audio_all,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
                 save_path=csv_path,

@@ -30,6 +30,9 @@ async def rate(
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "ratings.csv",
+    modality: str = "text",
+    image_column: Optional[str] = None,
+    audio_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
@@ -43,9 +46,16 @@ async def rate(
         n_runs=n_runs,
         use_dummy=use_dummy,
         additional_instructions=additional_instructions,
+        modality=modality,
         **cfg_kwargs,
     )
-    return await Rate(cfg).run(df, column_name, reset_files=reset_files)
+    return await Rate(cfg).run(
+        df,
+        column_name,
+        reset_files=reset_files,
+        image_column=image_column,
+        audio_column=audio_column,
+    )
 
 async def classify(
     df: pd.DataFrame,
@@ -61,6 +71,9 @@ async def classify(
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "classify_responses.csv",
+    modality: str = "text",
+    image_column: Optional[str] = None,
+    audio_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
@@ -75,9 +88,16 @@ async def classify(
         min_frequency=min_frequency,
         additional_instructions=additional_instructions or "",
         use_dummy=use_dummy,
+        modality=modality,
         **cfg_kwargs,
     )
-    return await Classify(cfg).run(df, column_name, reset_files=reset_files)
+    return await Classify(cfg).run(
+        df,
+        column_name,
+        reset_files=reset_files,
+        image_column=image_column,
+        audio_column=audio_column,
+    )
 
 
 async def deidentify(
@@ -129,6 +149,9 @@ async def rank(
     use_dummy: bool = False,
     file_name: str = "rankings",
     reset_files: bool = False,
+    modality: str = "text",
+    image_column: Optional[str] = None,
+    audio_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -147,9 +170,16 @@ async def rank(
         save_dir=save_dir,
         file_name=file_name,
         additional_instructions=additional_instructions or "",
+        modality=modality,
         **cfg_kwargs,
     )
-    return await Rank(cfg).run(df, column_name, reset_files=reset_files)
+    return await Rank(cfg).run(
+        df,
+        column_name,
+        reset_files=reset_files,
+        image_column=image_column,
+        audio_column=audio_column,
+    )
 
 
 async def codify(
