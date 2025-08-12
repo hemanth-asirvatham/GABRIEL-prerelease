@@ -4,7 +4,7 @@ from .openai_utils import get_response, get_all_responses
 from .image_utils import encode_image
 from .logging import get_logger, set_log_level
 from .teleprompter import Teleprompter
-from .maps import create_county_choropleth
+from .mapmaker import MapMaker
 from .prompt_paraphraser import PromptParaphraser, PromptParaphraserConfig
 from .parsing import safe_json, safest_json, clean_json_df
 from .jinja import shuffled, shuffled_dict, get_env
@@ -22,7 +22,7 @@ __all__ = [
     "get_logger",
     "set_log_level",
     "Teleprompter",
-    "create_county_choropleth",
+    "MapMaker",
     "PromptParaphraser",
     "PromptParaphraserConfig",
     "safe_json",
