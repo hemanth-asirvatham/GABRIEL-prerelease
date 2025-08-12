@@ -131,6 +131,8 @@ class Rate:
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
 
+        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+
         if not isinstance(self.cfg.n_runs, int) or self.cfg.n_runs < 1:
             raise ValueError("n_runs must be an integer >= 1")
 

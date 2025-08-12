@@ -640,6 +640,8 @@ class Rank:
         # prepare file paths
         base_name = os.path.splitext(self.cfg.file_name)[0]
         final_path = os.path.join(self.cfg.save_dir, f"{base_name}_final.csv")
+
+        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
         # Determine how many rounds have already been processed when
         # `reset_files` is False.  We look for files named
         # ``<base_name>_round<k>.csv`` to infer progress.  If a final
