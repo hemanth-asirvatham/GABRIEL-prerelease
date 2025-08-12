@@ -1,87 +1,83 @@
-Consider the following two passages:
+{% if modality == "text" %}
+Consider the following two distinct text entries:
+BEGIN ENTRY CIRCLE
+{{ entry_circle }}
+END ENTRY CIRCLE
+Above entry ("circle") is distinct from below entry ("square").
+BEGIN ENTRY SQUARE
+{{ entry_square }}
+END ENTRY SQUARE
 
-BEGIN PASSAGE CIRCLE
-{{ passage_circle }}
-END PASSAGE CIRCLE
+Read both text entries separately from one another. Process each by itself and fully-start, middle, end. 
+Do not skim; comprehend each whole text deeply, including subtleties buried deep in each text entry.
+{% elif modality == "image" %}
+Two images are provided. **CIRCLE = first image. SQUARE = second image.** Comprehend both fully (overall + fine detail).
+Again, "square" references the second, later image entry; "circle" references the first, earlier image entry.
+Be very clear in your mind that "circle" is the first image and "square" is the second image.
+{% elif modality == "audio" %}
+Two audio files are provided. **CIRCLE = first audio recording. SQUARE = second audio recording.** Comprehend both fully (content, style, tone, sonic qualities).
+Again, "square" references the second, later audio entry; "circle" references the first, earlier audio entry.
+Be very clear in your mind that "circle" is the first audio recording and "square" is the second audio recording.
+{% elif modality == "entity" %}
+Entity circle: {{ entry_circle }}
+Entity square: {{ entry_square }}
+Use your prodigious internal knowledge on both item/entity square ("{{ entry_square }}") and item/entity circle ("{{ entry_circle }}").
+Comprehensively consider every relevant detail you know about each, both big picture and subtleties.
+Consider "{{ entry_square }}" ("square") and "{{ entry_circle }}" ("circle") as the entries/content to be compared, using your internal knowledge.
+{% elif modality == "web" %}
+Entity circle: {{ entry_circle }}
+Entity square: {{ entry_square }}
+Comprehensively explore the web for all relevant information on both item/entity square ("{{ entry_square }}") and item/entity circle ("{{ entry_circle }}").
+Ensure you collect a highly truthful, accurate, comprehensive, and representative picture of each from the web.
+Critical that you search on each entity separately and with equal thoroughness.
+Consider "{{ entry_square }}" ("square") and "{{ entry_circle }}" ("circle") as the entries/content to be compared, fully grounded in the info you find on the web.
+Thoroughly research each entity on the web; creatively use different search approaches; gather as much info as possible to deeply characterize the relevant aspects of both square and circle.
+Crucial: ONLY use the direct info you find on the web to perform your analysis. Collect the info then dispassionately analyze it with no preconceived notions.
+{% endif %}
 
-BEGIN PASSAGE SQUARE
-{{ passage_square }}
-END PASSAGE SQUARE
+Essential: do not confuse or conflate the two entries.
+Fully separate entry square from entry circle in your mind.
+"square" and "circle" labels purely for referencing. Content was randomly assigned to each reference label, so bear no weight on entry order.
+Give both entries full and equal attention. Check yourself; ensure equal comprehension of both.
 
-Pay close attention to the entirety of both passages.
-This requires a thorough and separate reading of the whole of each passage.
-Do not skip any part of either passage.
-In particular, do not fixate on the beginning or end of either passage.
-Ensure the entirety of each passage, beginning, middle, and end, are all considered and given your full attention.
-It is essential that you do not confuse or conflate the two passages.
-Be very clear in your mind what is in passage square and what is in passage circle.
-"circle" and "square" are purely for referencing purposes; they have no meaning and passages were randomly assigned to each.
-It is crucial that you bear absolutely no weight on the order of the passages above; again, the order was randomly assigned.
-Your entire analysis must be based purely on the content of the passages.
-Both passages must be given your full and equal attention.
-Check yourself to ensure you are equally attentive to both passages.
-
-Your task is to determine which passage, square or circle, manifests each of the following attributes to a greater degree than the other:
+Your task: for each attribute below, decide which entry (square or circle) manifests that attribute to a greater degree than the other entry.
 
 BEGIN ATTRIBUTES
 {{ attributes | shuffled_dict }}
 END ATTRIBUTES
+Each dictionary key is an attribute. If a definition is provided, use it to anchor judgment; otherwise use your best consistent definition.
 
-Each attribute is a key in the dictionary provided above.
-If a definition is provided for an attribute, you must base your determination on the attribute as it has been defined above.
-If no definition is provided, use your own best and most consistent definition of the attribute.
+Decision options per attribute:
+"square" - entry square shows stronger **direct** signal than circle
+"circle" - entry circle shows stronger **direct** signal than square
+"draw" - truly indistinguishable strength
+"insufficient signal" - **both** lack any direct signal
 
-Again, the attributes your are measuring and comparing between the two passages are: {{ attributes.keys() | shuffled }}
-In your output, you must use these attribute names verbatim, with absolutely no modification.
-Same case, same spelling, same punctuation, same formatting exactly as they appear above.
+Rules:
+- Judge each attribute independently and separately from each other
+- Absolutely no indirect inference from other attributes or cross-attribute leakage (example of bad: inferring environmentalism from general political lean; good: measuring direct evidence of environmental opinions, no inference/biasing)
+- Only measure and compare direct signal of each attribute alone in each entry, NOT what is implied by other attributes; CRUCIAL each attribute measured independently on its own direct, specifically relevant signal
+- Identify even subtle differences; use "draw" only in rare case signals are truly equal
+- Deep, holistic comparison of both entries is critical
+- Use "insufficient signal" readily, whenever **both circle and square** have no direct signal on the attribute (i.e. neither has any content directly relevant to measuring that specific attribute)
+- If attribute can only be inferred and not directly measured, use "insufficient signal"
 
-Your output must be a JSON object with the following format:
-
+Output JSON only, in following format:
 {
-    "<insert attribute name here>": <insert "square", "circle", "draw", or "insufficient signal" here, corresponding to the passage that manifests the attribute to a greater degree>,
-	"<insert attribute name here>": <insert "circle", "square", "draw", or "insufficient signal" here, corresponding to the passage that manifests the attribute to a greater degree>,
-	...
+    "<insert attribute name here>": "<insert "square" or "circle" here, depending on which entry manifests this specific attribute more; else "draw" or "insufficient signal">",
+    "<attribute name>": "<insert one of "circle"|"square"|"draw"|"insufficient signal">",
+    ...
 }
 
-Your only output should be each and every attribute independently evaluated as either "square" or "circle".
-If passage square manifests the attribute to a greater degree than passage circle, you must output "square" for that attribute.
-If passage circle manifests the attribute to a greater degree than passage square, you must output "circle" for that attribute.
-If the two passages manifest the attribute to a truly equal degree, you can output "draw" for that attribute.
-If there is simply no direct measurable signal of the attribute in either passage, you can output "insufficient signal" for that attribute.
-A direct signal means that at least one of the passages directly exhibits the attribute in question, even if it is only in a very subtle way.
-This is opposed to an indirect signal, which is a signal on the attribute that is not directly manifested in the passage, but rather inferred from other attributes or information.
-We are only interested in direct signals; indirect signals are not valid and should not be considered.
-
-It is important to only use "draw" for an attribute if the passages are truly and indistinguishably equal in their manifestation of the attribute, which is a rare occurrence.
-If there is truly no direct signal of the attribute in either passage, which may be the case for some attributes, you must output "insufficient signal" for that attribute.
-Only use "insufficient signal" if both passages, not just one, lack any direct signal of the attribute in question.
-If some signal is present for at least one of the passages, then make every effort to choose "circle" or "square", even if the difference is very slight and subtle.
-Only use "draw" if there is truly, absolutely no difference between the two passages on that attribute.
-Remember to consider each attribute independently: some attributes may lack any directly measurable signal while others do.
-
-Once more: the attributes your are evaluating are: {{ attributes.keys() | shuffled }}
-Ensure every attribute listed above is present in your output; do not omit any or add any.
-Your task is entirely focused on taking each attribute separately, deeply comprehending passage square and passage circle, and then determining which passage manifests that attribute to a greater degree.
-It is absolutely crucial that you consider each attribute separately and independently.
-Even if multiple attributes are related, there are often subtle differences between them.
-This requires a deep understanding of the two passages as they pertain to each specific attribute, and it requires an independent evaluation of each attribute, no matter how related they may be.
-It is essential that you do not lazily assign the same passage victor for every attribute, nor assign "draw" across the board, unless you are in the very rare case this is true (in which case, triple check your work to be absolutely sure since it is quite unlikely).
-Give each and every attribute your distinct and independent consideration.
-
-It is also essential that, when measuring an attribute, you are measuring it only as a direct signal.
-You must not draw indirect inferences on the attribute, or otherwise interpolate or infer the attribute from other attributes.
-It is crucial you are grounded in the texts, and that you are purely and directly measuring the attribute in question only in how the passages directly exhibit it.
-The only scientifically valid method here is to exclusively derive your determination from how each passage directly manifests the attribute in question, not from how the passages manifest other attributes and other information, and then drawing inferences from that.
-Consider each attribute in isolation, and directly measure it and compare its direct signal between the two passages.
+Attributes you are adjudicating are: {{ attributes.keys() | shuffled }}
+Assess EVERY attribute; no drops. Use these attribute names verbatim, with absolutely no modification.
+Same case, same spelling, same punctuation, same formatting.
 
 {% if additional_instructions %}
-The user has provided the following additional instructions or clarifications.
-Consider them carefully along with the rest of the instructions.
-If they are in conflict with the rest of the instructions, these user instructions take precedence.
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate your judgment).
+If they conflict with the other instructions, these user instructions take precedence.
 
 BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
 {{ additional_instructions }}
 END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
 {% endif %}
-
-Output the JSON with all the attributes and their label of the winner on that attribute ("square", "circle", "draw", or "insufficient signal").
