@@ -22,7 +22,7 @@ def test_prompt_template():
 def test_ratings_default_scale_prompt():
     tmpl = PromptTemplate.from_package("ratings_prompt.jinja2")
     rendered = tmpl.render(text="x", attributes=["clarity"], scale=None)
-    assert "All ratings are on a scale" in rendered
+    assert "Use integers 0-100" in rendered
 
 
 def test_shuffled_dict_rendering():

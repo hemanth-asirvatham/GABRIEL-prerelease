@@ -117,6 +117,7 @@ class RankConfig:
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "rankings"
     additional_instructions: str = ""
+    modality: str = "text"
 
 
 class Rank:
@@ -606,6 +607,8 @@ class Rank:
         column_name: str,
         *,
         reset_files: bool = False,
+        image_column: Optional[str] = None,
+        audio_column: Optional[str] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """Execute the ranking procedure.
@@ -678,6 +681,14 @@ class Rank:
         texts = list(zip(df_proc["_id"], df_proc[column_name].astype(str)))
         texts_by_id = {i: t for i, t in texts}
         item_ids = [i for i, _ in texts]
+
+        images_by_id: Dict[str, List[str]] = {}
+        if image_column is not None and image_column in df_proc:
+            images_by_id = dict(zip(df_proc["_id"], df_proc[image_column]))
+
+        audio_by_id: Dict[str, List[Dict[str, str]]] = {}
+        if audio_column is not None and audio_column in df_proc:
+            audio_by_id = dict(zip(df_proc["_id"], df_proc[audio_column]))
         # derive list of attributes
         if isinstance(self.cfg.attributes, dict):
             attr_keys = list(self.cfg.attributes.keys())
@@ -862,6 +873,8 @@ class Rank:
                 break
             prompts: List[str] = []
             ids: List[str] = []
+            pair_images: Dict[str, List[str]] = {}
+            pair_audio: Dict[str, List[Dict[str, str]]] = {}
             for batch_idx, batch in enumerate(attr_batches):
                 attr_def_map = (
                     {a: self.cfg.attributes[a] for a in batch}
@@ -869,19 +882,43 @@ class Rank:
                     else {a: "" for a in batch}
                 )
                 for pair_idx, ((id_a, t_a), (id_b, t_b)) in enumerate(pairs):
+                    ident = f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}"
                     prompts.append(
                         self.template.render(
-                            passage_circle=t_a,
-                            passage_square=t_b,
+                            entry_circle=t_a,
+                            entry_square=t_b,
                             attributes=attr_def_map,
                             additional_instructions=self.cfg.additional_instructions or "",
+                            modality=self.cfg.modality,
                         )
                     )
-                    ids.append(f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}")
+                    ids.append(ident)
+                    if images_by_id:
+                        imgs = []
+                        ia = images_by_id.get(id_a, [])
+                        ib = images_by_id.get(id_b, [])
+                        if ia:
+                            imgs.extend(ia)
+                        if ib:
+                            imgs.extend(ib)
+                        if imgs:
+                            pair_images[ident] = imgs
+                    if audio_by_id:
+                        auds = []
+                        aa = audio_by_id.get(id_a, [])
+                        ab = audio_by_id.get(id_b, [])
+                        if aa:
+                            auds.extend(aa)
+                        if ab:
+                            auds.extend(ab)
+                        if auds:
+                            pair_audio[ident] = auds
             # obtain responses from the language model for this round
             resp_df = await get_all_responses(
                 prompts=prompts,
                 identifiers=ids,
+                prompt_images=pair_images or None,
+                prompt_audio=pair_audio or None,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
                 json_mode=True,
