@@ -122,7 +122,7 @@ def test_ratings_dummy(tmp_path):
     cfg = RateConfig(attributes={"helpfulness": ""}, save_dir=str(tmp_path), file_name="ratings.csv", use_dummy=True)
     task = Rate(cfg)
     data = pd.DataFrame({"text": ["hello"]})
-    df = asyncio.run(task.run(data, text_column="text"))
+    df = asyncio.run(task.run(data, column_name="text"))
     assert not df.empty
     assert "helpfulness" in df.columns
 
@@ -131,7 +131,7 @@ def test_ratings_multirun(tmp_path):
     cfg = RateConfig(attributes={"helpfulness": ""}, save_dir=str(tmp_path), file_name="ratings.csv", use_dummy=True, n_runs=2)
     task = Rate(cfg)
     data = pd.DataFrame({"text": ["hello"]})
-    df = asyncio.run(task.run(data, text_column="text"))
+    df = asyncio.run(task.run(data, column_name="text"))
     assert "helpfulness" in df.columns
     disagg = pd.read_csv(tmp_path / "ratings_full_disaggregated.csv", index_col=[0, 1])
     assert set(disagg.index.names) == {"text", "run"}
@@ -149,7 +149,7 @@ def test_classification_dummy(tmp_path):
     cfg = ClassifyConfig(labels={"yes": ""}, save_dir=str(tmp_path), use_dummy=True)
     task = Classify(cfg)
     df = pd.DataFrame({"txt": ["a", "b"]})
-    res = asyncio.run(task.run(df, text_column="txt"))
+    res = asyncio.run(task.run(df, column_name="txt"))
     assert "yes" in res.columns
 
 
@@ -157,7 +157,7 @@ def test_classification_multirun(tmp_path):
     cfg = ClassifyConfig(labels={"yes": ""}, save_dir=str(tmp_path), use_dummy=True, n_runs=2)
     task = Classify(cfg)
     df = pd.DataFrame({"txt": ["a"]})
-    res = asyncio.run(task.run(df, text_column="txt"))
+    res = asyncio.run(task.run(df, column_name="txt"))
     assert "yes" in res.columns
     disagg = pd.read_csv(tmp_path / "classify_responses_full_disaggregated.csv", index_col=[0, 1])
     assert set(disagg.index.names) == {"text", "run"}
@@ -196,7 +196,7 @@ def test_prompt_paraphraser_ratings(tmp_path):
     parap_cfg = PromptParaphraserConfig(n_variants=2, save_dir=str(tmp_path / "para"), use_dummy=True)
     paraphraser = PromptParaphraser(parap_cfg)
     data = pd.DataFrame({"txt": ["hello"]})
-    df = asyncio.run(paraphraser.run(Rate, cfg, data, text_column="txt"))
+    df = asyncio.run(paraphraser.run(Rate, cfg, data, column_name="txt"))
     assert set(df.prompt_variant) == {"baseline", "variant_1", "variant_2"}
 
 

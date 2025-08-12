@@ -285,3 +285,23 @@ class MapMaker:
             else:
                 # should not happen due to validation in __init__
                 raise ValueError(f"Unsupported map type: {self.map_type}")
+
+
+def create_county_choropleth(
+    df: pd.DataFrame,
+    *,
+    fips_col: str,
+    value_col: str,
+    title: str,
+    save_path: str,
+    z_score: bool = True,
+) -> None:
+    """Backward compatible helper to generate a county-level choropleth.
+
+    This thin wrapper instantiates :class:`MapMaker` and delegates to its
+    internal implementation.  It mirrors the signature of the legacy
+    ``create_county_choropleth`` function used elsewhere in the codebase.
+    """
+
+    mm = MapMaker(df, fips_col=fips_col, z_score=z_score, save_dir=None, map_type="county")
+    mm._create_county_choropleth(df, fips_col, value_col, title, save_path)
