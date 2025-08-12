@@ -35,6 +35,7 @@ class ClassifyConfig:
     use_dummy: bool = False
     timeout: float = 60.0
     modality: str = "text"
+    n_attributes_per_run: int = 8
 
 
 # ────────────────────────────
@@ -61,43 +62,10 @@ class Classify:
         )
 
     # -----------------------------------------------------------------
-    # Build prompts (deduplicating identical passages)
-    # -----------------------------------------------------------------
-    def _build(self, values: List[Any]):
-        prompts: List[str] = []
-        ids: List[str] = []
-        id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
-        id_to_val: Dict[str, Any] = {}
-
-        for row, val in enumerate(values):
-            clean = " ".join(str(val).split())
-            sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
-            id_to_rows[sha8].append(row)
-            if len(id_to_rows[sha8]) > 1:
-                continue  # duplicate item – no need to prompt again
-            id_to_val[sha8] = val
-            prompt_text = str(val) if self.cfg.modality in {"text", "entity", "web"} else ""
-            prompts.append(
-                self.template.render(
-                    text=prompt_text,
-                    attributes=self.cfg.labels,
-                    additional_instructions=self.cfg.additional_instructions,
-                    additional_guidelines=self.cfg.additional_guidelines,
-                    modality=self.cfg.modality,
-                )
-            )
-            ids.append(sha8)
-
-        dup_ct = len(values) - len(prompts)
-        if dup_ct:
-            print(f"[Classify] Skipped {dup_ct} duplicate prompt(s).")
-        return prompts, ids, id_to_rows, id_to_val
-
-    # -----------------------------------------------------------------
     # Helpers for parsing raw model output
     # -----------------------------------------------------------------
     @staticmethod
-    def _regex(raw: str, labels: Dict[str, str]) -> Dict[str, Optional[bool]]:
+    def _regex(raw: str, labels: List[str]) -> Dict[str, Optional[bool]]:
         out: Dict[str, Optional[bool]] = {}
         for lab in labels:
             pat = re.compile(rf'\s*"?\s*{re.escape(lab)}\s*"?\s*:\s*(true|false)', re.I | re.S)
@@ -105,7 +73,7 @@ class Classify:
             out[lab] = None if not m else m.group(1).lower() == "true"
         return out
 
-    async def _parse(self, resp: Any) -> Dict[str, Optional[bool]]:
+    async def _parse(self, resp: Any, labels: List[str]) -> Dict[str, Optional[bool]]:
         # unwrap common response containers (list-of-one, bytes, fenced blocks)
         if isinstance(resp, list) and len(resp) == 1:
             resp = resp[0]
@@ -116,7 +84,7 @@ class Classify:
             if m:
                 resp = m.group(1).strip()
 
-        data = await safest_json(resp)
+            data = await safest_json(resp)
         if isinstance(data, dict):
             norm = {
                 k.strip().lower(): (
@@ -128,10 +96,10 @@ class Classify:
                 )
                 for k, v in data.items()
             }
-            return {lab: norm.get(lab.lower(), None) for lab in self.cfg.labels}
+            return {lab: norm.get(lab.lower(), None) for lab in labels}
 
         # fallback to regex extraction
-        return self._regex(str(resp), self.cfg.labels)
+        return self._regex(str(resp), labels)
 
     # -----------------------------------------------------------------
     # Main entry point
@@ -149,7 +117,42 @@ class Classify:
         df_proc = df.reset_index(drop=True).copy()
         values = df_proc[column_name].tolist()
 
-        prompts, ids, id_to_rows, id_to_val = self._build(values)
+        texts = [str(v) for v in values]
+        base_ids: List[str] = []
+        id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
+        id_to_val: Dict[str, Any] = {}
+        prompt_texts: Dict[str, str] = {}
+
+        for row, val in enumerate(texts):
+            clean = " ".join(str(val).split())
+            sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
+            id_to_rows[sha8].append(row)
+            if len(id_to_rows[sha8]) > 1:
+                continue
+            id_to_val[sha8] = values[row]
+            prompt_texts[sha8] = str(values[row]) if self.cfg.modality in {"text", "entity", "web"} else ""
+            base_ids.append(sha8)
+
+        label_items = list(self.cfg.labels.items())
+        label_batches: List[Dict[str, str]] = [
+            dict(label_items[i : i + self.cfg.n_attributes_per_run])
+            for i in range(0, len(label_items), self.cfg.n_attributes_per_run)
+        ]
+
+        prompts: List[str] = []
+        ids: List[str] = []
+        for batch_idx, batch_labels in enumerate(label_batches):
+            for ident in base_ids:
+                prompts.append(
+                    self.template.render(
+                        text=prompt_texts[ident],
+                        attributes=batch_labels,
+                        additional_instructions=self.cfg.additional_instructions,
+                        additional_guidelines=self.cfg.additional_guidelines,
+                        modality=self.cfg.modality,
+                    )
+                )
+                ids.append(f"{ident}_batch{batch_idx}")
 
         prompt_images: Optional[Dict[str, List[str]]] = None
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
@@ -170,7 +173,8 @@ class Classify:
                         else:
                             encoded.append(img)
                     if encoded:
-                        prompt_images[ident] = encoded
+                        for batch_idx in range(len(label_batches)):
+                            prompt_images[f"{ident}_batch{batch_idx}"] = encoded
             if not prompt_images:
                 prompt_images = None
         elif self.cfg.modality == "audio":
@@ -191,9 +195,11 @@ class Classify:
                             elif isinstance(aud, dict):
                                 encoded_auds.append(aud)
                         if encoded_auds:
-                            prompt_audio[ident] = encoded_auds
+                            for batch_idx in range(len(label_batches)):
+                                prompt_audio[f"{ident}_batch{batch_idx}"] = encoded_auds
                     elif isinstance(auds, list):
-                        prompt_audio[ident] = auds
+                        for batch_idx in range(len(label_batches)):
+                            prompt_audio[f"{ident}_batch{batch_idx}"] = auds
             if not prompt_audio:
                 prompt_audio = None
 
@@ -272,20 +278,29 @@ class Classify:
         # parse each run and construct disaggregated records
         full_records: List[Dict[str, Any]] = []
         total_orphans = 0
+        all_labels = list(self.cfg.labels.keys())
         for run_idx, df_resp in enumerate(df_resps, start=1):
-            id_to_labels: Dict[str, Dict[str, Optional[bool]]] = {}
+            id_to_labels: Dict[str, Dict[str, Optional[bool]]] = {
+                ident: {lab: None for lab in all_labels} for ident in base_ids
+            }
             orphans = 0
-            for ident, raw in zip(df_resp.Identifier, df_resp.Response):
-                if ident not in id_to_rows:
+            for ident_batch, raw in zip(df_resp.Identifier, df_resp.Response):
+                if "_batch" not in ident_batch:
+                    continue
+                base_ident, batch_part = ident_batch.rsplit("_batch", 1)
+                if base_ident not in id_to_rows:
                     orphans += 1
                     continue
-                parsed = await self._parse(raw)
-                id_to_labels[ident] = parsed
+                batch_idx = int(batch_part)
+                labs = list(label_batches[batch_idx].keys())
+                parsed = await self._parse(raw, labs)
+                for lab in labs:
+                    id_to_labels[base_ident][lab] = parsed.get(lab)
             total_orphans += orphans
-            for ident in ids:
-                parsed = id_to_labels.get(ident, {lab: None for lab in self.cfg.labels})
+            for ident in base_ids:
+                parsed = id_to_labels.get(ident, {lab: None for lab in all_labels})
                 rec = {"text": id_to_val[ident], "run": run_idx}
-                rec.update({lab: parsed.get(lab) for lab in self.cfg.labels})
+                rec.update({lab: parsed.get(lab) for lab in all_labels})
                 full_records.append(rec)
 
         if total_orphans:

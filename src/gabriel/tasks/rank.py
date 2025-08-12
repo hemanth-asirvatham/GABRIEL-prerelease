@@ -118,6 +118,7 @@ class RankConfig:
     file_name: str = "rankings"
     additional_instructions: str = ""
     modality: str = "text"
+    n_attributes_per_run: int = 8
 
 
 class Rank:
@@ -733,7 +734,10 @@ class Rank:
         # store per‑attribute standard errors across items
         se_store: Dict[str, Dict[str, float]] = {a: {i: np.nan for i in item_ids} for a in attr_keys}
         # Define attribute batches once to reuse across replay and new rounds
-        attr_batches: List[List[str]] = [attr_keys[i : i + 8] for i in range(0, len(attr_keys), 8)]
+        attr_batches: List[List[str]] = [
+            attr_keys[i : i + self.cfg.n_attributes_per_run]
+            for i in range(0, len(attr_keys), self.cfg.n_attributes_per_run)
+        ]
 
         # Helper function to write the current results to the final CSV.  This
         # builds the output DataFrame from the current ``df_proc`` and
