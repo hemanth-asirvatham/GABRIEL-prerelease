@@ -701,6 +701,7 @@ async def get_response(
     use_dummy: bool = False,
     verbose: bool = True,
     images: Optional[List[str]] = None,
+    audio: Optional[List[Dict[str, str]]] = None,
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
     **kwargs: Any,
@@ -721,76 +722,136 @@ async def get_response(
     if logging_level is not None:
         set_log_level(logging_level)
     _require_api_key()
+    global client_async
     # Derive the effective cutoff
     cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
     # Build system message only for non‑o series
     system_instruction = (
         "Please provide a helpful response to this inquiry for purposes of academic research."
     )
-    if images:
-        contents: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-        for img in images:
-            img_url = img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
-            contents.append({"type": "input_image", "image_url": img_url})
-        input_data = (
-            [{"role": "user", "content": contents}]
-            if model.startswith("o")
-            else [
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": contents},
-            ]
+    if audio:
+        logger.info(
+            "Audio inputs require models gpt-4o-audio-preview or gpt-4o-mini-audio-preview"
         )
+        contents: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        if images:
+            for img in images:
+                img_url = (
+                    img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
+                )
+                contents.append({"type": "image_url", "image_url": {"url": img_url}})
+        for a in audio:
+            contents.append({"type": "input_audio", "input_audio": a})
+        messages = [{"role": "user", "content": contents}]
+        params_chat: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "modalities": ["text"],
+        }
+        if tools is not None:
+            params_chat["tools"] = tools
+        if tool_choice is not None:
+            params_chat["tool_choice"] = tool_choice
+        if cutoff is not None:
+            params_chat["max_completion_tokens"] = cutoff
+        if client_async is None:
+            client_async = openai.AsyncOpenAI()
+        start = time.time()
+        tasks = [
+            client_async.chat.completions.create(**params_chat, timeout=timeout)
+            for _ in range(max(n, 1))
+        ]
+        try:
+            raw = await asyncio.gather(*tasks)
+        except asyncio.TimeoutError:
+            err = Exception(f"API call timed out after {timeout} s")
+            logger.error(f"[get_response] {err}")
+            raise err
+        except Exception as e:
+            err = Exception(f"API call resulted in exception: {e!r}")
+            logger.error(f"[get_response] {err}")
+            raise err
+        texts = []
+        for r in raw:
+            msg = r.choices[0].message
+            parts = getattr(msg, "content", None)
+            if isinstance(parts, list):
+                texts.append(
+                    "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+                )
+            else:
+                texts.append(parts)
+        duration = time.time() - start
+        if return_raw:
+            return texts, duration, raw
+        return texts, duration
     else:
-        input_data = (
-            [{"role": "user", "content": prompt}]
-            if model.startswith("o")
-            else [
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": prompt},
-            ]
-        )
+        if images:
+            contents: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+            for img in images:
+                img_url = (
+                    img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
+                )
+                contents.append({"type": "input_image", "image_url": img_url})
+            input_data = (
+                [{"role": "user", "content": contents}]
+                if model.startswith("o")
+                else [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": contents},
+                ]
+            )
+        else:
+            input_data = (
+                [{"role": "user", "content": prompt}]
+                if model.startswith("o")
+                else [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt},
+                ]
+            )
 
-    params = _build_params(
-        model=model,
-        input_data=input_data,
-        max_output_tokens=cutoff,
-        system_instruction=system_instruction,
-        temperature=temperature,
-        tools=tools,
-        tool_choice=tool_choice,
-        web_search=web_search,
-        search_context_size=search_context_size,
-        json_mode=json_mode,
-        expected_schema=expected_schema,
-        reasoning_effort=reasoning_effort,
-        **kwargs,
-    )
-    global client_async
-    if client_async is None:
-        client_async = openai.AsyncOpenAI()
-    start = time.time()
-    # Create parallel tasks for `n` completions
-    tasks = [
-        client_async.responses.create(**params, timeout=timeout)
-        for _ in range(max(n, 1))
-    ]
-    try:
-        raw = await asyncio.gather(*tasks)
-    except asyncio.TimeoutError:
-        err = Exception(f"API call timed out after {timeout} s")
-        logger.error(f"[get_response] {err}")
-        raise err
-    except Exception as e:
-        err = Exception(f"API call resulted in exception: {e!r}")
-        logger.error(f"[get_response] {err}")
-        raise err
-    # Extract ``output_text`` from the responses.  For Responses API
-    # the SDK returns an object with an ``output_text`` attribute.
-    texts = [r.output_text for r in raw]
-    duration = time.time() - start
-    if return_raw:
-        return texts, duration, raw
-    return texts, duration
+        params = _build_params(
+            model=model,
+            input_data=input_data,
+            max_output_tokens=cutoff,
+            system_instruction=system_instruction,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            web_search=web_search,
+            search_context_size=search_context_size,
+            json_mode=json_mode,
+            expected_schema=expected_schema,
+            reasoning_effort=reasoning_effort,
+            **kwargs,
+        )
+        if client_async is None:
+            client_async = openai.AsyncOpenAI()
+        start = time.time()
+        # Create parallel tasks for `n` completions
+        tasks = [
+            client_async.responses.create(**params, timeout=timeout)
+            for _ in range(max(n, 1))
+        ]
+        try:
+            raw = await asyncio.gather(*tasks)
+        except asyncio.TimeoutError:
+            err = Exception(f"API call timed out after {timeout} s")
+            logger.error(f"[get_response] {err}")
+            raise err
+        except Exception as e:
+            err = Exception(f"API call resulted in exception: {e!r}")
+            logger.error(f"[get_response] {err}")
+            raise err
+        # Extract ``output_text`` from the responses.  For Responses API
+        # the SDK returns an object with an ``output_text`` attribute.
+        texts = [r.output_text for r in raw]
+        duration = time.time() - start
+        if return_raw:
+            return texts, duration, raw
+        return texts, duration
 
 
 def _ser(x: Any) -> Optional[str]:
@@ -810,6 +871,7 @@ async def get_all_responses(
     prompts: List[str],
     identifiers: Optional[List[str]] = None,
     prompt_images: Optional[Dict[str, List[str]]] = None,
+    prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
     *,
     model: str = "o4-mini",
     n: int = 1,
@@ -951,6 +1013,12 @@ async def get_all_responses(
         return df
     status.num_tasks_started = len(todo_pairs)
     status.num_tasks_in_progress = len(todo_pairs)
+    if prompt_audio and any(prompt_audio.get(str(i)) for _, i in todo_pairs):
+        if use_batch:
+            logger.warning(
+                "Batch mode is not supported for audio inputs; falling back to non-batch processing."
+            )
+        use_batch = False
     # Warn the user if the input dataset is very large.  Processing more
     # than 50,000 prompts in a single run can lead to very long execution
     # times and increased risk of rate‑limit throttling.  We still proceed
@@ -1589,6 +1657,7 @@ async def get_all_responses(
                         timeout=nonlocal_timeout,
                         use_dummy=use_dummy,
                         images=prompt_images.get(str(ident)) if prompt_images else None,
+                        audio=prompt_audio.get(str(ident)) if prompt_audio else None,
                         return_raw=True,
                         **get_response_kwargs,
                     ),

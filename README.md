@@ -24,9 +24,9 @@ print(ratings)
 
 Each task returns a `pandas.DataFrame` and saves raw responses to disk.  Set `use_dummy=False` and provide your OpenAI credentials via the `OPENAI_API_KEY` environment variable to perform real API calls.
 
-### Image inputs
+### Image and audio inputs
 
-`get_response` and `get_all_responses` can optionally include images with your prompts. Pass the `images` parameter to `get_response` or a mapping `prompt_images` to `get_all_responses`, where each key is a prompt identifier and the value is a list of base64 strings. A helper `encode_image` is provided:
+`get_response` and `get_all_responses` can optionally include images or audio with your prompts. Pass the `images` and/or `audio` parameters to `get_response` or mappings `prompt_images` and `prompt_audio` to `get_all_responses`, where each key is a prompt identifier and the value is a list preserving the order of the supplied media. Images should be base64 strings and audio entries should be dictionaries containing `data` and `format`. A helper `encode_image` is provided:
 
 ```python
 from gabriel.utils import encode_image

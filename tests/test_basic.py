@@ -50,6 +50,15 @@ def test_get_response_images_dummy():
     assert responses and responses[0].startswith("DUMMY")
 
 
+def test_get_response_audio_dummy():
+    responses, _ = asyncio.run(
+        openai_utils.get_response(
+            "hi", audio=[{"data": "abcd", "format": "mp3"}], use_dummy=True
+        )
+    )
+    assert responses and responses[0].startswith("DUMMY")
+
+
 def test_gpt5_temperature_warning(caplog):
     """Ensure gpt-5 models ignore temperature and log a warning."""
     with caplog.at_level("WARNING"):
@@ -90,6 +99,19 @@ def test_get_all_responses_images_dummy(tmp_path):
             identifiers=["1"],
             prompt_images={"1": ["abcd"]},
             save_path=str(tmp_path / "img.csv"),
+            use_dummy=True,
+        )
+    )
+    assert len(df) == 1
+
+
+def test_get_all_responses_audio_dummy(tmp_path):
+    df = asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["a"],
+            identifiers=["1"],
+            prompt_audio={"1": [{"data": "abcd", "format": "mp3"}]},
+            save_path=str(tmp_path / "aud.csv"),
             use_dummy=True,
         )
     )
