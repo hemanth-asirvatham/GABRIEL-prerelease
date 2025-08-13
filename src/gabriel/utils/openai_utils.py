@@ -977,6 +977,13 @@ async def get_all_responses(
         except Exception:
             # Ignore errors here; they will surface when attempting to write
             pass
+    if reset_files:
+        for p in (save_path, save_path + ".batch_state.json"):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
     if os.path.exists(save_path) and not reset_files:
         df = pd.read_csv(save_path)
         df = df.drop_duplicates(subset=["Identifier"], keep="last")
