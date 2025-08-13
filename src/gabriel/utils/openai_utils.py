@@ -673,7 +673,7 @@ def _build_params(
         if reasoning_effort is not None:
             reasoning["effort"] = reasoning_effort
         if include_summaries:
-            reasoning["include_summaries"] = True
+            reasoning["summary"] = "auto"
         if reasoning:
             params["reasoning"] = reasoning
         if model.startswith("gpt-5") and temperature != 0.9:
