@@ -57,7 +57,7 @@ import pandas as pd
 # to adjust these imports accordingly.
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils.openai_utils import get_all_responses
-from gabriel.utils import safest_json, encode_image, encode_audio
+from gabriel.utils import safest_json, load_image_inputs, load_audio_inputs
 
 
 @dataclass
@@ -690,38 +690,14 @@ class Rank:
         audio_by_id: Dict[str, List[Dict[str, str]]] = {}
         if self.cfg.modality == "image":
             for rid, imgs in zip(df_proc["_id"], df_proc[column_name]):
-                if imgs:
-                    if isinstance(imgs, str):
-                        imgs = [imgs]
-                    encoded: List[str] = []
-                    for img in imgs:
-                        if isinstance(img, str) and os.path.exists(img):
-                            enc = encode_image(img)
-                            if enc:
-                                encoded.append(enc)
-                        else:
-                            encoded.append(img)
-                    if encoded:
-                        images_by_id[rid] = encoded
+                encoded = load_image_inputs(imgs)
+                if encoded:
+                    images_by_id[rid] = encoded
         elif self.cfg.modality == "audio":
             for rid, auds in zip(df_proc["_id"], df_proc[column_name]):
-                if auds:
-                    if isinstance(auds, str) or (
-                        isinstance(auds, list) and auds and isinstance(auds[0], str)
-                    ):
-                        auds = [auds] if isinstance(auds, str) else auds
-                        encoded_auds: List[Dict[str, str]] = []
-                        for aud in auds:
-                            if isinstance(aud, str) and os.path.exists(aud):
-                                enc = encode_audio(aud)
-                                if enc:
-                                    encoded_auds.append(enc)
-                            elif isinstance(aud, dict):
-                                encoded_auds.append(aud)
-                        if encoded_auds:
-                            audio_by_id[rid] = encoded_auds
-                    elif isinstance(auds, list):
-                        audio_by_id[rid] = auds
+                encoded = load_audio_inputs(auds)
+                if encoded:
+                    audio_by_id[rid] = encoded
         # derive list of attributes
         if isinstance(self.cfg.attributes, dict):
             attr_keys = list(self.cfg.attributes.keys())
