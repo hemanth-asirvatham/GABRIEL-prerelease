@@ -3,7 +3,7 @@ import pandas as pd
 
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils.teleprompter import Teleprompter
-from gabriel.utils import openai_utils
+from gabriel.utils import openai_utils, safest_json
 from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig
@@ -57,6 +57,12 @@ def test_get_response_audio_dummy():
         )
     )
     assert responses and responses[0].startswith("DUMMY")
+
+
+def test_safest_json_codeblock_list():
+    raw = ["```json\n{\n \"speech\": true,\n \"music\": false\n}\n```"]
+    parsed = asyncio.run(safest_json(raw))
+    assert parsed == {"speech": True, "music": False}
 
 
 def test_gpt5_temperature_warning(caplog):

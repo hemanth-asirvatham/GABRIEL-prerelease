@@ -751,8 +751,6 @@ async def get_response(
             "temperature": temperature,
             "modalities": ["text"],
         }
-        if json_mode:
-            params_chat["response_format"] = {"type": "json_object"}
         if tools is not None:
             params_chat["tools"] = tools
         if tool_choice is not None:
