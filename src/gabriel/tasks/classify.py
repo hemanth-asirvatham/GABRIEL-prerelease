@@ -26,7 +26,7 @@ class ClassifyConfig:
     labels: Dict[str, str]  # {"label_name": "description", ...}
     save_dir: str = "classifier"
     file_name: str = "classify_responses.csv"
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 400
     n_runs: int = 1
     min_frequency: float = 0.6
@@ -36,6 +36,7 @@ class ClassifyConfig:
     timeout: float = 60.0
     modality: str = "text"
     n_attributes_per_run: int = 8
+    reasoning_effort: str = "medium"
 
 
 # ────────────────────────────
@@ -198,6 +199,7 @@ class Classify:
                 model=self.cfg.model,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
+                reasoning_effort=self.cfg.reasoning_effort,
                 print_example_prompt=True,
                 **kwargs,
             )
@@ -236,6 +238,7 @@ class Classify:
                 model=self.cfg.model,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
+                reasoning_effort=self.cfg.reasoning_effort,
                 print_example_prompt=True,
                 **kwargs,
             )

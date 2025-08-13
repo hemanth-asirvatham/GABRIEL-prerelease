@@ -119,6 +119,7 @@ class RankConfig:
     additional_instructions: str = ""
     modality: str = "text"
     n_attributes_per_run: int = 8
+    reasoning_effort: str = "medium"
 
 
 class Rank:
@@ -938,6 +939,7 @@ class Rank:
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self._TIMEOUT,
+                reasoning_effort=self.cfg.reasoning_effort,
                 **kwargs,
             )
             # parse each response

@@ -27,7 +27,7 @@ class RateConfig:
     attributes: Dict[str, str]
     save_dir: str = "ratings"
     file_name: str = "ratings.csv"
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 400
     n_runs: int = 1
     use_dummy: bool = False
@@ -36,6 +36,7 @@ class RateConfig:
     additional_instructions: Optional[str] = None
     modality: str = "text"
     n_attributes_per_run: int = 8
+    reasoning_effort: str = "medium"
 
 
 # ────────────────────────────
@@ -166,6 +167,7 @@ class Rate:
                 timeout=self.cfg.timeout,
                 json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
+                reasoning_effort=self.cfg.reasoning_effort,
                 **kwargs,
             )
             df_resps = [df_resp_all]
@@ -201,6 +203,7 @@ class Rate:
                 timeout=self.cfg.timeout,
                 json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
+                reasoning_effort=self.cfg.reasoning_effort,
                 **kwargs,
             )
 

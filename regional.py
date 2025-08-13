@@ -20,7 +20,7 @@ class Regional:
         *,
         save_dir: str = os.path.expanduser("~/Documents/runs"),
         run_name: Optional[str] = None,
-        model: str = "o4-mini",
+        model: str = "gpt-5-mini",
         n_parallels: int = 400,
         use_dummy: bool = False,
         additional_instructions: str = "",

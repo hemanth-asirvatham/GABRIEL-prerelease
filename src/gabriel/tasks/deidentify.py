@@ -17,7 +17,7 @@ from ..utils import safest_json
 class DeidentifyConfig:
     """Configuration for :class:`Deidentifier`."""
 
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 400
     save_dir: str = "deidentify"
     file_name: str = "deidentified.csv"
@@ -26,6 +26,7 @@ class DeidentifyConfig:
     max_words_per_call: int = 7500
     guidelines: str = ""
     additional_guidelines: str = ""
+    reasoning_effort: str = "medium"
 
 
 class Deidentifier:
@@ -111,6 +112,7 @@ class Deidentifier:
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
                 json_mode=True,
+                reasoning_effort=self.cfg.reasoning_effort,
             )
             for ident, resp in zip(batch_df["Identifier"], batch_df["Response"]):
                 gid = ident.split("_seg_")[0]

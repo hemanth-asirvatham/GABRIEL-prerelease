@@ -167,6 +167,7 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "cached_input": 0.075, "output": 0.60, "batch": 0.5},
     "o3": {"input": 2.00, "cached_input": 0.50, "output": 8.00, "batch": 0.5},
     "o4-mini": {"input": 1.10, "cached_input": 0.275, "output": 4.40, "batch": 0.5},
+    "gpt-5-mini": {"input": 1.10, "cached_input": 0.275, "output": 4.40, "batch": 0.5},
     "o3-mini": {"input": 1.10, "cached_input": 0.55, "output": 4.40, "batch": 0.5},
     "o3-deep-research": {
         "input": 10.00,
@@ -284,7 +285,7 @@ def _require_api_key() -> str:
     return api_key
 
 
-def _get_rate_limit_headers(model: str = "o4-mini") -> Optional[Dict[str, str]]:
+def _get_rate_limit_headers(model: str = "gpt-5-mini") -> Optional[Dict[str, str]]:
     """Retrieve rate‑limit headers via a cheap API request.
 
     The OpenAI platform does not yet expose a dedicated endpoint for
@@ -662,21 +663,18 @@ def _build_params(
         params["tools"] = all_tools
     if tool_choice is not None:
         params["tool_choice"] = tool_choice
-    # For o‑series models, reasoning_effort controls hidden reasoning tokens.
-    # Most other models use ``temperature`` to influence randomness, but
-    # ``gpt-5`` variants do not support this parameter.  In that case we drop
-    # the temperature and warn if the caller supplied a custom value.
-    if model.startswith("o"):
-        params["reasoning"] = {"effort": reasoning_effort}
+    # For o‑series and gpt-5 models, reasoning_effort controls hidden reasoning
+    # tokens and an optional auto-generated summary.  gpt-5 models also ignore
+    # the ``temperature`` parameter, so we drop it and warn if a custom value
+    # was provided.  Other models retain temperature-based randomness.
+    if model.startswith("o") or model.startswith("gpt-5"):
+        params["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
+        if model.startswith("gpt-5") and temperature != 0.9:
+            logger.warning(
+                f"Model {model} does not support temperature; ignoring provided value."
+            )
     else:
-        if "gpt-5" in model:
-            if temperature != 0.9:
-                logger.warning(
-                    f"Model {model} does not support temperature; ignoring provided value."
-                )
-            # Do not include a temperature parameter for gpt-5 models
-        else:
-            params["temperature"] = temperature
+        params["temperature"] = temperature
     params.update(extra)
     return params
 
@@ -684,7 +682,7 @@ def _build_params(
 async def get_response(
     prompt: str,
     *,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     n: int = 1,
     max_output_tokens: Optional[int] = None,
     # legacy alias for backwards compatibility
@@ -800,7 +798,7 @@ async def get_response(
                 )
             input_data = (
                 [{"role": "user", "content": contents}]
-                if model.startswith("o")
+                if model.startswith("o") or model.startswith("gpt-5")
                 else [
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": contents},
@@ -809,7 +807,7 @@ async def get_response(
         else:
             input_data = (
                 [{"role": "user", "content": prompt}]
-                if model.startswith("o")
+                if model.startswith("o") or model.startswith("gpt-5")
                 else [
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt},
@@ -877,7 +875,7 @@ async def get_all_responses(
     prompt_images: Optional[Dict[str, List[str]]] = None,
     prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
     *,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     n: int = 1,
     max_output_tokens: Optional[int] = None,
     # legacy alias
@@ -994,6 +992,8 @@ async def get_all_responses(
             "Input Tokens",
             "Reasoning Tokens",
             "Output Tokens",
+            "Reasoning Effort",
+            "Reasoning Summary",
             "Successful",
             "Error Log",
         ]:
@@ -1013,6 +1013,8 @@ async def get_all_responses(
                 "Input Tokens",
                 "Reasoning Tokens",
                 "Output Tokens",
+                "Reasoning Effort",
+                "Reasoning Summary",
                 "Successful",
                 "Error Log",
             ]
@@ -1223,23 +1225,35 @@ async def get_all_responses(
                         contents.append({"type": "input_image", "image_url": img_url})
                     input_data = (
                         [{"role": "user", "content": contents}]
-                        if get_response_kwargs.get("model", "o4-mini").startswith("o")
+                        if (
+                            m := get_response_kwargs.get("model", "gpt-5-mini")
+                        ).startswith("o")
+                        or m.startswith("gpt-5")
                         else [
-                            {"role": "system", "content": "Please provide a helpful response to this inquiry for purposes of academic research."},
+                            {
+                                "role": "system",
+                                "content": "Please provide a helpful response to this inquiry for purposes of academic research.",
+                            },
                             {"role": "user", "content": contents},
                         ]
                     )
                 else:
                     input_data = (
                         [{"role": "user", "content": prompt}]
-                        if get_response_kwargs.get("model", "o4-mini").startswith("o")
+                        if (
+                            m := get_response_kwargs.get("model", "gpt-5-mini")
+                        ).startswith("o")
+                        or m.startswith("gpt-5")
                         else [
-                            {"role": "system", "content": "Please provide a helpful response to this inquiry for purposes of academic research."},
+                            {
+                                "role": "system",
+                                "content": "Please provide a helpful response to this inquiry for purposes of academic research.",
+                            },
                             {"role": "user", "content": prompt},
                         ]
                     )
                 body = _build_params(
-                    model=get_response_kwargs.get("model", "o4-mini"),
+                    model=get_response_kwargs.get("model", "gpt-5-mini"),
                     input_data=input_data,
                     max_output_tokens=cutoff,
                     system_instruction="Please provide a helpful response to this inquiry for purposes of academic research.",
@@ -1417,6 +1431,10 @@ async def get_all_responses(
                                     "Input Tokens": None,
                                     "Reasoning Tokens": None,
                                     "Output Tokens": None,
+                                    "Reasoning Effort": get_response_kwargs.get(
+                                        "reasoning_effort", reasoning_effort
+                                    ),
+                                    "Reasoning Summary": None,
                                     "Successful": False,
                                     "Error Log": [err] if err else [],
                                 }
@@ -1424,6 +1442,7 @@ async def get_all_responses(
                             continue
                         resp_obj = rec["response"]
                         resp_text: Optional[str] = None
+                        summary_text: Optional[str] = None
                         usage = {}
                         if isinstance(resp_obj, dict):
                             usage = resp_obj.get("usage", {}) or {}
@@ -1468,46 +1487,68 @@ async def get_all_responses(
                                             if isinstance(content, str):
                                                 resp_text = content
                                                 break
-                            if resp_text is None and isinstance(
-                                obj.get("output"), list
-                            ):
-                                out_list = obj.get("output")
-                                for item in out_list:
-                                    if not isinstance(item, dict):
-                                        continue
-                                    content_list = item.get("content")
-                                    if isinstance(content_list, list):
-                                        for piece in content_list:
-                                            if (
-                                                isinstance(piece, dict)
-                                                and "text" in piece
-                                            ):
-                                                txt = piece.get("text")
-                                                if isinstance(txt, str):
-                                                    resp_text = txt
+                                    if resp_text is None and isinstance(
+                                        obj.get("output"), list
+                                    ):
+                                        out_list = obj.get("output")
+                                        for item in out_list:
+                                            if not isinstance(item, dict):
+                                                continue
+                                            content_list = item.get("content")
+                                            if isinstance(content_list, list):
+                                                for piece in content_list:
+                                                    if (
+                                                        isinstance(piece, dict)
+                                                        and "text" in piece
+                                                    ):
+                                                        txt = piece.get("text")
+                                                        if isinstance(txt, str):
+                                                            resp_text = txt
+                                                            break
+                                                if resp_text is not None:
                                                     break
+                                            if resp_text is None and isinstance(
+                                                item.get("text"), str
+                                            ):
+                                                resp_text = item["text"]
+                                                break
+                                            if resp_text is not None:
+                                                break
                                         if resp_text is not None:
                                             break
-                                    if resp_text is None and isinstance(
-                                        item.get("text"), str
+                        for obj in search_objs:
+                            out_list = obj.get("output")
+                            if isinstance(out_list, list):
+                                for piece in out_list:
+                                    if (
+                                        isinstance(piece, dict)
+                                        and piece.get("type") == "reasoning"
                                     ):
-                                        resp_text = item["text"]
-                                        break
-                                    if resp_text is not None:
-                                        break
-                                if resp_text is not None:
+                                        summ = piece.get("summary")
+                                        if isinstance(summ, list) and summ:
+                                            first = summ[0]
+                                            if isinstance(first, dict):
+                                                txt = first.get("text")
+                                                if isinstance(txt, str):
+                                                    summary_text = txt
+                                                    break
+                                if summary_text is not None:
                                     break
                         completed_rows.append(
-                            {
-                                "Identifier": ident,
-                                "Response": [resp_text],
-                                "Time Taken": None,
-                                "Input Tokens": input_tok,
-                                "Reasoning Tokens": reason_tok,
-                                "Output Tokens": output_tok,
-                                "Successful": True,
-                                "Error Log": [],
-                            }
+                                {
+                                    "Identifier": ident,
+                                    "Response": [resp_text],
+                                    "Time Taken": None,
+                                    "Input Tokens": input_tok,
+                                    "Reasoning Tokens": reason_tok,
+                                    "Output Tokens": output_tok,
+                                    "Reasoning Effort": get_response_kwargs.get(
+                                        "reasoning_effort", reasoning_effort
+                                    ),
+                                    "Reasoning Summary": summary_text,
+                                    "Successful": True,
+                                    "Error Log": [],
+                                }
                         )
                     unfinished_batches.remove(b)
                     state["batches"] = [
@@ -1684,6 +1725,25 @@ async def get_all_responses(
                     getattr(getattr(r.usage, "output_tokens_details", {}), "reasoning_tokens", 0)
                     for r in raw
                 )
+                summary_text = None
+                try:
+                    for r in raw:
+                        out_items = getattr(r, "output", [])
+                        if not out_items:
+                            continue
+                        for item in out_items:
+                            if getattr(item, "type", None) == "reasoning":
+                                summary_list = getattr(item, "summary", [])
+                                if summary_list:
+                                    first = summary_list[0]
+                                    txt = getattr(first, "text", None)
+                                    if isinstance(txt, str):
+                                        summary_text = txt
+                                        break
+                        if summary_text is not None:
+                            break
+                except Exception:
+                    summary_text = None
                 usage_samples.append((total_input, total_output, total_reasoning))
                 if len(usage_samples) > token_sample_size:
                     usage_samples.pop(0)
@@ -1719,6 +1779,10 @@ async def get_all_responses(
                             "Input Tokens": total_input,
                             "Reasoning Tokens": total_reasoning,
                             "Output Tokens": total_output,
+                            "Reasoning Effort": get_response_kwargs.get(
+                                "reasoning_effort", reasoning_effort
+                            ),
+                            "Reasoning Summary": summary_text,
                             "Successful": True,
                             "Error Log": error_logs.get(ident, []),
                         }
@@ -1760,6 +1824,10 @@ async def get_all_responses(
                             "Input Tokens": input_tokens,
                             "Reasoning Tokens": None,
                             "Output Tokens": None,
+                            "Reasoning Effort": get_response_kwargs.get(
+                                "reasoning_effort", reasoning_effort
+                            ),
+                            "Reasoning Summary": None,
                             "Successful": False,
                             "Error Log": error_logs.get(ident, []),
                         }
@@ -1790,6 +1858,10 @@ async def get_all_responses(
                             "Input Tokens": input_tokens,
                             "Reasoning Tokens": None,
                             "Output Tokens": None,
+                            "Reasoning Effort": get_response_kwargs.get(
+                                "reasoning_effort", reasoning_effort
+                            ),
+                            "Reasoning Summary": None,
                             "Successful": False,
                             "Error Log": error_logs.get(ident, []),
                         }
@@ -1818,6 +1890,10 @@ async def get_all_responses(
                         "Input Tokens": input_tokens,
                         "Reasoning Tokens": None,
                         "Output Tokens": None,
+                        "Reasoning Effort": get_response_kwargs.get(
+                            "reasoning_effort", reasoning_effort
+                        ),
+                        "Reasoning Summary": None,
                         "Successful": False,
                         "Error Log": error_logs.get(ident, []),
                     }

@@ -11,7 +11,7 @@ import pandas as pd
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
 
 # model used when an LLM is required to reformat malformed JSON
-JSON_LLM_MODEL = os.getenv("JSON_LLM_MODEL", "gpt-4o-mini")
+JSON_LLM_MODEL = os.getenv("JSON_LLM_MODEL", "gpt-5-mini")
 
 
 def _parse_json(txt: Any) -> Union[dict, list]:
@@ -137,9 +137,10 @@ async def clean_json_df(
     columns: List[str],
     *,
     id_col: str,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     exclude_valid_json: bool = False,
     save_path: Optional[str] = None,
+    reasoning_effort: str = "medium",
 ) -> pd.DataFrame:
     """Ensure specified DataFrame columns contain valid JSON.
 
@@ -155,7 +156,9 @@ async def clean_json_df(
         raised if the column is missing or contains duplicate values.
     model:
         Model name passed to :func:`get_all_responses` when attempting to
-        repair invalid JSON. Defaults to ``"o4-mini"``.
+        repair invalid JSON. Defaults to ``"gpt-5-mini"``.
+    reasoning_effort:
+        Reasoning effort level forwarded to the model.
     exclude_valid_json:
         When ``False`` (default), only entries that fail to parse are sent to
         the model. When ``True``, all entries are processed regardless of
@@ -225,6 +228,7 @@ async def clean_json_df(
                 model=model,
                 json_mode=True,
                 use_dummy=use_dummy,
+                reasoning_effort=reasoning_effort,
                 print_example_prompt=False,
                 save_path=tmp_path,
                 reset_files=True,

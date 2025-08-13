@@ -15,7 +15,7 @@ from ..utils.openai_utils import get_all_responses
 class RegionalConfig:
     """Configuration for :class:`Regional`."""
 
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 400
     save_dir: str = os.path.expanduser("~/Documents/runs")
     run_name: Optional[str] = None
