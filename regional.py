@@ -24,7 +24,8 @@ class Regional:
         n_parallels: int = 400,
         use_dummy: bool = False,
         additional_instructions: str = "",
-        reasoning_effort: str = "medium",
+        reasoning_effort: Optional[str] = None,
+        include_summaries: bool = False,
         search_context_size: str = "medium",
         print_example_prompt: bool = True,
     ) -> None:
@@ -36,6 +37,7 @@ class Regional:
         self.use_dummy = use_dummy
         self.additional_instructions = additional_instructions
         self.reasoning_effort = reasoning_effort
+        self.include_summaries = include_summaries
         self.search_context_size = search_context_size
         self.print_example_prompt = print_example_prompt
 
@@ -72,6 +74,7 @@ class Regional:
             use_web_search=True,
             search_context_size=self.search_context_size,
             reasoning_effort=self.reasoning_effort,
+            include_summaries=self.include_summaries,
             save_path=csv_path,
             reset_files=reset_files,
             use_dummy=self.use_dummy,

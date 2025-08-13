@@ -36,7 +36,8 @@ class ClassifyConfig:
     timeout: float = 60.0
     modality: str = "text"
     n_attributes_per_run: int = 8
-    reasoning_effort: str = "medium"
+    reasoning_effort: Optional[str] = None
+    include_summaries: bool = False
 
 
 # ────────────────────────────
@@ -200,6 +201,7 @@ class Classify:
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
+                include_summaries=self.cfg.include_summaries,
                 print_example_prompt=True,
                 **kwargs,
             )
@@ -239,6 +241,7 @@ class Classify:
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
+                include_summaries=self.cfg.include_summaries,
                 print_example_prompt=True,
                 **kwargs,
             )

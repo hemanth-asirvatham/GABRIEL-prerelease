@@ -21,7 +21,8 @@ class PromptParaphraserConfig:
     save_dir: str = "paraphraser"
     use_dummy: bool = False
     timeout: float = 60.0
-    reasoning_effort: str = "medium"
+    reasoning_effort: Optional[str] = None
+    include_summaries: bool = False
 
 
 class PromptParaphraser:
@@ -46,6 +47,7 @@ class PromptParaphraser:
             use_dummy=self.cfg.use_dummy,
             timeout=self.cfg.timeout,
             reasoning_effort=self.cfg.reasoning_effort,
+            include_summaries=self.cfg.include_summaries,
         )
         return [resp[0] if isinstance(resp, list) else resp for resp in df.Response]
 

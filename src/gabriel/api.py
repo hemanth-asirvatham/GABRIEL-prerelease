@@ -31,7 +31,8 @@ async def rate(
     use_dummy: bool = False,
     file_name: str = "ratings.csv",
     modality: str = "text",
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
@@ -47,6 +48,7 @@ async def rate(
         additional_instructions=additional_instructions,
         modality=modality,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         **cfg_kwargs,
     )
     return await Rate(cfg).run(
@@ -70,7 +72,8 @@ async def classify(
     use_dummy: bool = False,
     file_name: str = "classify_responses.csv",
     modality: str = "text",
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
@@ -87,6 +90,7 @@ async def classify(
         use_dummy=use_dummy,
         modality=modality,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         **cfg_kwargs,
     )
     return await Classify(cfg).run(
@@ -109,7 +113,8 @@ async def deidentify(
     max_words_per_call: int = 7500,
     guidelines: str = "",
     additional_guidelines: str = "",
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
@@ -124,6 +129,7 @@ async def deidentify(
         guidelines=guidelines,
         additional_guidelines=additional_guidelines,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         **cfg_kwargs,
     )
     return await Deidentifier(cfg).run(df, column_name, grouping_column=grouping_column)
@@ -148,7 +154,8 @@ async def rank(
     file_name: str = "rankings",
     reset_files: bool = False,
     modality: str = "text",
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -169,6 +176,7 @@ async def rank(
         additional_instructions=additional_instructions or "",
         modality=modality,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         **cfg_kwargs,
     )
     return await Rank(cfg).run(
@@ -194,7 +202,8 @@ async def codify(
     reset_files: bool = False,
     debug_print: bool = False,
     use_dummy: bool = False,
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
     os.makedirs(save_dir, exist_ok=True)
@@ -210,6 +219,7 @@ async def codify(
         n_parallels=n_parallels,
         model=model,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         save_dir=save_dir,
         file_name=file_name,
         reset_files=reset_files,
@@ -230,7 +240,8 @@ async def whatever(
     n_parallels: int = 400,
     use_dummy: bool = False,
     reset_files: bool = False,
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **kwargs,
 ) -> pd.DataFrame:
     """Wrapper around :func:`get_all_responses` for arbitrary prompts.
@@ -250,6 +261,7 @@ async def whatever(
         use_dummy=use_dummy,
         reset_files=reset_files,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         **kwargs,
     )
 
@@ -266,7 +278,8 @@ async def custom_prompt(
     n_parallels: int = 400,
     use_dummy: bool = False,
     reset_files: bool = False,
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **kwargs,
 ) -> pd.DataFrame:
     """Backward compatible alias for :func:`whatever`."""
@@ -283,6 +296,7 @@ async def custom_prompt(
         use_dummy=use_dummy,
         reset_files=reset_files,
         reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
         **kwargs,
     )
 
