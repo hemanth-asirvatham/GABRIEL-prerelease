@@ -796,7 +796,7 @@ async def get_response(
                     img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
                 )
                 contents.append(
-                    {"type": "input_image", "image_url": {"url": img_url}}
+                    {"type": "input_image", "image_url": img_url}
                 )
             input_data = (
                 [{"role": "user", "content": contents}]
