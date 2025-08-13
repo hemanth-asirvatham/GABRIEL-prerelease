@@ -26,8 +26,8 @@ Key improvements and changes relative to ``elo.py`` include:
 
 * A cleaned up asynchronous ``run`` method that accepts a pandas
   ``DataFrame`` and the name of the column containing the text to be
-  ranked.  Each row is assigned a unique identifier based on its
-  index; no external ``id_col`` argument is required.  The method
+  ranked.  Each row receives a stable identifier derived from a hash of its
+  contents; no external ``id_col`` argument is required.  The method
   produces a DataFrame with one row per input passage, a numeric
   rating for each attribute, optional z‑scores and standard errors,
   and writes the results to disk under ``save_dir``.
@@ -45,6 +45,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import random
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -678,8 +679,10 @@ class Rank:
             start_round = 0
         # copy and prepare the input DataFrame
         df_proc = df.reset_index(drop=True).copy()
-        # assign a unique identifier per row using the row index
-        df_proc["_id"] = df_proc.index.astype(str)
+        # assign a stable identifier per row using an sha1 hash
+        df_proc["_id"] = df_proc[column_name].astype(str).map(
+            lambda x: hashlib.sha1(x.encode()).hexdigest()[:8]
+        )
         # extract contents and build lookup
         if self.cfg.modality in {"image", "audio"}:
             texts = list(zip(df_proc["_id"], ["" for _ in df_proc[column_name]]))
@@ -780,52 +783,83 @@ class Rank:
                 except Exception:
                     continue
                 # Parse each response to build history_pairs
-                for ident, resp_raw in zip(df_round["Identifier"], df_round["Response"]):
-                    parts = str(ident).split("|")
-                    if len(parts) != 5:
-                        continue
-                    _, batch_idx_str, pair_idx_str, id_a, id_b = parts
-                    batch_idx = int(batch_idx_str)
-                    batch = attr_batches[batch_idx]
-                    batch_attr_map = {str(k).strip().lower(): k for k in batch}
-                    # Coerce response into a dictionary using safest_json
-                    async def _coerce_dict_replay(raw: Any) -> Dict[str, Any]:
-                        obj = await safest_json(raw)
-                        if isinstance(obj, dict):
-                            return obj
-                        if isinstance(obj, str):
-                            obj2 = await safest_json(obj)
-                            if isinstance(obj2, dict):
-                                return obj2
-                        if isinstance(obj, list) and obj:
-                            inner = await safest_json(obj[0])
-                            if isinstance(inner, dict):
-                                return inner
-                        return {}
-                    safe_obj = await _coerce_dict_replay(resp_raw)
-                    if not safe_obj:
-                        continue
-                    for attr_raw, winner_raw in safe_obj.items():
-                        attr_key_l = str(attr_raw).strip().lower()
-                        if attr_key_l not in batch_attr_map:
+                async def _coerce_dict_replay(raw: Any) -> Dict[str, Any]:
+                    obj = await safest_json(raw)
+                    if isinstance(obj, dict):
+                        return obj
+                    if isinstance(obj, str):
+                        obj2 = await safest_json(obj)
+                        if isinstance(obj2, dict):
+                            return obj2
+                    if isinstance(obj, list) and obj:
+                        inner = await safest_json(obj[0])
+                        if isinstance(inner, dict):
+                            return inner
+                    return {}
+                if {"Batch", "IdA", "IdB"}.issubset(df_round.columns):
+                    for batch_idx_raw, id_a, id_b, resp_raw in zip(
+                        df_round["Batch"], df_round["IdA"], df_round["IdB"], df_round["Response"]
+                    ):
+                        batch_idx = int(batch_idx_raw)
+                        batch = attr_batches[batch_idx]
+                        batch_attr_map = {str(k).strip().lower(): k for k in batch}
+                        safe_obj = await _coerce_dict_replay(resp_raw)
+                        if not safe_obj:
                             continue
-                        real_attr = batch_attr_map[attr_key_l]
-                        val = winner_raw
-                        if isinstance(val, dict) and "winner" in val:
-                            val = val.get("winner")
-                        if isinstance(val, str):
-                            v = val.strip().lower()
-                        else:
-                            v = ""
-                        if v.startswith(("cir", "c", "left", "text a")):
-                            history_pairs[real_attr].append((id_a, id_b))
-                        elif v.startswith(("squ", "b", "right", "text b")):
-                            history_pairs[real_attr].append((id_b, id_a))
-                        elif v.startswith("draw") or v.startswith("insufficient"):
-                            history_pairs[real_attr].append((id_a, id_b))
-                            history_pairs[real_attr].append((id_b, id_a))
-                        else:
+                        for attr_raw, winner_raw in safe_obj.items():
+                            attr_key_l = str(attr_raw).strip().lower()
+                            if attr_key_l not in batch_attr_map:
+                                continue
+                            real_attr = batch_attr_map[attr_key_l]
+                            val = winner_raw
+                            if isinstance(val, dict) and "winner" in val:
+                                val = val.get("winner")
+                            if isinstance(val, str):
+                                v = val.strip().lower()
+                            else:
+                                v = ""
+                            if v.startswith(("cir", "c", "left", "text a")):
+                                history_pairs[real_attr].append((id_a, id_b))
+                            elif v.startswith(("squ", "b", "right", "text b")):
+                                history_pairs[real_attr].append((id_b, id_a))
+                            elif v.startswith("draw") or v.startswith("insufficient"):
+                                history_pairs[real_attr].append((id_a, id_b))
+                                history_pairs[real_attr].append((id_b, id_a))
+                            else:
+                                continue
+                else:
+                    for ident, resp_raw in zip(df_round["Identifier"], df_round["Response"]):
+                        parts = str(ident).split("|")
+                        if len(parts) != 5:
                             continue
+                        _, batch_idx_str, _, id_a, id_b = parts
+                        batch_idx = int(batch_idx_str)
+                        batch = attr_batches[batch_idx]
+                        batch_attr_map = {str(k).strip().lower(): k for k in batch}
+                        safe_obj = await _coerce_dict_replay(resp_raw)
+                        if not safe_obj:
+                            continue
+                        for attr_raw, winner_raw in safe_obj.items():
+                            attr_key_l = str(attr_raw).strip().lower()
+                            if attr_key_l not in batch_attr_map:
+                                continue
+                            real_attr = batch_attr_map[attr_key_l]
+                            val = winner_raw
+                            if isinstance(val, dict) and "winner" in val:
+                                val = val.get("winner")
+                            if isinstance(val, str):
+                                v = val.strip().lower()
+                            else:
+                                v = ""
+                            if v.startswith(("cir", "c", "left", "text a")):
+                                history_pairs[real_attr].append((id_a, id_b))
+                            elif v.startswith(("squ", "b", "right", "text b")):
+                                history_pairs[real_attr].append((id_b, id_a))
+                            elif v.startswith("draw") or v.startswith("insufficient"):
+                                history_pairs[real_attr].append((id_a, id_b))
+                                history_pairs[real_attr].append((id_b, id_a))
+                            else:
+                                continue
                 # After parsing all pairs for this round, update ratings
                 se_agg_next: Dict[str, float] = {i: 0.0 for i in item_ids}
                 se_agg_counts: Dict[str, int] = {i: 0 for i in item_ids}
@@ -889,6 +923,7 @@ class Rank:
             ids: List[str] = []
             pair_images: Dict[str, List[str]] = {}
             pair_audio: Dict[str, List[Dict[str, str]]] = {}
+            meta_map: Dict[str, Tuple[int, int, str, str]] = {}
             for batch_idx, batch in enumerate(attr_batches):
                 attr_def_map = (
                     {a: self.cfg.attributes[a] for a in batch}
@@ -896,7 +931,8 @@ class Rank:
                     else {a: "" for a in batch}
                 )
                 for pair_idx, ((id_a, t_a), (id_b, t_b)) in enumerate(pairs):
-                    ident = f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}"
+                    raw_ident = f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}"
+                    sha8 = hashlib.sha1(raw_ident.encode()).hexdigest()[:8]
                     prompts.append(
                         self.template.render(
                             entry_circle=t_a,
@@ -906,7 +942,8 @@ class Rank:
                             modality=self.cfg.modality,
                         )
                     )
-                    ids.append(ident)
+                    ids.append(sha8)
+                    meta_map[sha8] = (batch_idx, pair_idx, id_a, id_b)
                     if images_by_id:
                         imgs = []
                         ia = images_by_id.get(id_a, [])
@@ -916,7 +953,7 @@ class Rank:
                         if ib:
                             imgs.extend(ib)
                         if imgs:
-                            pair_images[ident] = imgs
+                            pair_images[sha8] = imgs
                     if audio_by_id:
                         auds = []
                         aa = audio_by_id.get(id_a, [])
@@ -926,8 +963,9 @@ class Rank:
                         if ab:
                             auds.extend(ab)
                         if auds:
-                            pair_audio[ident] = auds
+                            pair_audio[sha8] = auds
             # obtain responses from the language model for this round
+            round_path = os.path.join(self.cfg.save_dir, f"{base_name}_round{rnd}.csv")
             resp_df = await get_all_responses(
                 prompts=prompts,
                 identifiers=ids,
@@ -936,7 +974,7 @@ class Rank:
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
                 json_mode=self.cfg.modality != "audio",
-                save_path=os.path.join(self.cfg.save_dir, f"{base_name}_round{rnd}.csv"),
+                save_path=round_path,
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self._TIMEOUT,
@@ -944,6 +982,12 @@ class Rank:
                 include_summaries=self.cfg.include_summaries,
                 **kwargs,
             )
+            # attach metadata columns and overwrite the round CSV
+            resp_df["Batch"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[0])
+            resp_df["Pair"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[1])
+            resp_df["IdA"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[2])
+            resp_df["IdB"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[3])
+            resp_df.to_csv(round_path, index=False)
             # parse each response
             # reuse the _coerce_dict function defined in the original implementation
             async def _coerce_dict(raw: Any) -> Dict[str, Any]:
@@ -960,14 +1004,13 @@ class Rank:
                         return inner
                 return {}
             for ident, resp in zip(resp_df.Identifier, resp_df.Response):
-                parts = str(ident).split("|")
-                if len(parts) != 5:
+                meta = meta_map.get(str(ident))
+                if not meta:
                     continue
-                _, batch_idx_str, pair_idx_str, id_a, id_b = parts
+                batch_idx, _, id_a, id_b = meta
                 safe_obj = await _coerce_dict(resp)
                 if not safe_obj:
                     continue
-                batch_idx = int(batch_idx_str)
                 batch = attr_batches[batch_idx]
                 batch_attr_map = {str(k).strip().lower(): k for k in batch}
                 for attr_raw, winner_raw in safe_obj.items():
