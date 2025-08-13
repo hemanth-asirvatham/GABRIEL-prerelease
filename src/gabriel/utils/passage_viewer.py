@@ -55,9 +55,9 @@ def _generate_distinct_colors(n: int) -> List[str]:
     return base_colors[:n]
 
 class PassageViewer:
-    def __init__(self, df: pd.DataFrame, text_column: str, categories: Optional[Union[List[str], str]] = None):
+    def __init__(self, df: pd.DataFrame, column_name: str, categories: Optional[Union[List[str], str]] = None):
         self.df = df.copy()
-        self.text_column = text_column
+        self.column_name = column_name
         self.current_index = 0
         self.last_tooltip_cats = None
         self.selected_snippet_tag = None
@@ -337,7 +337,7 @@ class PassageViewer:
         if self.current_index >= len(self.df):
             self.current_index = 0
         row = self.df.iloc[self.current_index]
-        text = str(row[self.text_column])
+        text = str(row[self.column_name])
         additional_info = ""
         if 'conversation_id' in self.df.columns:
             additional_info = f" | ID: {row['conversation_id']}"
@@ -523,7 +523,7 @@ class PassageViewer:
 
 def _view_coded_passages_colab(
     df: pd.DataFrame,
-    text_column: str,
+    column_name: str,
     categories: Optional[Union[List[str], str]] = None,
 ) -> None:
     """Display passages inside a Jupyter notebook.
@@ -568,7 +568,7 @@ def _view_coded_passages_colab(
     html_parts = ["<div>" + " &nbsp; ".join(legend_parts) + "</div><hr/>"]
 
     for _, row in df.iterrows():
-        text = str(row[text_column])
+        text = str(row[column_name])
         if dynamic_mode:
             snippet_map = row.get("coded_passages") or {}
         else:
@@ -592,7 +592,7 @@ def _view_coded_passages_colab(
 
 def view_coded_passages(
     df: pd.DataFrame,
-    text_column: str,
+    column_name: str,
     categories: Optional[Union[List[str], str]] = None,
     colab: bool = False,
 ):
@@ -602,7 +602,7 @@ def view_coded_passages(
     ----------
     df:
         DataFrame containing the passages.
-    text_column:
+    column_name:
         Column name in ``df`` holding the raw text.
     categories:
         Either a list of category column names or ``"coded_passages"`` for
@@ -614,10 +614,10 @@ def view_coded_passages(
     """
 
     if colab:
-        _view_coded_passages_colab(df, text_column, categories)
+        _view_coded_passages_colab(df, column_name, categories)
         return None
 
-    viewer = PassageViewer(df, text_column, categories)
+    viewer = PassageViewer(df, column_name, categories)
     viewer.show()
     return viewer
 

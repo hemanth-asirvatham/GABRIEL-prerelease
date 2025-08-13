@@ -26,7 +26,7 @@ class Codify:
     @staticmethod
     def view(
         df: pd.DataFrame,
-        text_column: str,
+        column_name: str,
         categories: Optional[Union[List[str], str]] = None,
     ):
         """Convenience wrapper around :func:`view_coded_passages`.
@@ -37,7 +37,7 @@ class Codify:
         """
         from ..utils import view_coded_passages
 
-        return view_coded_passages(df, text_column, categories)
+        return view_coded_passages(df, column_name, categories)
 
     def parse_json(self, response_text: Any) -> Optional[dict]:
         """Parse JSON response, handling various input types."""
@@ -520,12 +520,13 @@ class Codify:
         max_categories_per_call: int = 8,
         additional_instructions: str = "",
         n_parallels: int = 400,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-mini",
         save_dir: str,
         file_name: str = "coding_results.csv",
         reset_files: bool = False,
         debug_print: bool = False,
         use_dummy: bool = False,
+        reasoning_effort: str = "medium",
     ) -> pd.DataFrame:
         """
         Process all texts in the dataframe, coding passages according to categories.
@@ -632,6 +633,7 @@ class Codify:
             model=model,
             timeout=300,  # This will be forwarded to get_response via **kwargs
             print_example_prompt=True,
+            reasoning_effort=reasoning_effort,
         )
         
         # Group results by original text index and batch

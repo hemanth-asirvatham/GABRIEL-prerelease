@@ -111,7 +111,7 @@ class RankConfig:
     add_zscore: bool = True
     compute_se: bool = True
     learning_rate: float = 0.1
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 400
     use_dummy: bool = False
     save_dir: str = os.path.expanduser("~/Documents/runs")
@@ -119,6 +119,7 @@ class RankConfig:
     additional_instructions: str = ""
     modality: str = "text"
     n_attributes_per_run: int = 8
+    reasoning_effort: str = "medium"
 
 
 class Rank:
@@ -938,6 +939,7 @@ class Rank:
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self._TIMEOUT,
+                reasoning_effort=self.cfg.reasoning_effort,
                 **kwargs,
             )
             # parse each response

@@ -83,7 +83,7 @@ Rate passages on a set of numeric attributes.  The task builds prompts using `ga
 
 Key options (see `RateConfig`):
 - `attributes` – mapping of attribute name to description.
-- `model` – model name (default `o4-mini`).
+- `model` – model name (default `gpt-5-mini`).
 - `n_parallels` – number of concurrent API calls.
 - `save_path` – CSV file for intermediate results.
 - `rating_scale` – optional custom rating scale text. If omitted, the default 0–100 scale from the template is used.

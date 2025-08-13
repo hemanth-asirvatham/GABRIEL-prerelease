@@ -16,11 +16,12 @@ class PromptParaphraserConfig:
     """Configuration for :class:`PromptParaphraser`."""
 
     n_variants: int = 3
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 25
     save_dir: str = "paraphraser"
     use_dummy: bool = False
     timeout: float = 60.0
+    reasoning_effort: str = "medium"
 
 
 class PromptParaphraser:
@@ -44,6 +45,7 @@ class PromptParaphraser:
             reset_files=True,
             use_dummy=self.cfg.use_dummy,
             timeout=self.cfg.timeout,
+            reasoning_effort=self.cfg.reasoning_effort,
         )
         return [resp[0] if isinstance(resp, list) else resp for resp in df.Response]
 

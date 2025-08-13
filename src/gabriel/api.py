@@ -24,13 +24,14 @@ async def rate(
     attributes: dict[str, str],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     n_parallels: int = 400,
     n_runs: int = 1,
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "ratings.csv",
     modality: str = "text",
+    reasoning_effort: str = "medium",
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
@@ -45,6 +46,7 @@ async def rate(
         use_dummy=use_dummy,
         additional_instructions=additional_instructions,
         modality=modality,
+        reasoning_effort=reasoning_effort,
         **cfg_kwargs,
     )
     return await Rate(cfg).run(
@@ -60,7 +62,7 @@ async def classify(
     labels: dict[str, str],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     n_parallels: int = 400,
     n_runs: int = 1,
     min_frequency: float = 0.6,
@@ -68,6 +70,7 @@ async def classify(
     use_dummy: bool = False,
     file_name: str = "classify_responses.csv",
     modality: str = "text",
+    reasoning_effort: str = "medium",
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
@@ -83,6 +86,7 @@ async def classify(
         additional_instructions=additional_instructions or "",
         use_dummy=use_dummy,
         modality=modality,
+        reasoning_effort=reasoning_effort,
         **cfg_kwargs,
     )
     return await Classify(cfg).run(
@@ -98,13 +102,14 @@ async def deidentify(
     *,
     save_dir: str,
     grouping_column: Optional[str] = None,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     n_parallels: int = 400,
     use_dummy: bool = False,
     file_name: str = "deidentified.csv",
     max_words_per_call: int = 7500,
     guidelines: str = "",
     additional_guidelines: str = "",
+    reasoning_effort: str = "medium",
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
@@ -118,6 +123,7 @@ async def deidentify(
         max_words_per_call=max_words_per_call,
         guidelines=guidelines,
         additional_guidelines=additional_guidelines,
+        reasoning_effort=reasoning_effort,
         **cfg_kwargs,
     )
     return await Deidentifier(cfg).run(df, column_name, grouping_column=grouping_column)
@@ -130,7 +136,7 @@ async def rank(
     attributes: Union[dict[str, str], list[str]],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     n_rounds: int = 5,
     matches_per_round: int = 3,
     power_matching: bool = True,
@@ -142,6 +148,7 @@ async def rank(
     file_name: str = "rankings",
     reset_files: bool = False,
     modality: str = "text",
+    reasoning_effort: str = "medium",
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -161,6 +168,7 @@ async def rank(
         file_name=file_name,
         additional_instructions=additional_instructions or "",
         modality=modality,
+        reasoning_effort=reasoning_effort,
         **cfg_kwargs,
     )
     return await Rank(cfg).run(
@@ -178,7 +186,7 @@ async def codify(
     categories: Optional[dict[str, str]] = None,
     user_instructions: str = "",
     additional_instructions: str = "",
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-mini",
     n_parallels: int = 400,
     max_words_per_call: int = 1000,
     max_categories_per_call: int = 8,
@@ -186,6 +194,7 @@ async def codify(
     reset_files: bool = False,
     debug_print: bool = False,
     use_dummy: bool = False,
+    reasoning_effort: str = "medium",
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
     os.makedirs(save_dir, exist_ok=True)
@@ -200,6 +209,7 @@ async def codify(
         additional_instructions=additional_instructions,
         n_parallels=n_parallels,
         model=model,
+        reasoning_effort=reasoning_effort,
         save_dir=save_dir,
         file_name=file_name,
         reset_files=reset_files,
@@ -214,12 +224,13 @@ async def whatever(
     *,
     save_dir: str,
     file_name: str = "custom_prompt_responses.csv",
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     json_mode: bool = False,
     use_web_search: bool = False,
     n_parallels: int = 400,
     use_dummy: bool = False,
     reset_files: bool = False,
+    reasoning_effort: str = "medium",
     **kwargs,
 ) -> pd.DataFrame:
     """Wrapper around :func:`get_all_responses` for arbitrary prompts.
@@ -238,6 +249,7 @@ async def whatever(
         n_parallels=n_parallels,
         use_dummy=use_dummy,
         reset_files=reset_files,
+        reasoning_effort=reasoning_effort,
         **kwargs,
     )
 
@@ -248,12 +260,13 @@ async def custom_prompt(
     *,
     save_dir: str,
     file_name: str = "custom_prompt_responses.csv",
-    model: str = "o4-mini",
+    model: str = "gpt-5-mini",
     json_mode: bool = False,
     use_web_search: bool = False,
     n_parallels: int = 400,
     use_dummy: bool = False,
     reset_files: bool = False,
+    reasoning_effort: str = "medium",
     **kwargs,
 ) -> pd.DataFrame:
     """Backward compatible alias for :func:`whatever`."""
@@ -269,15 +282,16 @@ async def custom_prompt(
         n_parallels=n_parallels,
         use_dummy=use_dummy,
         reset_files=reset_files,
+        reasoning_effort=reasoning_effort,
         **kwargs,
     )
 
 
 def view_coded_passages(
     df: pd.DataFrame,
-    text_column: str,
+    column_name: str,
     categories: Optional[Union[list[str], str]] = None,
     colab: bool = False,
 ):
     """Convenience wrapper for the passage viewer utility."""
-    return _view_coded_passages(df, text_column, categories, colab=colab)
+    return _view_coded_passages(df, column_name, categories, colab=colab)

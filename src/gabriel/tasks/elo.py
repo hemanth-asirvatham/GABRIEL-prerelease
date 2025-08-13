@@ -36,7 +36,7 @@ class EloConfig:
     final_filename: str = "ratings_final.csv"
     save_per_round: bool = True
     n_parallels: int = 400
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     use_dummy: bool = False
     timeout: float = 45.0
     print_example_prompt: bool = True
@@ -46,6 +46,7 @@ class EloConfig:
     run_name: str = f"elo_{datetime.now():%Y%m%d_%H%M%S}"
     seed: Optional[int] = None
     modality: str = "text"
+    reasoning_effort: str = "medium"
 
 
 class EloRater:
@@ -403,6 +404,7 @@ class EloRater:
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
+                reasoning_effort=self.cfg.reasoning_effort,
                 print_example_prompt=self.cfg.print_example_prompt,
                 **kwargs,
             )
