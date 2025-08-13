@@ -167,7 +167,9 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "cached_input": 0.075, "output": 0.60, "batch": 0.5},
     "o3": {"input": 2.00, "cached_input": 0.50, "output": 8.00, "batch": 0.5},
     "o4-mini": {"input": 1.10, "cached_input": 0.275, "output": 4.40, "batch": 0.5},
-    "gpt-5-mini": {"input": 1.10, "cached_input": 0.275, "output": 4.40, "batch": 0.5},
+    "gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
+    "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00, "batch": 0.5},
+    "gpt-5-nano": {"input": 0.05, "cached_input": 0.005, "output": 0.40, "batch": 0.5},
     "o3-mini": {"input": 1.10, "cached_input": 0.55, "output": 4.40, "batch": 0.5},
     "o3-deep-research": {
         "input": 10.00,
