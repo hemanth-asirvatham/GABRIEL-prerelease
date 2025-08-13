@@ -195,6 +195,13 @@ def test_classification_multirun(tmp_path):
     assert set(disagg.index.names) == {"text", "run"}
 
 
+def test_classify_parse_dict(tmp_path):
+    cfg = ClassifyConfig(labels={"yes": ""}, save_dir=str(tmp_path), use_dummy=True)
+    task = Classify(cfg)
+    parsed = asyncio.run(task._parse({"yes": True}, ["yes"]))
+    assert parsed["yes"] is True
+
+
 def test_regional_dummy(tmp_path):
     data = pd.DataFrame({"county": ["A", "B"]})
     cfg = RegionalConfig(save_dir=str(tmp_path), use_dummy=True)

@@ -79,12 +79,15 @@ class Classify:
             resp = resp[0]
         if isinstance(resp, (bytes, bytearray)):
             resp = resp.decode()
+        data: Optional[Any] = None
         if isinstance(resp, str):
             m = self._FENCE_RE.search(resp)
             if m:
                 resp = m.group(1).strip()
 
             data = await safest_json(resp)
+        elif isinstance(resp, dict):
+            data = resp
         if isinstance(data, dict):
             norm = {
                 k.strip().lower(): (
