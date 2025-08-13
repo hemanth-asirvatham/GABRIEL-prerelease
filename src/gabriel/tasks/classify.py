@@ -13,7 +13,7 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, encode_image, encode_audio
+from ..utils import safest_json, load_image_inputs, load_audio_inputs
 
 
 # ────────────────────────────
@@ -158,50 +158,21 @@ class Classify:
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
 
         if self.cfg.modality == "image":
-            prompt_images = {}
+            tmp: Dict[str, List[str]] = {}
             for ident, rows in id_to_rows.items():
-                imgs = values[rows[0]]
+                imgs = load_image_inputs(values[rows[0]])
                 if imgs:
-                    if isinstance(imgs, str):
-                        imgs = [imgs]
-                    encoded: List[str] = []
-                    for img in imgs:
-                        if isinstance(img, str) and os.path.exists(img):
-                            enc = encode_image(img)
-                            if enc:
-                                encoded.append(enc)
-                        else:
-                            encoded.append(img)
-                    if encoded:
-                        for batch_idx in range(len(label_batches)):
-                            prompt_images[f"{ident}_batch{batch_idx}"] = encoded
-            if not prompt_images:
-                prompt_images = None
+                    for batch_idx in range(len(label_batches)):
+                        tmp[f"{ident}_batch{batch_idx}"] = imgs
+            prompt_images = tmp or None
         elif self.cfg.modality == "audio":
-            prompt_audio = {}
+            tmp_a: Dict[str, List[Dict[str, str]]] = {}
             for ident, rows in id_to_rows.items():
-                auds = values[rows[0]]
+                auds = load_audio_inputs(values[rows[0]])
                 if auds:
-                    if isinstance(auds, str) or (
-                        isinstance(auds, list) and auds and isinstance(auds[0], str)
-                    ):
-                        auds = [auds] if isinstance(auds, str) else auds
-                        encoded_auds: List[Dict[str, str]] = []
-                        for aud in auds:
-                            if isinstance(aud, str) and os.path.exists(aud):
-                                enc = encode_audio(aud)
-                                if enc:
-                                    encoded_auds.append(enc)
-                            elif isinstance(aud, dict):
-                                encoded_auds.append(aud)
-                        if encoded_auds:
-                            for batch_idx in range(len(label_batches)):
-                                prompt_audio[f"{ident}_batch{batch_idx}"] = encoded_auds
-                    elif isinstance(auds, list):
-                        for batch_idx in range(len(label_batches)):
-                            prompt_audio[f"{ident}_batch{batch_idx}"] = auds
-            if not prompt_audio:
-                prompt_audio = None
+                    for batch_idx in range(len(label_batches)):
+                        tmp_a[f"{ident}_batch{batch_idx}"] = auds
+            prompt_audio = tmp_a or None
 
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")

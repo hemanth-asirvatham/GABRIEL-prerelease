@@ -134,7 +134,39 @@ def test_ratings_multirun(tmp_path):
     df = asyncio.run(task.run(data, column_name="text"))
     assert "helpfulness" in df.columns
     disagg = pd.read_csv(tmp_path / "ratings_full_disaggregated.csv", index_col=[0, 1])
-    assert set(disagg.index.names) == {"text", "run"}
+    assert set(disagg.index.names) == {"id", "run"}
+
+
+def test_ratings_audio_dummy(tmp_path):
+    cfg = RateConfig(
+        attributes={"clarity": ""},
+        save_dir=str(tmp_path),
+        file_name="ratings.csv",
+        use_dummy=True,
+        modality="audio",
+    )
+    task = Rate(cfg)
+    audio_path = tmp_path / "test.wav"
+    audio_path.write_bytes(b"abcd")
+    data = pd.DataFrame({"audio": [str(audio_path)]})
+    df = asyncio.run(task.run(data, column_name="audio"))
+    assert "clarity" in df.columns
+
+
+def test_ratings_image_dummy(tmp_path):
+    cfg = RateConfig(
+        attributes={"clarity": ""},
+        save_dir=str(tmp_path),
+        file_name="ratings.csv",
+        use_dummy=True,
+        modality="image",
+    )
+    task = Rate(cfg)
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"abcd")
+    data = pd.DataFrame({"image": [str(img_path)]})
+    df = asyncio.run(task.run(data, column_name="image"))
+    assert "clarity" in df.columns
 
 
 def test_deidentifier_dummy(tmp_path):

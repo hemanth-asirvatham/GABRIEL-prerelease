@@ -16,7 +16,7 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, encode_image, encode_audio
+from ..utils import safest_json, load_image_inputs, load_audio_inputs
 
 
 # ────────────────────────────
@@ -90,15 +90,19 @@ class Rate:
         id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
         id_to_val: Dict[str, Any] = {}
         prompt_texts: Dict[str, str] = {}
+        row_ids: List[str] = []
 
         for row, (passage, orig) in enumerate(zip(texts, values)):
             sha8 = hashlib.sha1(passage.encode()).hexdigest()[:8]
+            row_ids.append(sha8)
             id_to_rows[sha8].append(row)
             if len(id_to_rows[sha8]) > 1:
                 continue
             id_to_val[sha8] = orig
             prompt_texts[sha8] = passage if self.cfg.modality in {"text", "entity", "web"} else ""
             base_ids.append(sha8)
+
+        df_proc["_gid"] = row_ids
 
         attr_items = list(self.cfg.attributes.items())
         attr_batches: List[Dict[str, str]] = [
@@ -125,50 +129,21 @@ class Rate:
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
 
         if self.cfg.modality == "image":
-            prompt_images = {}
+            tmp: Dict[str, List[str]] = {}
             for ident, rows in id_to_rows.items():
-                imgs = values[rows[0]]
+                imgs = load_image_inputs(values[rows[0]])
                 if imgs:
-                    if isinstance(imgs, str):
-                        imgs = [imgs]
-                    encoded: List[str] = []
-                    for img in imgs:
-                        if isinstance(img, str) and os.path.exists(img):
-                            enc = encode_image(img)
-                            if enc:
-                                encoded.append(enc)
-                        else:
-                            encoded.append(img)
-                    if encoded:
-                        for batch_idx in range(len(attr_batches)):
-                            prompt_images[f"{ident}_batch{batch_idx}"] = encoded
-            if not prompt_images:
-                prompt_images = None
+                    for batch_idx in range(len(attr_batches)):
+                        tmp[f"{ident}_batch{batch_idx}"] = imgs
+            prompt_images = tmp or None
         elif self.cfg.modality == "audio":
-            prompt_audio = {}
+            tmp_a: Dict[str, List[Dict[str, str]]] = {}
             for ident, rows in id_to_rows.items():
-                auds = values[rows[0]]
+                auds = load_audio_inputs(values[rows[0]])
                 if auds:
-                    if isinstance(auds, str) or (
-                        isinstance(auds, list) and auds and isinstance(auds[0], str)
-                    ):
-                        auds = [auds] if isinstance(auds, str) else auds
-                        encoded_auds: List[Dict[str, str]] = []
-                        for aud in auds:
-                            if isinstance(aud, str) and os.path.exists(aud):
-                                enc = encode_audio(aud)
-                                if enc:
-                                    encoded_auds.append(enc)
-                            elif isinstance(aud, dict):
-                                encoded_auds.append(aud)
-                        if encoded_auds:
-                            for batch_idx in range(len(attr_batches)):
-                                prompt_audio[f"{ident}_batch{batch_idx}"] = encoded_auds
-                    elif isinstance(auds, list):
-                        for batch_idx in range(len(attr_batches)):
-                            prompt_audio[f"{ident}_batch{batch_idx}"] = auds
-            if not prompt_audio:
-                prompt_audio = None
+                    for batch_idx in range(len(attr_batches)):
+                        tmp_a[f"{ident}_batch{batch_idx}"] = auds
+            prompt_audio = tmp_a or None
 
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
@@ -261,19 +236,20 @@ class Rate:
                     id_to_ratings[base_ident][attr] = parsed.get(attr)
             for ident in base_ids:
                 parsed = id_to_ratings.get(ident, {attr: None for attr in base_attrs})
-                rec = {"text": id_to_val[ident], "run": run_idx}
+                rec = {"id": ident, "text": id_to_val[ident], "run": run_idx}
                 rec.update({attr: parsed.get(attr) for attr in base_attrs})
                 full_records.append(rec)
 
-        full_df = pd.DataFrame(full_records).set_index(["text", "run"])
+        full_df = pd.DataFrame(full_records).set_index(["id", "run"])
         disagg_path = os.path.join(self.cfg.save_dir, f"{base_name}_full_disaggregated.csv")
-        full_df.to_csv(disagg_path, index_label=["text", "run"])
+        full_df.to_csv(disagg_path, index_label=["id", "run"])
 
         # aggregate across runs
-        agg_df = full_df.groupby("text")[list(self.cfg.attributes)].mean()
+        agg_df = full_df.groupby("id")[list(self.cfg.attributes)].mean()
 
         out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
-        result = df_proc.merge(agg_df, left_on=column_name, right_index=True, how="left")
+        result = df_proc.merge(agg_df, left_on="_gid", right_index=True, how="left")
+        result = result.drop(columns=["_gid"])
         result.to_csv(out_path, index=False)
 
         # keep raw response files for reference
