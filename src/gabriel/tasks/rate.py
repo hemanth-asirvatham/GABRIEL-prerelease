@@ -31,7 +31,7 @@ class RateConfig:
     n_parallels: int = 400
     n_runs: int = 1
     use_dummy: bool = False
-    timeout: float = 60.0
+    timeout: float = 75.0
     rating_scale: Optional[str] = None
     additional_instructions: Optional[str] = None
     modality: str = "text"
