@@ -105,13 +105,13 @@ class RankConfig:
     """
 
     attributes: Union[Dict[str, str], List[str]]
-    n_rounds: int = 15
-    matches_per_round: int = 3
+    n_rounds: int = 5
+    matches_per_round: int = 5
     power_matching: bool = True
     add_zscore: bool = True
     compute_se: bool = True
     learning_rate: float = 0.1
-    model: str = "o4-mini"
+    model: str = "gpt-5-mini"
     n_parallels: int = 400
     use_dummy: bool = False
     save_dir: str = os.path.expanduser("~/Documents/runs")
@@ -191,7 +191,7 @@ class Rank:
         # exposed publicly because changing it rarely benefits typical
         # workloads; if a different timeout is required this can be
         # modified here.
-        self._TIMEOUT = 45.0
+        self._TIMEOUT = 90.0
 
     # ------------------------------------------------------------------
     # Public API for adding multiway rankings
