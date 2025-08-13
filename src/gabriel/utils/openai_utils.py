@@ -633,7 +633,8 @@ def _build_params(
     search_context_size: str = "medium",
     json_mode: bool = False,
     expected_schema: Optional[Dict[str, Any]] = None,
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     **extra: Any,
 ) -> Dict[str, Any]:
     """Build the parameter dict for ``client.responses.create``.
@@ -663,12 +664,18 @@ def _build_params(
         params["tools"] = all_tools
     if tool_choice is not None:
         params["tool_choice"] = tool_choice
-    # For o‑series and gpt-5 models, reasoning_effort controls hidden reasoning
-    # tokens and an optional auto-generated summary.  gpt-5 models also ignore
-    # the ``temperature`` parameter, so we drop it and warn if a custom value
-    # was provided.  Other models retain temperature-based randomness.
+    # For o‑series and gpt-5 models, reasoning settings control hidden reasoning
+    # tokens and optional summaries. gpt-5 models also ignore the ``temperature``
+    # parameter, so we drop it and warn if a custom value was provided. Other
+    # models retain temperature-based randomness.
     if model.startswith("o") or model.startswith("gpt-5"):
-        params["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
+        reasoning: Dict[str, Any] = {}
+        if reasoning_effort is not None:
+            reasoning["effort"] = reasoning_effort
+        if include_summaries:
+            reasoning["include_summaries"] = True
+        if reasoning:
+            params["reasoning"] = reasoning
         if model.startswith("gpt-5") and temperature != 0.9:
             logger.warning(
                 f"Model {model} does not support temperature; ignoring provided value."
@@ -695,7 +702,8 @@ async def get_response(
     tool_choice: Optional[dict] = None,
     web_search: bool = False,
     search_context_size: str = "medium",
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     use_dummy: bool = False,
     verbose: bool = True,
     images: Optional[List[str]] = None,
@@ -827,6 +835,7 @@ async def get_response(
             json_mode=json_mode,
             expected_schema=expected_schema,
             reasoning_effort=reasoning_effort,
+            include_summaries=include_summaries,
             **kwargs,
         )
         if client_async is None:
@@ -888,7 +897,8 @@ async def get_all_responses(
     tool_choice: Optional[dict] = None,
     use_web_search: bool = False,
     search_context_size: str = "medium",
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
     use_dummy: bool = False,
     print_example_prompt: bool = True,
     save_path: str = "responses.csv",
@@ -951,6 +961,7 @@ async def get_all_responses(
     get_response_kwargs.setdefault("expected_schema", expected_schema)
     get_response_kwargs.setdefault("temperature", temperature)
     get_response_kwargs.setdefault("reasoning_effort", reasoning_effort)
+    get_response_kwargs.setdefault("include_summaries", include_summaries)
     # Pass the chosen model through to get_response by default
     get_response_kwargs.setdefault("model", model)
     # Decide default cutoff once per job using cached rate headers
@@ -1266,8 +1277,9 @@ async def get_all_responses(
                     ),
                     json_mode=get_response_kwargs.get("json_mode", False),
                     expected_schema=get_response_kwargs.get("expected_schema"),
-                    reasoning_effort=get_response_kwargs.get(
-                        "reasoning_effort", "medium"
+                    reasoning_effort=get_response_kwargs.get("reasoning_effort"),
+                    include_summaries=get_response_kwargs.get(
+                        "include_summaries", False
                     ),
                 )
                 tasks.append(

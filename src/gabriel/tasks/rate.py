@@ -36,7 +36,8 @@ class RateConfig:
     additional_instructions: Optional[str] = None
     modality: str = "text"
     n_attributes_per_run: int = 8
-    reasoning_effort: str = "medium"
+    reasoning_effort: Optional[str] = None
+    include_summaries: bool = False
 
 
 # ────────────────────────────
@@ -168,6 +169,7 @@ class Rate:
                 json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
                 reasoning_effort=self.cfg.reasoning_effort,
+                include_summaries=self.cfg.include_summaries,
                 **kwargs,
             )
             df_resps = [df_resp_all]
@@ -204,6 +206,7 @@ class Rate:
                 json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
                 reasoning_effort=self.cfg.reasoning_effort,
+                include_summaries=self.cfg.include_summaries,
                 **kwargs,
             )
 

@@ -140,7 +140,8 @@ async def clean_json_df(
     model: str = "gpt-5-mini",
     exclude_valid_json: bool = False,
     save_path: Optional[str] = None,
-    reasoning_effort: str = "medium",
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
 ) -> pd.DataFrame:
     """Ensure specified DataFrame columns contain valid JSON.
 
@@ -229,6 +230,7 @@ async def clean_json_df(
                 json_mode=True,
                 use_dummy=use_dummy,
                 reasoning_effort=reasoning_effort,
+                include_summaries=include_summaries,
                 print_example_prompt=False,
                 save_path=tmp_path,
                 reset_files=True,

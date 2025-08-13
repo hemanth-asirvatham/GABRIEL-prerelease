@@ -26,7 +26,8 @@ class DeidentifyConfig:
     max_words_per_call: int = 7500
     guidelines: str = ""
     additional_guidelines: str = ""
-    reasoning_effort: str = "medium"
+    reasoning_effort: Optional[str] = None
+    include_summaries: bool = False
 
 
 class Deidentifier:
@@ -113,6 +114,7 @@ class Deidentifier:
                 timeout=self.cfg.timeout,
                 json_mode=True,
                 reasoning_effort=self.cfg.reasoning_effort,
+                include_summaries=self.cfg.include_summaries,
             )
             for ident, resp in zip(batch_df["Identifier"], batch_df["Response"]):
                 gid = ident.split("_seg_")[0]

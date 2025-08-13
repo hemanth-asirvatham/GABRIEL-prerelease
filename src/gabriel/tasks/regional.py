@@ -22,7 +22,8 @@ class RegionalConfig:
     use_dummy: bool = False
     additional_instructions: str = ""
     additional_guidelines: str = ""
-    reasoning_effort: str = "medium"
+    reasoning_effort: Optional[str] = None
+    include_summaries: bool = False
     search_context_size: str = "medium"
     print_example_prompt: bool = True
 
@@ -75,6 +76,7 @@ class Regional:
             use_web_search=True,
             search_context_size=self.cfg.search_context_size,
             reasoning_effort=self.cfg.reasoning_effort,
+            include_summaries=self.cfg.include_summaries,
             save_path=csv_path,
             reset_files=reset_files,
             use_dummy=self.cfg.use_dummy,

@@ -25,7 +25,8 @@ class CountyCounter:
         run_name: Optional[str] = None,
         model_regional: str = "gpt-5-mini",
         model_elo: str = "gpt-5-mini",
-        reasoning_effort: str = "medium",
+        reasoning_effort: Optional[str] = None,
+        include_summaries: bool = False,
         search_context_size: str = "medium",
         n_parallels: int = 400,
         n_elo_rounds: int = 15,
@@ -52,6 +53,7 @@ class CountyCounter:
         self.additional_guidelines = additional_guidelines
         self.elo_guidelines = elo_guidelines
         self.reasoning_effort = reasoning_effort
+        self.include_summaries = include_summaries
         self.search_context_size = search_context_size
         self.z_score_choropleth = z_score_choropleth
         self.elo_attributes = elo_attributes
@@ -68,6 +70,7 @@ class CountyCounter:
             additional_instructions=self.additional_instructions,
             additional_guidelines=self.additional_guidelines,
             reasoning_effort=self.reasoning_effort,
+            include_summaries=self.include_summaries,
             search_context_size=self.search_context_size,
             print_example_prompt=True,
             save_dir=self.save_path,
@@ -99,6 +102,8 @@ class CountyCounter:
                     additional_guidelines=self.elo_guidelines,
                     print_example_prompt=False,
                     timeout=self.elo_timeout,
+                    reasoning_effort=self.reasoning_effort,
+                    include_summaries=self.include_summaries,
                 )
             rater = EloRater(cfg)
             elo_df = await rater.run(

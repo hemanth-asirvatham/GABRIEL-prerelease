@@ -46,7 +46,8 @@ class EloConfig:
     run_name: str = f"elo_{datetime.now():%Y%m%d_%H%M%S}"
     seed: Optional[int] = None
     modality: str = "text"
-    reasoning_effort: str = "medium"
+    reasoning_effort: Optional[str] = None
+    include_summaries: bool = False
 
 
 class EloRater:
@@ -405,6 +406,7 @@ class EloRater:
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
+                include_summaries=self.cfg.include_summaries,
                 print_example_prompt=self.cfg.print_example_prompt,
                 **kwargs,
             )
