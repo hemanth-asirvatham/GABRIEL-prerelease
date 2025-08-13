@@ -164,7 +164,7 @@ class Rate:
                 save_path=csv_path,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
-                json_mode=True,
+                json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
                 **kwargs,
             )
@@ -199,7 +199,7 @@ class Rate:
                 save_path=csv_path,
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
-                json_mode=True,
+                json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
                 **kwargs,
             )

@@ -398,7 +398,7 @@ class EloRater:
                 prompt_audio=pair_audio or None,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
-                json_mode=True,
+                json_mode=self.cfg.modality != "audio",
                 save_path=os.path.join(self.save_path, f"round{rnd}.csv"),
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,

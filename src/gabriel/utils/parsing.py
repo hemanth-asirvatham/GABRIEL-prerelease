@@ -16,11 +16,13 @@ JSON_LLM_MODEL = os.getenv("JSON_LLM_MODEL", "gpt-4o-mini")
 
 def _parse_json(txt: Any) -> Union[dict, list]:
     """Strict JSON parsing with common cleaning heuristics."""
-    if isinstance(txt, (dict, list)):
+    if isinstance(txt, dict):
         return txt
 
-    if isinstance(txt, list) and txt:
-        return _parse_json(txt[0])
+    if isinstance(txt, list):
+        if len(txt) == 1:
+            return _parse_json(txt[0])
+        return txt
 
     if isinstance(txt, (bytes, bytearray)):
         txt = txt.decode(errors="ignore")

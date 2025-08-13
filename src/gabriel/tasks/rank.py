@@ -933,7 +933,7 @@ class Rank:
                 prompt_audio=pair_audio or None,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
-                json_mode=True,
+                json_mode=self.cfg.modality != "audio",
                 save_path=os.path.join(self.cfg.save_dir, f"{base_name}_round{rnd}.csv"),
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
