@@ -739,7 +739,9 @@ async def get_response(
                 img_url = (
                     img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
                 )
-                contents.append({"type": "image_url", "image_url": {"url": img_url}})
+                contents.append(
+                    {"type": "input_image", "image_url": {"url": img_url}}
+                )
         for a in audio:
             contents.append({"type": "input_audio", "input_audio": a})
         messages = [{"role": "user", "content": contents}]
@@ -793,7 +795,9 @@ async def get_response(
                 img_url = (
                     img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
                 )
-                contents.append({"type": "input_image", "image_url": img_url})
+                contents.append(
+                    {"type": "input_image", "image_url": {"url": img_url}}
+                )
             input_data = (
                 [{"role": "user", "content": contents}]
                 if model.startswith("o")
