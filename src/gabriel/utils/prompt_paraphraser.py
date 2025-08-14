@@ -15,12 +15,12 @@ from .openai_utils import get_all_responses
 class PromptParaphraserConfig:
     """Configuration for :class:`PromptParaphraser`."""
 
-    n_variants: int = 3
+    n_variants: int = 1
     model: str = "gpt-5-mini"
     n_parallels: int = 25
     save_dir: str = "paraphraser"
     use_dummy: bool = False
-    timeout: float = 60.0
+    timeout: float = 180.0
     reasoning_effort: Optional[str] = None
     include_summaries: bool = False
 
