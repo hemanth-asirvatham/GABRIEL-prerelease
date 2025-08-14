@@ -636,7 +636,7 @@ def _build_params(
     json_mode: bool = False,
     expected_schema: Optional[Dict[str, Any]] = None,
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **extra: Any,
 ) -> Dict[str, Any]:
     """Build the parameter dict for ``client.responses.create``.
@@ -674,8 +674,8 @@ def _build_params(
         reasoning: Dict[str, Any] = {}
         if reasoning_effort is not None:
             reasoning["effort"] = reasoning_effort
-        if include_summaries:
-            reasoning["summary"] = "auto"
+        if reasoning_summary is not None:
+            reasoning["summary"] = reasoning_summary
         if reasoning:
             params["reasoning"] = reasoning
         if model.startswith("gpt-5") and temperature != 0.9:
@@ -705,7 +705,7 @@ async def get_response(
     web_search: bool = False,
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     use_dummy: bool = False,
     verbose: bool = True,
     images: Optional[List[str]] = None,
@@ -837,7 +837,7 @@ async def get_response(
             json_mode=json_mode,
             expected_schema=expected_schema,
             reasoning_effort=reasoning_effort,
-            include_summaries=include_summaries,
+            reasoning_summary=reasoning_summary,
             **kwargs,
         )
         if client_async is None:
@@ -900,7 +900,7 @@ async def get_all_responses(
     use_web_search: bool = False,
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     use_dummy: bool = False,
     print_example_prompt: bool = True,
     save_path: str = "responses.csv",
@@ -963,7 +963,7 @@ async def get_all_responses(
     get_response_kwargs.setdefault("expected_schema", expected_schema)
     get_response_kwargs.setdefault("temperature", temperature)
     get_response_kwargs.setdefault("reasoning_effort", reasoning_effort)
-    get_response_kwargs.setdefault("include_summaries", include_summaries)
+    get_response_kwargs.setdefault("reasoning_summary", reasoning_summary)
     # Pass the chosen model through to get_response by default
     get_response_kwargs.setdefault("model", model)
     # Decide default cutoff once per job using cached rate headers
@@ -1001,37 +1001,41 @@ async def get_all_responses(
         df["Response"] = df["Response"].apply(_de)
         if "Error Log" in df.columns:
             df["Error Log"] = df["Error Log"].apply(_de)
-        for col in [
+        expected_cols = [
             "Input Tokens",
             "Reasoning Tokens",
             "Output Tokens",
             "Reasoning Effort",
-            "Reasoning Summary",
             "Successful",
             "Error Log",
-        ]:
+        ]
+        if reasoning_summary is not None:
+            expected_cols.insert(4, "Reasoning Summary")
+        for col in expected_cols:
             if col not in df.columns:
                 df[col] = pd.NA
+        if reasoning_summary is None and "Reasoning Summary" in df.columns:
+            df = df.drop(columns=["Reasoning Summary"])
         # Only skip identifiers that previously succeeded so failures can be retried
         if "Successful" in df.columns:
             done = set(df.loc[df["Successful"] == True, "Identifier"])
         else:
             done = set(df["Identifier"])
     else:
-        df = pd.DataFrame(
-            columns=[
-                "Identifier",
-                "Response",
-                "Time Taken",
-                "Input Tokens",
-                "Reasoning Tokens",
-                "Output Tokens",
-                "Reasoning Effort",
-                "Reasoning Summary",
-                "Successful",
-                "Error Log",
-            ]
-        )
+        cols = [
+            "Identifier",
+            "Response",
+            "Time Taken",
+            "Input Tokens",
+            "Reasoning Tokens",
+            "Output Tokens",
+            "Reasoning Effort",
+            "Successful",
+            "Error Log",
+        ]
+        if reasoning_summary is not None:
+            cols.insert(7, "Reasoning Summary")
+        df = pd.DataFrame(columns=cols)
         done = set()
     # Filter prompts/identifiers based on what is already completed
     todo_pairs = [(p, i) for p, i in zip(prompts, identifiers) if i not in done]
@@ -1280,8 +1284,8 @@ async def get_all_responses(
                     json_mode=get_response_kwargs.get("json_mode", False),
                     expected_schema=get_response_kwargs.get("expected_schema"),
                     reasoning_effort=get_response_kwargs.get("reasoning_effort"),
-                    include_summaries=get_response_kwargs.get(
-                        "include_summaries", False
+                    reasoning_summary=get_response_kwargs.get(
+                        "reasoning_summary"
                     ),
                 )
                 tasks.append(
@@ -1437,22 +1441,22 @@ async def get_all_responses(
                             continue
                         if rec.get("response") is None:
                             err = rec.get("error") or errors.get(ident)
-                            completed_rows.append(
-                                {
-                                    "Identifier": ident,
-                                    "Response": None,
-                                    "Time Taken": None,
-                                    "Input Tokens": None,
-                                    "Reasoning Tokens": None,
-                                    "Output Tokens": None,
-                                    "Reasoning Effort": get_response_kwargs.get(
-                                        "reasoning_effort", reasoning_effort
-                                    ),
-                                    "Reasoning Summary": None,
-                                    "Successful": False,
-                                    "Error Log": [err] if err else [],
-                                }
-                            )
+                            row = {
+                                "Identifier": ident,
+                                "Response": None,
+                                "Time Taken": None,
+                                "Input Tokens": None,
+                                "Reasoning Tokens": None,
+                                "Output Tokens": None,
+                                "Reasoning Effort": get_response_kwargs.get(
+                                    "reasoning_effort", reasoning_effort
+                                ),
+                                "Successful": False,
+                                "Error Log": [err] if err else [],
+                            }
+                            if reasoning_summary is not None:
+                                row["Reasoning Summary"] = None
+                            completed_rows.append(row)
                             continue
                         resp_obj = rec["response"]
                         resp_text: Optional[str] = None
@@ -1548,22 +1552,22 @@ async def get_all_responses(
                                                     break
                                 if summary_text is not None:
                                     break
-                        completed_rows.append(
-                                {
-                                    "Identifier": ident,
-                                    "Response": [resp_text],
-                                    "Time Taken": None,
-                                    "Input Tokens": input_tok,
-                                    "Reasoning Tokens": reason_tok,
-                                    "Output Tokens": output_tok,
-                                    "Reasoning Effort": get_response_kwargs.get(
-                                        "reasoning_effort", reasoning_effort
-                                    ),
-                                    "Reasoning Summary": summary_text,
-                                    "Successful": True,
-                                    "Error Log": [],
-                                }
-                        )
+                        row = {
+                            "Identifier": ident,
+                            "Response": [resp_text],
+                            "Time Taken": None,
+                            "Input Tokens": input_tok,
+                            "Reasoning Tokens": reason_tok,
+                            "Output Tokens": output_tok,
+                            "Reasoning Effort": get_response_kwargs.get(
+                                "reasoning_effort", reasoning_effort
+                            ),
+                            "Successful": True,
+                            "Error Log": [],
+                        }
+                        if reasoning_summary is not None:
+                            row["Reasoning Summary"] = summary_text
+                        completed_rows.append(row)
                     unfinished_batches.remove(b)
                     state["batches"] = [
                         bb
@@ -1785,22 +1789,22 @@ async def get_all_responses(
                         f"Timeout for {ident} after {nonlocal_timeout:.1f}s. Consider increasing 'timeout'."
                     )
                 else:
-                    results.append(
-                        {
-                            "Identifier": ident,
-                            "Response": resps,
-                            "Time Taken": t,
-                            "Input Tokens": total_input,
-                            "Reasoning Tokens": total_reasoning,
-                            "Output Tokens": total_output,
-                            "Reasoning Effort": get_response_kwargs.get(
-                                "reasoning_effort", reasoning_effort
-                            ),
-                            "Reasoning Summary": summary_text,
-                            "Successful": True,
-                            "Error Log": error_logs.get(ident, []),
-                        }
-                    )
+                    row = {
+                        "Identifier": ident,
+                        "Response": resps,
+                        "Time Taken": t,
+                        "Input Tokens": total_input,
+                        "Reasoning Tokens": total_reasoning,
+                        "Output Tokens": total_output,
+                        "Reasoning Effort": get_response_kwargs.get(
+                            "reasoning_effort", reasoning_effort
+                        ),
+                        "Successful": True,
+                        "Error Log": error_logs.get(ident, []),
+                    }
+                    if reasoning_summary is not None:
+                        row["Reasoning Summary"] = summary_text
+                    results.append(row)
                     processed += 1
                     status.num_tasks_succeeded += 1
                     status.num_tasks_in_progress -= 1
@@ -1830,22 +1834,22 @@ async def get_all_responses(
                     await asyncio.sleep(backoff)
                     queue.put_nowait((prompt, ident, attempts_left - 1))
                 else:
-                    results.append(
-                        {
-                            "Identifier": ident,
-                            "Response": None,
-                            "Time Taken": None,
-                            "Input Tokens": input_tokens,
-                            "Reasoning Tokens": None,
-                            "Output Tokens": None,
-                            "Reasoning Effort": get_response_kwargs.get(
-                                "reasoning_effort", reasoning_effort
-                            ),
-                            "Reasoning Summary": None,
-                            "Successful": False,
-                            "Error Log": error_logs.get(ident, []),
-                        }
-                    )
+                    row = {
+                        "Identifier": ident,
+                        "Response": None,
+                        "Time Taken": None,
+                        "Input Tokens": input_tokens,
+                        "Reasoning Tokens": None,
+                        "Output Tokens": None,
+                        "Reasoning Effort": get_response_kwargs.get(
+                            "reasoning_effort", reasoning_effort
+                        ),
+                        "Successful": False,
+                        "Error Log": error_logs.get(ident, []),
+                    }
+                    if reasoning_summary is not None:
+                        row["Reasoning Summary"] = None
+                    results.append(row)
                     processed += 1
                     status.num_tasks_failed += 1
                     status.num_tasks_in_progress -= 1
@@ -1864,22 +1868,22 @@ async def get_all_responses(
                     await asyncio.sleep(backoff)
                     queue.put_nowait((prompt, ident, attempts_left - 1))
                 else:
-                    results.append(
-                        {
-                            "Identifier": ident,
-                            "Response": None,
-                            "Time Taken": None,
-                            "Input Tokens": input_tokens,
-                            "Reasoning Tokens": None,
-                            "Output Tokens": None,
-                            "Reasoning Effort": get_response_kwargs.get(
-                                "reasoning_effort", reasoning_effort
-                            ),
-                            "Reasoning Summary": None,
-                            "Successful": False,
-                            "Error Log": error_logs.get(ident, []),
-                        }
-                    )
+                    row = {
+                        "Identifier": ident,
+                        "Response": None,
+                        "Time Taken": None,
+                        "Input Tokens": input_tokens,
+                        "Reasoning Tokens": None,
+                        "Output Tokens": None,
+                        "Reasoning Effort": get_response_kwargs.get(
+                            "reasoning_effort", reasoning_effort
+                        ),
+                        "Successful": False,
+                        "Error Log": error_logs.get(ident, []),
+                    }
+                    if reasoning_summary is not None:
+                        row["Reasoning Summary"] = None
+                    results.append(row)
                     processed += 1
                     status.num_tasks_failed += 1
                     status.num_tasks_in_progress -= 1
@@ -1896,22 +1900,22 @@ async def get_all_responses(
                 logger.warning(f"API error for {ident}: {e}")
                 inflight.pop(ident, None)
                 error_logs[ident].append(str(e))
-                results.append(
-                    {
-                        "Identifier": ident,
-                        "Response": None,
-                        "Time Taken": None,
-                        "Input Tokens": input_tokens,
-                        "Reasoning Tokens": None,
-                        "Output Tokens": None,
-                        "Reasoning Effort": get_response_kwargs.get(
-                            "reasoning_effort", reasoning_effort
-                        ),
-                        "Reasoning Summary": None,
-                        "Successful": False,
-                        "Error Log": error_logs.get(ident, []),
-                    }
-                )
+                row = {
+                    "Identifier": ident,
+                    "Response": None,
+                    "Time Taken": None,
+                    "Input Tokens": input_tokens,
+                    "Reasoning Tokens": None,
+                    "Output Tokens": None,
+                    "Reasoning Effort": get_response_kwargs.get(
+                        "reasoning_effort", reasoning_effort
+                    ),
+                    "Successful": False,
+                    "Error Log": error_logs.get(ident, []),
+                }
+                if reasoning_summary is not None:
+                    row["Reasoning Summary"] = None
+                results.append(row)
                 processed += 1
                 status.num_tasks_failed += 1
                 status.num_tasks_in_progress -= 1

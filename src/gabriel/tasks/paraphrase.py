@@ -26,7 +26,7 @@ class ParaphraseConfig:
     n_parallels: int = 400
     use_dummy: bool = False
     reasoning_effort: Optional[str] = None
-    include_summaries: bool = False
+    reasoning_summary: Optional[str] = None
 
 
 class Paraphrase:
@@ -73,7 +73,7 @@ class Paraphrase:
             use_dummy=self.cfg.use_dummy,
             reset_files=reset_files,
             reasoning_effort=self.cfg.reasoning_effort,
-            include_summaries=self.cfg.include_summaries,
+            reasoning_summary=self.cfg.reasoning_summary,
             **kwargs,
         )
 

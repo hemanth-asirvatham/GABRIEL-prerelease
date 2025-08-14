@@ -141,7 +141,7 @@ async def clean_json_df(
     exclude_valid_json: bool = False,
     save_path: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
 ) -> pd.DataFrame:
     """Ensure specified DataFrame columns contain valid JSON.
 
@@ -160,6 +160,10 @@ async def clean_json_df(
         repair invalid JSON. Defaults to ``"gpt-5-mini"``.
     reasoning_effort:
         Reasoning effort level forwarded to the model.
+    reasoning_summary:
+        Optional reasoning summary mode (e.g., ``"auto"``, ``"concise"``,
+        or ``"detailed"``) forwarded to the model. When ``None`` (default),
+        no reasoning summary is requested.
     exclude_valid_json:
         When ``False`` (default), only entries that fail to parse are sent to
         the model. When ``True``, all entries are processed regardless of
@@ -230,7 +234,7 @@ async def clean_json_df(
                 json_mode=True,
                 use_dummy=use_dummy,
                 reasoning_effort=reasoning_effort,
-                include_summaries=include_summaries,
+                reasoning_summary=reasoning_summary,
                 print_example_prompt=False,
                 save_path=tmp_path,
                 reset_files=True,

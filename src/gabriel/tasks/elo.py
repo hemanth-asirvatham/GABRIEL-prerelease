@@ -47,7 +47,7 @@ class EloConfig:
     seed: Optional[int] = None
     modality: str = "text"
     reasoning_effort: Optional[str] = None
-    include_summaries: bool = False
+    reasoning_summary: Optional[str] = None
 
 
 class EloRater:
@@ -406,7 +406,7 @@ class EloRater:
                 use_dummy=self.cfg.use_dummy,
                 timeout=self.cfg.timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
-                include_summaries=self.cfg.include_summaries,
+                reasoning_summary=self.cfg.reasoning_summary,
                 print_example_prompt=self.cfg.print_example_prompt,
                 **kwargs,
             )
