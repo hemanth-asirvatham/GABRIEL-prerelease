@@ -16,6 +16,7 @@ from .tasks import (
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
+from .core.prompt_template import PromptTemplate
 
 async def rate(
     df: pd.DataFrame,
@@ -226,6 +227,64 @@ async def codify(
         debug_print=debug_print,
         use_dummy=use_dummy,
     )
+
+
+async def paraphrase(
+    df: pd.DataFrame,
+    column_name: str,
+    *,
+    instructions: str,
+    revised_column_name: str,
+    save_dir: str,
+    file_name: str = "paraphrase_responses.csv",
+    model: str = "gpt-5-mini",
+    json_mode: bool = False,
+    use_web_search: bool = False,
+    n_parallels: int = 400,
+    use_dummy: bool = False,
+    reset_files: bool = False,
+    reasoning_effort: Optional[str] = None,
+    include_summaries: bool = False,
+    **kwargs,
+) -> pd.DataFrame:
+    """Paraphrase a column of text and return a new DataFrame.
+
+    The input ``df`` must contain ``column_name`` with text to rewrite.  A new
+    column named ``revised_column_name`` will be added containing the
+    paraphrased text.  Raw responses are saved to
+    ``save_dir/file_name`` and the cleaned result is saved to
+    ``save_dir/<file_name stem>_cleaned.csv``.
+    """
+
+    os.makedirs(save_dir, exist_ok=True)
+    template = PromptTemplate.from_package("paraphrase_prompt.jinja2")
+    df_proc = df.reset_index(drop=True).copy()
+    texts = df_proc[column_name].astype(str).tolist()
+    prompts = [template.render(text=t, instructions=instructions) for t in texts]
+    identifiers = [f"row_{i}" for i in range(len(texts))]
+    save_path = os.path.join(save_dir, file_name)
+    resp_df = await get_all_responses(
+        prompts=prompts,
+        identifiers=identifiers,
+        save_path=save_path,
+        model=model,
+        json_mode=json_mode,
+        use_web_search=use_web_search,
+        n_parallels=n_parallels,
+        use_dummy=use_dummy,
+        reset_files=reset_files,
+        reasoning_effort=reasoning_effort,
+        include_summaries=include_summaries,
+        **kwargs,
+    )
+    df_proc[revised_column_name] = resp_df["Response"].apply(
+        lambda r: r[0] if isinstance(r, list) and r else r
+    )
+    out_path = os.path.join(
+        save_dir, f"{os.path.splitext(file_name)[0]}_cleaned.csv"
+    )
+    df_proc.to_csv(out_path, index=False)
+    return df_proc
 
 
 async def whatever(

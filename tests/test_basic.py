@@ -290,3 +290,18 @@ def test_api_wrappers(tmp_path):
     )
     assert len(custom) == 1
 
+
+def test_paraphrase_api(tmp_path):
+    data = pd.DataFrame({"txt": ["hello"]})
+    df = asyncio.run(
+        gabriel.paraphrase(
+            data,
+            "txt",
+            instructions="reword",
+            revised_column_name="txt_revised",
+            save_dir=str(tmp_path / "para"),
+            use_dummy=True,
+        )
+    )
+    assert "txt_revised" in df.columns and len(df) == 1
+
