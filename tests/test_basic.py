@@ -9,7 +9,6 @@ from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig
 from gabriel.tasks.regional import Regional, RegionalConfig
 from gabriel.tasks.county_counter import CountyCounter
-from gabriel.utils import PromptParaphraser, PromptParaphraserConfig
 import gabriel
 
 
@@ -231,20 +230,6 @@ def test_county_counter_dummy(tmp_path):
     assert "econ" in df.columns
 
 
-def test_prompt_paraphraser_ratings(tmp_path):
-    cfg = RateConfig(
-        attributes={"quality": ""},
-        save_dir=str(tmp_path),
-        file_name="rat.csv",
-        use_dummy=True,
-    )
-    parap_cfg = PromptParaphraserConfig(n_variants=2, save_dir=str(tmp_path / "para"), use_dummy=True)
-    paraphraser = PromptParaphraser(parap_cfg)
-    data = pd.DataFrame({"txt": ["hello"]})
-    df = asyncio.run(paraphraser.run(Rate, cfg, data, column_name="txt"))
-    assert set(df.prompt_variant) == {"baseline", "variant_1", "variant_2"}
-
-
 def test_api_wrappers(tmp_path):
     df = pd.DataFrame({"txt": ["hello"]})
     rated = asyncio.run(
@@ -298,10 +283,20 @@ def test_paraphrase_api(tmp_path):
             data,
             "txt",
             instructions="reword",
-            revised_column_name="txt_revised",
             save_dir=str(tmp_path / "para"),
             use_dummy=True,
         )
     )
     assert "txt_revised" in df.columns and len(df) == 1
+    df_multi = asyncio.run(
+        gabriel.paraphrase(
+            data,
+            "txt",
+            instructions="reword",
+            save_dir=str(tmp_path / "para_multi"),
+            use_dummy=True,
+            n_revisions=2,
+        )
+    )
+    assert "txt_revised_1" in df_multi.columns and "txt_revised_2" in df_multi.columns
 

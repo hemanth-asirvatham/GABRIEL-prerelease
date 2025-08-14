@@ -7,7 +7,6 @@ from .media_utils import load_image_inputs, load_audio_inputs
 from .logging import get_logger, set_log_level
 from .teleprompter import Teleprompter
 from .mapmaker import MapMaker, create_county_choropleth
-from .prompt_paraphraser import PromptParaphraser, PromptParaphraserConfig
 from .parsing import safe_json, safest_json, clean_json_df
 from .jinja import shuffled, shuffled_dict, get_env
 from .passage_viewer import PassageViewer, view_coded_passages
@@ -26,8 +25,6 @@ __all__ = [
     "Teleprompter",
     "MapMaker",
     "create_county_choropleth",
-    "PromptParaphraser",
-    "PromptParaphraserConfig",
     "safe_json",
     "safest_json",
     "clean_json_df",
