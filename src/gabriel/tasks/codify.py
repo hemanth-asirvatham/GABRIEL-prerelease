@@ -1,4 +1,3 @@
-import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -13,6 +12,7 @@ from ..utils import (
     letters_only,
     robust_find_improved,
     strict_find,
+    safe_json,
 )
 
 
@@ -40,39 +40,16 @@ class Codify:
         return view_coded_passages(df, column_name, categories)
 
     def parse_json(self, response_text: Any) -> Optional[dict]:
-        """Parse JSON response, handling various input types."""
-        # If it's already a dict, return it
-        if isinstance(response_text, dict):
-            return response_text
-        
-        # If it's not a string, we can't parse it
-        if not isinstance(response_text, str):
-            return None
-        
-        # If it's an empty string, return empty dict
-        if not response_text.strip():
-            return {}
-            
-        try:
-            # First attempt: parse as JSON directly
-            parsed = json.loads(response_text)
-            
-            # If it's a dict, we're done
-            if isinstance(parsed, dict):
-                return parsed
-            
-            # If it's a list and has elements, try to parse the first element as JSON
-            if isinstance(parsed, list) and parsed:
-                first_element = parsed[0]
-                if isinstance(first_element, str):
-                    return json.loads(first_element)
-                elif isinstance(first_element, dict):
-                    return first_element
-                    
-            return None
-            
-        except json.JSONDecodeError:
-            return None
+        """Robust JSON parsing using :func:`safe_json`."""
+
+        parsed = safe_json(response_text)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and parsed:
+            inner = safe_json(parsed[0])
+            if isinstance(inner, dict):
+                return inner
+        return None
 
     def chunk_by_words(self, text: str, max_words: int) -> List[str]:
         """Split text into chunks by word count."""
@@ -757,4 +734,4 @@ class Codify:
         
         # At the very end, before returning:
         self.print_final_hit_rates()
-        return df_proc 
+        return df_proc

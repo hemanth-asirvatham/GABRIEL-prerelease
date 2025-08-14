@@ -35,7 +35,7 @@ def _parse_level(level: Union[str, int, None]) -> int:
     return logging.INFO
 
 
-CURRENT_LEVEL = _parse_level(os.getenv("GABRIEL_LOG_LEVEL", "info"))
+CURRENT_LEVEL = _parse_level(os.getenv("GABRIEL_LOG_LEVEL", "warning"))
 
 
 def set_log_level(level: Union[str, int]) -> None:
@@ -66,13 +66,6 @@ def get_logger(name: str) -> logging.Logger:
     """Return a module logger configured with the global level."""
 
     logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
     logger.setLevel(CURRENT_LEVEL)
     return logger
 
