@@ -496,7 +496,7 @@ class Codify:
         max_words_per_call: int = 1000,
         max_categories_per_call: int = 8,
         additional_instructions: str = "",
-        n_parallels: int = 400,
+        n_parallels: int = 750,
         model: str = "gpt-5-mini",
         save_dir: str,
         file_name: str = "coding_results.csv",
