@@ -65,7 +65,7 @@ class MapMaker:
         country_col: Optional[str] = None,
         save_dir: Optional[str] = None,
         z_score: bool = True,
-        color_scale: str | None = None,
+        color_scale: str = "RdBu",
         map_type: str = "county",
     ) -> None:
         self.df = df.copy()
@@ -88,11 +88,7 @@ class MapMaker:
         self.save_dir = save_dir
 
         self.z_score = z_score
-        if color_scale:
-            self.color_scale = color_scale
-        else:
-            # diverging scale for z‑scores, sequential otherwise
-            self.color_scale = "RdBu" if z_score else "Viridis"
+        self.color_scale = color_scale
 
     def _compute_zscore(self, values: np.ndarray) -> np.ndarray:
         """Compute z‑scores with safe handling of NaNs and constant arrays."""
