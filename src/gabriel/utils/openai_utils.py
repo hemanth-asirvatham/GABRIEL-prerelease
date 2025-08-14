@@ -696,7 +696,7 @@ async def get_response(
     max_output_tokens: Optional[int] = None,
     # legacy alias for backwards compatibility
     max_tokens: Optional[int] = None,
-    timeout: float = 90.0,
+    timeout: float = 120.0,
     temperature: float = 0.9,
     json_mode: bool = False,
     expected_schema: Optional[Dict[str, Any]] = None,
@@ -891,7 +891,7 @@ async def get_all_responses(
     max_output_tokens: Optional[int] = None,
     # legacy alias
     max_tokens: Optional[int] = None,
-    timeout: float = 90.0,
+    timeout: float = 120.0,
     temperature: float = 0.9,
     json_mode: bool = False,
     expected_schema: Optional[Dict[str, Any]] = None,
@@ -910,9 +910,9 @@ async def get_all_responses(
     # will be adjusted downward based on your API rate limits and
     # average prompt length.  See `_print_usage_overview` for more
     # details on how the concurrency cap is calculated.
-    n_parallels: int = 400,
-    max_retries: int = 5,
-    timeout_factor: float = 1.5,
+    n_parallels: int = 750,
+    max_retries: int = 4,
+    timeout_factor: float = 2,
     max_timeout: int = 300,
     dynamic_timeout: bool = True,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
