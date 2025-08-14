@@ -17,7 +17,7 @@ class PromptParaphraserConfig:
 
     n_variants: int = 1
     model: str = "gpt-5-mini"
-    n_parallels: int = 25
+    n_parallels: int = 400
     save_dir: str = "paraphraser"
     use_dummy: bool = False
     timeout: float = 180.0
