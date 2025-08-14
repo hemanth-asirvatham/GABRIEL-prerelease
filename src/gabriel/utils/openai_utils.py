@@ -713,7 +713,7 @@ async def get_response(
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
     **kwargs: Any,
-):
+): 
     """Minimal async call to OpenAI's /responses endpoint or dummy response.
 
     The caller may specify either ``max_output_tokens`` or the deprecated
@@ -721,6 +721,11 @@ async def get_response(
     takes precedence.  When both are ``None``, the model’s default output
     limit is used.
     """
+    if web_search and json_mode:
+        logger.warning(
+            "Web search cannot be combined with JSON mode; disabling JSON mode."
+        )
+        json_mode = False
     # Use dummy for testing without calling the API
     if use_dummy:
         dummy = [f"DUMMY {prompt}" for _ in range(max(n, 1))]
@@ -926,11 +931,11 @@ async def get_all_responses(
     batch_wait_for_completion: bool = False,
     max_batch_requests: int = 50_000,
     max_batch_file_bytes: int = 100 * 1024 * 1024,
-    save_every_x_responses: int = 25,
+    save_every_x_responses: int = 100,
     verbose: bool = True,
     global_cooldown: int = 15,
     token_sample_size: int = 20,
-    logging_level: Union[str, int] = "info",
+    logging_level: Union[str, int] = "warning",
     **get_response_kwargs: Any,
 ) -> pd.DataFrame:
     """Retrieve responses for a list of prompts, with optional batch support.
@@ -945,6 +950,13 @@ async def get_all_responses(
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
+    if get_response_kwargs.get("web_search", use_web_search) and get_response_kwargs.get(
+        "json_mode", json_mode
+    ):
+        logger.warning(
+            "Web search cannot be combined with JSON mode; disabling JSON mode."
+        )
+        get_response_kwargs["json_mode"] = False
     # httpx logs a success line for every request at INFO level, which
     # interferes with tqdm's progress display.  Silence these messages
     # so only warnings and errors surface.
