@@ -35,7 +35,7 @@ async def rate(
     file_name: str = "ratings.csv",
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
@@ -51,7 +51,7 @@ async def rate(
         additional_instructions=additional_instructions,
         modality=modality,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
     return await Rate(cfg).run(
@@ -76,7 +76,7 @@ async def classify(
     file_name: str = "classify_responses.csv",
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
@@ -93,7 +93,7 @@ async def classify(
         use_dummy=use_dummy,
         modality=modality,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
     return await Classify(cfg).run(
@@ -117,7 +117,7 @@ async def deidentify(
     guidelines: str = "",
     additional_guidelines: str = "",
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
@@ -132,7 +132,7 @@ async def deidentify(
         guidelines=guidelines,
         additional_guidelines=additional_guidelines,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
     return await Deidentifier(cfg).run(df, column_name, grouping_column=grouping_column)
@@ -158,7 +158,7 @@ async def rank(
     reset_files: bool = False,
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -179,7 +179,7 @@ async def rank(
         additional_instructions=additional_instructions or "",
         modality=modality,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
     return await Rank(cfg).run(
@@ -206,7 +206,7 @@ async def codify(
     debug_print: bool = False,
     use_dummy: bool = False,
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
     os.makedirs(save_dir, exist_ok=True)
@@ -222,7 +222,7 @@ async def codify(
         n_parallels=n_parallels,
         model=model,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         save_dir=save_dir,
         file_name=file_name,
         reset_files=reset_files,
@@ -247,7 +247,7 @@ async def paraphrase(
     use_dummy: bool = False,
     reset_files: bool = False,
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Paraphrase`."""
@@ -265,7 +265,7 @@ async def paraphrase(
         n_parallels=n_parallels,
         use_dummy=use_dummy,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
     return await Paraphrase(cfg).run(
@@ -288,7 +288,7 @@ async def whatever(
     use_dummy: bool = False,
     reset_files: bool = False,
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **kwargs,
 ) -> pd.DataFrame:
     """Wrapper around :func:`get_all_responses` for arbitrary prompts.
@@ -308,7 +308,7 @@ async def whatever(
         use_dummy=use_dummy,
         reset_files=reset_files,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **kwargs,
     )
 
@@ -326,7 +326,7 @@ async def custom_prompt(
     use_dummy: bool = False,
     reset_files: bool = False,
     reasoning_effort: Optional[str] = None,
-    include_summaries: bool = False,
+    reasoning_summary: Optional[str] = None,
     **kwargs,
 ) -> pd.DataFrame:
     """Backward compatible alias for :func:`whatever`."""
@@ -343,7 +343,7 @@ async def custom_prompt(
         use_dummy=use_dummy,
         reset_files=reset_files,
         reasoning_effort=reasoning_effort,
-        include_summaries=include_summaries,
+        reasoning_summary=reasoning_summary,
         **kwargs,
     )
 

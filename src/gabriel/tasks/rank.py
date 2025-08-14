@@ -121,7 +121,7 @@ class RankConfig:
     modality: str = "text"
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
-    include_summaries: bool = False
+    reasoning_summary: Optional[str] = None
 
 
 class Rank:
@@ -979,7 +979,7 @@ class Rank:
                 use_dummy=self.cfg.use_dummy,
                 timeout=self._TIMEOUT,
                 reasoning_effort=self.cfg.reasoning_effort,
-                include_summaries=self.cfg.include_summaries,
+                reasoning_summary=self.cfg.reasoning_summary,
                 **kwargs,
             )
             # attach metadata columns and overwrite the round CSV

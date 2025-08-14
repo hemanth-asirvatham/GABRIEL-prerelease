@@ -527,7 +527,7 @@ class Codify:
         debug_print: bool = False,
         use_dummy: bool = False,
         reasoning_effort: Optional[str] = None,
-        include_summaries: bool = False,
+        reasoning_summary: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Process all texts in the dataframe, coding passages according to categories.
@@ -635,7 +635,7 @@ class Codify:
             timeout=300,  # This will be forwarded to get_response via **kwargs
             print_example_prompt=True,
             reasoning_effort=reasoning_effort,
-            include_summaries=include_summaries,
+            reasoning_summary=reasoning_summary,
         )
         
         # Group results by original text index and batch

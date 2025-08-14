@@ -22,15 +22,13 @@ def _base_args():
 
 def test_summary_flag_in_reasoning():
     args = _base_args()
-    params = _build_params(**args, include_summaries=True)
+    params = _build_params(**args, reasoning_summary="auto")
     reasoning = params.get("reasoning", {})
     assert reasoning.get("summary") == "auto"
-    assert "include_summaries" not in reasoning
 
 
-def test_summary_absent_when_flag_false():
+def test_summary_absent_when_none():
     args = _base_args()
-    params = _build_params(**args, include_summaries=False)
+    params = _build_params(**args, reasoning_summary=None)
     reasoning = params.get("reasoning", {})
     assert "summary" not in reasoning
-    assert "include_summaries" not in reasoning
