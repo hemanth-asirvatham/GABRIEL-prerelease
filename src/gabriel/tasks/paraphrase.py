@@ -239,8 +239,8 @@ class Paraphrase:
         # rejection rate.
         labels = {
             "instructions_followed": (
-                "Return True if the instructions were largely (even if not perfectly) followed in turning the 
-                "original text into the modified text (i.e. the modified text mostly exhibits the spirit of the instructions 
+                "Return True if the instructions were largely (even if not perfectly) followed in turning the "
+                "original text into the modified text (i.e. the modified text mostly exhibits the spirit of the instructions "
                 "even if not everything is exact). False otherwise, if there are still important shortcomings in the modified text vis a vis the instructions."
             )
         }
