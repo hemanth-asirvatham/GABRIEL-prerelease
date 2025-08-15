@@ -348,6 +348,7 @@ class Paraphrase:
                 orig_text = original_texts[row_idx]
                 candidates = candidate_map.get(key, [])
                 for cand_index, cand_text in enumerate(candidates):
+                    cand_text = cand_text or ""
                     cls_prompt = (
                         "INSTRUCTIONS:\n"
                         f"{self.cfg.instructions.strip()}\n\n"
