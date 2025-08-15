@@ -43,8 +43,8 @@ import os
 import random
 import tempfile
 import time
-from typing import Any, Deque, Dict, List, Optional, Tuple, Union
-from collections import defaultdict, deque
+from typing import Any, Dict, List, Optional, Tuple, Union
+from collections import defaultdict
 
 from gabriel.utils.logging import get_logger, set_log_level
 import logging
@@ -931,10 +931,9 @@ async def get_all_responses(
     # details on how the concurrency cap is calculated.
     n_parallels: int = 750,
     max_retries: int = 4,
-    timeout_factor: float = 1.25,
+    timeout_factor: float = 1.5,
     max_timeout: int = 300,
     dynamic_timeout: bool = True,
-    timeout_window: int = 100,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
     # dynamic_rate_limit, or rate_limit_factor parameters.  Concurrency is
     # automatically determined from the OpenAI API’s rate‑limit headers and
@@ -958,12 +957,10 @@ async def get_all_responses(
     This function handles rate limiting, optional batch submission, dynamic
     timeout adjustment and printing of helpful usage summaries.  When
     ``dynamic_timeout`` is enabled, the timeout is derived from the 95th
-    percentile of recent response durations (held in a deque of size
-    ``timeout_window``), multiplied by ``timeout_factor`` and capped by
-    ``max_timeout``.  The calculation also considers currently in‑flight
-    requests so that the timeout can adapt quickly even for large jobs.
-    Requests running longer than roughly 1.5× the 95th percentile of past
-    successful calls are cancelled and retried to prevent hanging workers.
+    percentile of recent response durations, multiplied by ``timeout_factor``
+    and capped by ``max_timeout``.  The calculation also considers currently
+    in‑flight requests so that the timeout can adapt quickly even for large
+    jobs.
 
     The function remains backwards compatible with the original version,
     except that the parameter ``max_tokens`` has been renamed to
@@ -1644,10 +1641,8 @@ async def get_all_responses(
     nonlocal_timeout: float = timeout
     req_lim = AsyncLimiter(allowed_req_pm, 60)
     tok_lim = AsyncLimiter(allowed_tok_pm, 60)
-    response_times: Deque[float] = deque(maxlen=timeout_window)
-    success_times: Deque[float] = deque(maxlen=timeout_window)
+    response_times: List[float] = []
     inflight: Dict[str, float] = {}
-    q95_success = timeout
     error_logs: Dict[str, List[str]] = defaultdict(list)
     # Count of timeout errors is no longer used for dynamic timeout adjustment.
     call_count = 0
@@ -1697,7 +1692,7 @@ async def get_all_responses(
             )
 
     async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout, q95_success
+        nonlocal nonlocal_timeout
         if not dynamic_timeout:
             return
         sample_count = len(response_times) + len(inflight)
@@ -1706,7 +1701,7 @@ async def get_all_responses(
         try:
             now = time.time()
             elapsed_inflight = [now - s for s in inflight.values()]
-            combined = list(response_times) + elapsed_inflight
+            combined = response_times + elapsed_inflight
             sorted_times = sorted(combined)
             q95_index = max(0, int(0.95 * (len(sorted_times) - 1)))
             q95 = sorted_times[q95_index]
@@ -1721,10 +1716,6 @@ async def get_all_responses(
                     f"[dynamic timeout] Updating timeout from {nonlocal_timeout:.1f}s to {new_timeout:.1f}s based on observed latency."
                 )
                 nonlocal_timeout = new_timeout
-            if success_times:
-                sorted_success = sorted(success_times)
-                q95_idx = max(0, int(0.95 * (len(sorted_success) - 1)))
-                q95_success = sorted_success[q95_idx]
         except Exception:
             pass
 
@@ -1758,9 +1749,6 @@ async def get_all_responses(
                 error_logs.setdefault(ident, [])
                 start = time.time()
                 inflight[ident] = start
-                cancel_after = nonlocal_timeout
-                if success_times:
-                    cancel_after = min(nonlocal_timeout, 1.5 * q95_success)
                 resps, t, raw = await asyncio.wait_for(
                     get_response(
                         prompt,
@@ -1772,12 +1760,10 @@ async def get_all_responses(
                         return_raw=True,
                         **get_response_kwargs,
                     ),
-                    timeout=cancel_after,
+                    timeout=nonlocal_timeout,
                 )
-                elapsed = t
                 inflight.pop(ident, None)
-                response_times.append(elapsed)
-                success_times.append(elapsed)
+                response_times.append(t)
                 await adjust_timeout()
                 # collect usage
                 total_input = sum(getattr(r.usage, "input_tokens", 0) for r in raw)
@@ -1835,7 +1821,7 @@ async def get_all_responses(
                     row = {
                         "Identifier": ident,
                         "Response": resps,
-                        "Time Taken": elapsed,
+                        "Time Taken": t,
                         "Input Tokens": total_input,
                         "Reasoning Tokens": total_reasoning,
                         "Output Tokens": total_output,
