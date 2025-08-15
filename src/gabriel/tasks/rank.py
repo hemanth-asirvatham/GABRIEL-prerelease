@@ -190,11 +190,11 @@ class Rank:
         # 200 000, each item will only consider approximately 20 neighbours.
         self._MAX_CANDIDATE_PAIRS_PER_ROUND = 200_000
 
-        # timeout in seconds for a batch of language model responses.  Not
-        # exposed publicly because changing it rarely benefits typical
+        # maximum timeout in seconds for a batch of language model responses.
+        # not exposed publicly because changing it rarely benefits typical
         # workloads; if a different timeout is required this can be
         # modified here.
-        self._TIMEOUT = 90.0
+        self._MAX_TIMEOUT = 90.0
 
     # ------------------------------------------------------------------
     # Public API for adding multiway rankings
@@ -977,7 +977,8 @@ class Rank:
                 save_path=round_path,
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
-                timeout=self._TIMEOUT,
+                max_timeout=self._MAX_TIMEOUT,
+                max_retries=1,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
                 **kwargs,

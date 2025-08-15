@@ -33,7 +33,7 @@ class ClassifyConfig:
     additional_instructions: str = ""
     additional_guidelines: str = ""
     use_dummy: bool = False
-    timeout: float = 60.0
+    max_timeout: Optional[float] = None
     modality: str = "text"
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
@@ -199,7 +199,7 @@ class Classify:
                 json_mode=self.cfg.modality != "audio",
                 model=self.cfg.model,
                 use_dummy=self.cfg.use_dummy,
-                timeout=self.cfg.timeout,
+                max_timeout=self.cfg.max_timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
                 print_example_prompt=True,
@@ -239,7 +239,7 @@ class Classify:
                 json_mode=self.cfg.modality != "audio",
                 model=self.cfg.model,
                 use_dummy=self.cfg.use_dummy,
-                timeout=self.cfg.timeout,
+                max_timeout=self.cfg.max_timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
                 print_example_prompt=True,

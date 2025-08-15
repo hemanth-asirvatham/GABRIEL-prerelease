@@ -91,7 +91,7 @@ Key options (see `RateConfig`):
 ### `Classify`
 Classify passages into boolean labels.  Uses a prompt in `basic_classifier_prompt.jinja2` and expects JSON `{label: true/false}` responses.
 
-Options include the label dictionary, output directory, model and timeout.  Results are joined back onto the input DataFrame with one column per label.
+Options include the label dictionary, output directory, model and an optional maximum timeout.  Results are joined back onto the input DataFrame with one column per label.
 
 ### `Deidentifier`
 Iteratively remove identifying information from text.  Texts are split into manageable chunks and the model returns JSON replacement mappings which are applied across all rows.
