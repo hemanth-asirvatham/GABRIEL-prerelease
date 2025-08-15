@@ -774,7 +774,11 @@ async def get_response(
             client_async = openai.AsyncOpenAI()
         start = time.time()
         tasks = [
-            client_async.chat.completions.create(**params_chat, timeout=timeout)
+            asyncio.create_task(
+                client_async.chat.completions.create(
+                    **params_chat, timeout=timeout
+                )
+            )
             for _ in range(max(n, 1))
         ]
         try:
@@ -854,7 +858,9 @@ async def get_response(
         start = time.time()
         # Create parallel tasks for `n` completions
         tasks = [
-            client_async.responses.create(**params, timeout=timeout)
+            asyncio.create_task(
+                client_async.responses.create(**params, timeout=timeout)
+            )
             for _ in range(max(n, 1))
         ]
         try:
