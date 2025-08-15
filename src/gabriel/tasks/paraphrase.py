@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
 
 import pandas as pd
+from pathlib import Path
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
