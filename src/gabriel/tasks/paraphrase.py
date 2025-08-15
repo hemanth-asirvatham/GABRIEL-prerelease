@@ -73,10 +73,12 @@ class Paraphrase:
 
     def __init__(self, cfg: ParaphraseConfig, template: Optional[PromptTemplate] = None) -> None:
         self.cfg = cfg
+        expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
+        expanded.mkdir(parents=True, exist_ok=True)
+        cfg.save_dir = str(expanded)
         # Load the paraphrasing prompt from package data if a custom
         # template is not provided.
         self.template = template or PromptTemplate.from_package("paraphrase_prompt.jinja2")
-        os.makedirs(self.cfg.save_dir, exist_ok=True)
 
     async def run(
         self,
