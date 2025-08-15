@@ -239,7 +239,7 @@ class Paraphrase:
             for key in to_check:
                 row_idx, rev_idx = key
                 original = original_texts[row_idx]
-                paraphrased = resp_map.get(key, "")
+                paraphrased = resp_map.get(key) or ""
                 cls_prompt = (
                     "INSTRUCTIONS:\n"
                     f"{self.cfg.instructions.strip()}\n\n"
