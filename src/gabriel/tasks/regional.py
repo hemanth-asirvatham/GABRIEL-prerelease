@@ -82,7 +82,7 @@ class Regional:
             use_dummy=self.cfg.use_dummy,
             print_example_prompt=self.cfg.print_example_prompt,
             max_tokens=50000,
-            timeout=450,
+            max_timeout=450,
             **kwargs,
         )
 

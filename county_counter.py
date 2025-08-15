@@ -98,7 +98,7 @@ class CountyCounter:
                 use_dummy=self.use_dummy,
                 instructions=self.elo_instructions,
                 print_example_prompt=False,
-                timeout=self.elo_timeout,
+                max_timeout=self.elo_timeout,
                 reasoning_effort=self.reasoning_effort,
                 reasoning_summary=self.reasoning_summary,
             )

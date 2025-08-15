@@ -38,7 +38,7 @@ class EloConfig:
     n_parallels: int = 400
     model: str = "gpt-5-mini"
     use_dummy: bool = False
-    timeout: float = 45.0
+    max_timeout: Optional[float] = None
     print_example_prompt: bool = True
     instructions: str = ""
     additional_guidelines: str = ""
@@ -404,7 +404,7 @@ class EloRater:
                 save_path=os.path.join(self.save_path, f"round{rnd}.csv"),
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
-                timeout=self.cfg.timeout,
+                max_timeout=self.cfg.max_timeout,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
                 print_example_prompt=self.cfg.print_example_prompt,

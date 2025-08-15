@@ -609,7 +609,7 @@ class Codify:
             json_mode=True,
             expected_schema=expected_schema,
             model=model,
-            timeout=300,  # This will be forwarded to get_response via **kwargs
+            max_timeout=300,  # This will be forwarded to get_response via **kwargs
             print_example_prompt=True,
             reasoning_effort=reasoning_effort,
             reasoning_summary=reasoning_summary,

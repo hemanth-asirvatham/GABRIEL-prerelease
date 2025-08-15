@@ -31,7 +31,7 @@ class RateConfig:
     n_parallels: int = 400
     n_runs: int = 1
     use_dummy: bool = False
-    timeout: float = 75.0
+    max_timeout: Optional[float] = None
     rating_scale: Optional[str] = None
     additional_instructions: Optional[str] = None
     modality: str = "text"
@@ -165,7 +165,7 @@ class Rate:
                 model=self.cfg.model,
                 save_path=csv_path,
                 use_dummy=self.cfg.use_dummy,
-                timeout=self.cfg.timeout,
+                max_timeout=self.cfg.max_timeout,
                 json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
                 reasoning_effort=self.cfg.reasoning_effort,
@@ -202,7 +202,7 @@ class Rate:
                 model=self.cfg.model,
                 save_path=csv_path,
                 use_dummy=self.cfg.use_dummy,
-                timeout=self.cfg.timeout,
+                max_timeout=self.cfg.max_timeout,
                 json_mode=self.cfg.modality != "audio",
                 reset_files=reset_files,
                 reasoning_effort=self.cfg.reasoning_effort,
