@@ -243,11 +243,15 @@ async def paraphrase(
     model: str = "gpt-5-mini",
     json_mode: bool = False,
     use_web_search: bool = False,
-    n_parallels: int = 400,
+    n_parallels: int = 750,
     use_dummy: bool = False,
     reset_files: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    recursive_validation: bool = False,
+    n_initial_candidates: int = 1,
+    n_validation_candidates: int = 5,
+    use_modified_source: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Paraphrase`."""
@@ -266,6 +270,10 @@ async def paraphrase(
         use_dummy=use_dummy,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        recursive_validation=recursive_validation,
+        n_initial_candidates=n_initial_candidates,
+        n_validation_candidates=n_validation_candidates,
+        use_modified_source=use_modified_source,
         **cfg_kwargs,
     )
     return await Paraphrase(cfg).run(
