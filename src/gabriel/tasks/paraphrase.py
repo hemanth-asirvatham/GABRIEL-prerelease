@@ -239,8 +239,9 @@ class Paraphrase:
         # rejection rate.
         labels = {
             "instructions_followed": (
-                "True if the modified text follows the instruction given to transform the original "
-                "text (the modified text manifests everything the instructions asked for); false otherwise."
+                "Return True if the instructions were largely (even if not perfectly) followed in turning the 
+                "original text into the modified text (i.e. the modified text mostly exhibits the spirit of the instructions 
+                "even if not everything is exact). False otherwise, if there are still important shortcomings in the modified text vis a vis the instructions."
             )
         }
         classify_cfg = ClassifyConfig(
@@ -358,9 +359,10 @@ class Paraphrase:
                         "BEGIN MODIFIED TEXT:\n"
                         f"{cand_text.strip()}\n"
                         "END MODIFIED TEXT\n\n"
-                        "Does the modified text fully and faithfully apply the instruction "
-                        "to the original text? Only answer True if the modification follows "
-                        "the instructions fully."
+                        "Previously, the original text was taken and modified, following the provided instructions, to create the modified text. "
+                        "Does the modified text faithfully apply the instructions as a transformation of "
+                        "the original text? Answer True if the modification follows "
+                        "the instructions to a satisfactory, though not necessarily perfect, degree."
                         "Again, the modification instructions that need to be validated are: "
                         f"{self.cfg.instructions.strip()}\n\n"
                     )
