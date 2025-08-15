@@ -48,7 +48,7 @@ class ParaphraseConfig:
     # Maximum number of parallel requests that will be sent to the
     # underlying API.  Note that classification and paraphrasing share
     # this value for simplicity.
-    n_parallels: int = 400
+    n_parallels: int = 750
     # Use dummy responses instead of real API calls.  Exposed here
     # primarily for testing.
     use_dummy: bool = False
@@ -59,14 +59,30 @@ class ParaphraseConfig:
     # New feature: enable recursive validation of paraphrases.  When set
     # to ``True``, every generated paraphrase will be fed into a
     # classifier to verify that the instructions were followed.  Any
-    # paraphrases that fail this check will be regenerated on the
-    # original text until they pass.
+    # paraphrases that fail this check will be regenerated until they pass.
     recursive_validation: bool = False
-    # Number of candidate paraphrases to generate per failing passage in
-    # subsequent validation rounds.  This parameter is ignored on the
-    # initial round because only one paraphrase per passage is generated
-    # initially.
-    n_validation_candidates: int = 10
+    # When greater than one, multiple paraphrases are generated for
+    # each passage in the very first round of generation.  If at least
+    # one candidate passes the validation check, that candidate will be
+    # selected immediately without triggering further rounds.  A value
+    # of one preserves the historical behaviour of producing a single
+    # paraphrase per passage at the outset.
+    n_initial_candidates: int = 1
+    # Number of candidate paraphrases to generate for each failing
+    # passage in subsequent validation rounds.  This value is used
+    # whenever a paraphrase does not initially satisfy the validation
+    # criterion.  Generating multiple candidates in later rounds
+    # improves the probability of finding an acceptable paraphrase.
+    n_validation_candidates: int = 5
+    # Whether to feed the previously chosen paraphrase back into the
+    # generator during recursive validation.  When ``False`` (the
+    # default), the original text is always used as the source for
+    # regeneration.  When ``True``, the most recent paraphrase is
+    # provided as the input for further rewriting.  This can be useful
+    # when incremental improvements are desired rather than starting
+    # over from the original each time.  The option only has effect
+    # when ``recursive_validation`` is enabled.
+    use_modified_source: bool = False
 
 
 class Paraphrase:
@@ -111,56 +127,47 @@ class Paraphrase:
         # existing behaviour.
         n = self.cfg.n_revisions if self.cfg.n_revisions and self.cfg.n_revisions > 0 else 1
 
-        # Build prompts and identifiers for the initial paraphrasing
-        # request.  We use one-based revision numbers in the identifier
-        # because downstream code and filenames historically follow this
-        # convention.
-        prompts: List[str] = []
-        identifiers: List[str] = []
-        for idx, text in enumerate(texts):
-            for j in range(1, n + 1):
-                prompts.append(
-                    self.template.render(text=text, instructions=self.cfg.instructions)
-                )
-                identifiers.append(f"row_{idx}_rev{j}")
-
-        # Persist raw paraphrase responses to disk.  This enables
-        # inspection and debugging of intermediate results.  The helper
-        # will append to an existing file unless ``reset_files`` is
-        # supplied.
-        save_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
-        resp_df = await get_all_responses(
-            prompts=prompts,
-            identifiers=identifiers,
-            save_path=save_path,
-            model=self.cfg.model,
-            json_mode=self.cfg.json_mode,
-            use_web_search=self.cfg.use_web_search,
-            n_parallels=self.cfg.n_parallels,
-            use_dummy=self.cfg.use_dummy,
-            reset_files=reset_files,
-            reasoning_effort=self.cfg.reasoning_effort,
-            reasoning_summary=self.cfg.reasoning_summary,
-            **kwargs,
-        )
-
-        # Create a mapping from (row index, zero-based revision index) to
-        # the paraphrased text.  We unwrap list-of-one responses that
-        # arise from JSON-mode for convenience.
-        resp_map: Dict[Tuple[int, int], str] = {}
-        for ident, resp in zip(resp_df["Identifier"], resp_df["Response"]):
-            main = resp[0] if isinstance(resp, list) and resp else resp
-            m = re.match(r"row_(\d+)_rev(\d+)", ident)
-            if m:
-                row = int(m.group(1))
-                # Convert one-based revision number to zero-based index.
-                rev = int(m.group(2)) - 1
-                resp_map[(row, rev)] = main
-
-        # If recursive validation is enabled, run the validation loop.  This
-        # call mutates ``resp_map`` in place to ensure that only
-        # validated paraphrases remain.
-        if self.cfg.recursive_validation:
+        # When recursive validation is disabled, follow the original
+        # behaviour: generate a single paraphrase per requested
+        # revision and skip classification.  Otherwise, defer
+        # generation and validation to the recursive routine.
+        if not self.cfg.recursive_validation:
+            prompts: List[str] = []
+            identifiers: List[str] = []
+            for idx, text in enumerate(texts):
+                for j in range(1, n + 1):
+                    prompts.append(
+                        self.template.render(text=text, instructions=self.cfg.instructions)
+                    )
+                    identifiers.append(f"row_{idx}_rev{j}")
+            save_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
+            resp_df = await get_all_responses(
+                prompts=prompts,
+                identifiers=identifiers,
+                save_path=save_path,
+                model=self.cfg.model,
+                json_mode=self.cfg.json_mode,
+                use_web_search=self.cfg.use_web_search,
+                n_parallels=self.cfg.n_parallels,
+                use_dummy=self.cfg.use_dummy,
+                reset_files=reset_files,
+                reasoning_effort=self.cfg.reasoning_effort,
+                reasoning_summary=self.cfg.reasoning_summary,
+                **kwargs,
+            )
+            resp_map: Dict[Tuple[int, int], str] = {}
+            for ident, resp in zip(resp_df["Identifier"], resp_df["Response"]):
+                main = resp[0] if isinstance(resp, list) and resp else resp
+                m = re.match(r"row_(\d+)_rev(\d+)", ident)
+                if m:
+                    row = int(m.group(1))
+                    rev = int(m.group(2)) - 1
+                    resp_map[(row, rev)] = main
+        else:
+            # Initialise an empty response map.  The recursive
+            # validation routine will populate this map with one
+            # validated paraphrase per (row, revision) key.
+            resp_map: Dict[Tuple[int, int], str] = {}
             await self._recursive_validate(texts, resp_map, reset_files)
 
         # Assemble the final columns.  When multiple revisions are
@@ -187,37 +194,53 @@ class Paraphrase:
         reset_files: bool = False,
     ) -> None:
         """
-        Validate each paraphrased text against the original instruction using
-        a classifier.  Any paraphrases that do not strictly follow the
-        instruction are regenerated on the original text until they pass.
+        Generate and validate paraphrases for each passage using a
+        classifier.  This routine unifies initial and subsequent
+        candidate generation by allowing a configurable number of
+        candidates on the first round (``n_initial_candidates``) and a
+        separate number for later rounds (``n_validation_candidates``).
+        Candidates that pass validation are accepted immediately.  For
+        candidates that fail, further paraphrases are generated until
+        either a valid paraphrase is found or no new paraphrases can
+        be produced.
 
-        The first validation round checks the paraphrases that have already
-        been generated.  On subsequent rounds, new paraphrases are
-        generated for every failing passage; up to
-        ``n_validation_candidates`` candidates are produced per passage.
-        The classifier is then invoked once on all candidates to
-        determine whether any candidate meets the instruction.  If none
-        of the candidates pass, the first candidate is retained and the
-        passage is scheduled for another round.  The loop terminates
-        once all paraphrases have passed validation or when no new
-        paraphrases can be generated.
+        If ``use_modified_source`` is ``True``, subsequent rounds will
+        generate new paraphrases from the most recently chosen
+        paraphrase rather than starting from the original text.  In
+        either case, the classifier always evaluates the modified
+        candidate against the original text to ensure the original
+        instruction has been followed.
         """
-        # Initialise the list of keys to validate; keys are tuples of the
-        # form (row index, zero-based revision index).
-        to_check: List[Tuple[int, int]] = list(resp_map.keys())
-        round_number = 1
+        # Determine the number of revisions (columns) to produce.  At
+        # least one revision is always generated.  This mirrors the logic
+        # in :meth:`run`.
+        n_revs = self.cfg.n_revisions if self.cfg.n_revisions and self.cfg.n_revisions > 0 else 1
+        # Build a list of keys for every passage/revision pair.  Keys
+        # encode the row index and zero-based revision index.
+        all_keys: List[Tuple[int, int]] = [
+            (row_idx, rev_idx)
+            for row_idx in range(len(original_texts))
+            for rev_idx in range(n_revs)
+        ]
 
-        # Configure the classifier used for validation.  We reuse the
-        # paraphrasing model and parallelism settings to maintain
-        # consistency across tasks.  A dedicated validation directory is
-        # used to avoid polluting the main paraphrase outputs.
+        # We'll use this list to track which keys still require
+        # validation in each round.  Initially, all keys are awaiting
+        # generation and validation.
+        to_check: List[Tuple[int, int]] = list(all_keys)
+        round_number = 0
+
+        # Create the classifier configuration once.  A dedicated
+        # validation directory is used to store classification results.
         validation_dir = os.path.join(self.cfg.save_dir, "validation")
         os.makedirs(validation_dir, exist_ok=True)
+        # A single label is used to indicate whether the instructions
+        # were followed.  The definition is intentionally phrased in a
+        # slightly more permissive way than before to reduce the false
+        # rejection rate.
         labels = {
             "instructions_followed": (
-                "True if the modified text fully and faithfully follows the instruction "
-                "given to transform the original text; false otherwise. "
-                "Only True if the modification instructions were totally complied with in transforming the original text into the modified text."
+                "True if the modified text follows the instruction given to transform the original "
+                "text (the modified text manifests everything the instructions asked for); false otherwise."
             )
         }
         classify_cfg = ClassifyConfig(
@@ -232,92 +255,63 @@ class Paraphrase:
         )
         classifier = Classify(classify_cfg)
 
+        # Continue looping until there are no passages left to validate
+        # or until no new prompts can be generated.
         while to_check:
-            # Build classification prompts for the current paraphrases that
-            # require validation.  Each prompt contains the instruction,
-            # original text and paraphrased text in a clearly labelled
-            # structure so the classifier can focus on adherence.
-            cls_texts: List[str] = []
-            cls_keys: List[Tuple[int, int]] = []
+            # Determine how many candidate paraphrases to generate per
+            # passage for this round.  The first round uses
+            # ``n_initial_candidates``; later rounds use
+            # ``n_validation_candidates``.
+            if round_number == 0:
+                candidates_per_key = max(self.cfg.n_initial_candidates, 1)
+            else:
+                candidates_per_key = max(self.cfg.n_validation_candidates, 1)
+
+            # Build paraphrase prompts for every key still requiring
+            # validation.  Each key may produce multiple candidates.
+            prompts: List[str] = []
+            identifiers: List[str] = []
             for key in to_check:
                 row_idx, rev_idx = key
-                original = original_texts[row_idx]
-                paraphrased = resp_map.get(key) or ""
-                cls_prompt = (
-                    "INSTRUCTIONS:\n"
-                    f"{self.cfg.instructions.strip()}\n\n"
-                    "BEGIN ORIGINAL TEXT:\n"
-                    f"{original.strip()}\n"
-                    "END ORIGINAL TEXT\n\n"
-                    "BEGIN MODIFIED TEXT:\n"
-                    f"{paraphrased.strip()}\n"
-                    "END MODIFIED TEXT\n\n"
-                    "Does the modified text fully and faithfully apply the instruction "
-                    "to the original text to create the modified text, without introducing any deviations or omissions in following the instructions?"
-                    "Again, the modification instructions that need to be validated are: "
-                    f"{self.cfg.instructions.strip()}\n\n"
-                )
-                cls_texts.append(cls_prompt)
-                cls_keys.append(key)
-
-            cls_df = pd.DataFrame({"text": cls_texts})
-            # Invoke the classifier on all prompts in this round.  The
-            # resulting DataFrame includes a boolean column named
-            # ``instructions_followed`` for our single label.
-            res_df = await classifier.run(
-                cls_df, column_name="text", reset_files=reset_files
-            )
-            # Identify which paraphrases failed validation.  Any value
-            # other than True (including False and None) counts as a
-            # failure.
-            failed_keys: List[Tuple[int, int]] = []
-            for idx, key in enumerate(cls_keys):
-                flag = res_df.loc[idx, "instructions_followed"]
-                if not bool(flag):
-                    failed_keys.append(key)
-
-            # If nothing failed, we are done.
-            if not failed_keys:
-                break
-
-            # Determine how many new paraphrases to generate per failing
-            # passage for the next round.
-            num_candidates = self.cfg.n_validation_candidates
-
-            # Construct new paraphrase prompts for every failing passage.
-            new_prompts: List[str] = []
-            new_identifiers: List[str] = []
-            for key in failed_keys:
-                row_idx, rev_idx = key
-                original = original_texts[row_idx]
-                for cand_idx in range(num_candidates):
-                    new_prompts.append(
-                        self.template.render(
-                            text=original, instructions=self.cfg.instructions
-                        )
+                # Choose the base text according to whether we reuse
+                # modified text in later rounds.  On the first round we
+                # always use the original text.  On subsequent rounds,
+                # if ``use_modified_source`` is true and a paraphrase
+                # exists for this key, use that paraphrase as the base
+                # for regeneration.  Otherwise, continue to use the
+                # original.
+                if round_number > 0 and self.cfg.use_modified_source and key in resp_map:
+                    base_text = resp_map[key]
+                else:
+                    base_text = original_texts[row_idx]
+                for cand_idx in range(candidates_per_key):
+                    prompts.append(
+                        self.template.render(text=base_text, instructions=self.cfg.instructions)
                     )
-                    # The identifier encodes the row, revision, round and candidate
-                    # number so we can recover which response belongs to which
-                    # passage after the API call completes.  Revision numbers are
-                    # stored one-based in the identifier.
-                    new_identifiers.append(
-                        f"row_{row_idx}_rev{rev_idx + 1}_round{round_number + 1}_cand{cand_idx}"
+                    # Encode row, revision, round and candidate index in
+                    # the identifier.  Revision numbers are stored one-
+                    # based in the identifier for backwards compatibility.
+                    identifiers.append(
+                        f"row_{row_idx}_rev{rev_idx + 1}_round{round_number}_cand{cand_idx}"
                     )
 
-            # If no new prompts were constructed (which should not happen
-            # unless ``failed_keys`` is empty), exit the loop to avoid an
+            # If no prompts were constructed (which may happen if
+            # ``candidates_per_key`` is zero), break to avoid an
             # infinite loop.
-            if not new_prompts:
+            if not prompts:
                 break
 
-            # Request new paraphrases for all failing passages.
+            # Write the prompts to the paraphrasing API.  We construct a
+            # unique filename for each round to preserve intermediate
+            # results.  The responses are appended to any existing
+            # files unless ``reset_files`` is true.
             tmp_save_path = os.path.join(
                 self.cfg.save_dir,
-                f"{os.path.splitext(self.cfg.file_name)[0]}_round{round_number + 1}.csv",
+                f"{os.path.splitext(self.cfg.file_name)[0]}_round{round_number}.csv",
             )
             new_resp_df = await get_all_responses(
-                prompts=new_prompts,
-                identifiers=new_identifiers,
+                prompts=prompts,
+                identifiers=identifiers,
                 save_path=tmp_save_path,
                 model=self.cfg.model,
                 json_mode=self.cfg.json_mode,
@@ -329,13 +323,15 @@ class Paraphrase:
                 reasoning_summary=self.cfg.reasoning_summary,
             )
 
-            # Organise responses by (row, revision) so we can classify
-            # candidates in bulk.
+            # Organise API responses by (row, revision) so that
+            # classification can be performed in bulk.  Each key
+            # corresponds to a list of candidate paraphrases.
             candidate_map: Dict[Tuple[int, int], List[str]] = {
-                key: [] for key in failed_keys
+                key: [] for key in to_check
             }
             for ident, resp in zip(new_resp_df["Identifier"], new_resp_df["Response"]):
                 text = resp[0] if isinstance(resp, list) and resp else resp
+                # Parse the identifier back into row and revision indices.
                 m = re.match(r"row_(\d+)_rev(\d+)_round\d+_cand(\d+)", ident)
                 if m:
                     row_i = int(m.group(1))
@@ -343,63 +339,68 @@ class Paraphrase:
                     candidate_map.setdefault((row_i, rev_i), []).append(text)
 
             # Build classification prompts for every candidate across all
-            # failing passages.  We record the triplet (row, revision,
-            # candidate index) so that we can map back classification
-            # results later.
-            cand_cls_texts: List[str] = []
+            # keys.  We keep a parallel list of (row, revision, candidate
+            # index) so we can map results back after classification.
+            cand_prompts: List[str] = []
             cand_keys: List[Tuple[int, int, int]] = []
-            for key in failed_keys:
+            for key in to_check:
                 row_idx, rev_idx = key
-                original = original_texts[row_idx]
+                orig_text = original_texts[row_idx]
                 candidates = candidate_map.get(key, [])
                 for cand_index, cand_text in enumerate(candidates):
                     cls_prompt = (
                         "INSTRUCTIONS:\n"
                         f"{self.cfg.instructions.strip()}\n\n"
                         "BEGIN ORIGINAL TEXT:\n"
-                        f"{original.strip()}\n"
+                        f"{orig_text.strip()}\n"
                         "END ORIGINAL TEXT\n\n"
                         "BEGIN MODIFIED TEXT:\n"
-                        f"{paraphrased.strip()}\n"
+                        f"{cand_text.strip()}\n"
                         "END MODIFIED TEXT\n\n"
                         "Does the modified text fully and faithfully apply the instruction "
-                        "to the original text to create the modified text, without introducing any deviations or omissions in following the instructions?"
+                        "to the original text? Only answer True if the modification follows "
+                        "the instructions fully."
                         "Again, the modification instructions that need to be validated are: "
                         f"{self.cfg.instructions.strip()}\n\n"
                     )
-                    cand_cls_texts.append(cls_prompt)
+                    cand_prompts.append(cls_prompt)
                     cand_keys.append((row_idx, rev_idx, cand_index))
 
-            # Run the classifier on all candidate prompts simultaneously.
-            # If there are no candidates (which should not happen), we
-            # construct an empty DataFrame so indexing operations do not
-            # raise errors.
-            if cand_cls_texts:
-                cand_df = pd.DataFrame({"text": cand_cls_texts})
+            # Run the classifier on all candidate prompts.  If there are
+            # no candidates (which should not occur), produce an empty
+            # DataFrame to avoid indexing errors.
+            if cand_prompts:
+                cand_df = pd.DataFrame({"text": cand_prompts})
                 cand_res_df = await classifier.run(
                     cand_df, column_name="text", reset_files=reset_files
                 )
             else:
                 cand_res_df = pd.DataFrame()
 
-            # Build a lookup from (row, revision) to the list of boolean
-            # classification results corresponding to each candidate.
+            # Build a lookup from (row, revision) to a list of boolean
+            # classification results corresponding to each candidate.  A
+            # candidate passes if the classifier returns True or None.  A
+            # None value indicates uncertainty but is treated as a pass
+            # here to reduce the false rejection rate.
             cand_results_map: Dict[Tuple[int, int], List[bool]] = {
-                key: [False] * len(candidate_map.get(key, [])) for key in failed_keys
+                key: [False] * len(candidate_map.get(key, [])) for key in to_check
             }
             for idx, (row_idx, rev_idx, cand_index) in enumerate(cand_keys):
                 if not cand_res_df.empty:
                     flag = cand_res_df.loc[idx, "instructions_followed"]
                 else:
                     flag = None
-                cand_results_map[(row_idx, rev_idx)][cand_index] = bool(flag)
+                # Treat None (uncertain) as a pass and only count False
+                # values as failures.
+                cand_results_map[(row_idx, rev_idx)][cand_index] = bool(flag) or flag is None
 
-            # Determine which passages still need another round of
-            # paraphrasing.  For each failing passage, select the first
-            # candidate that passed classification; if none passed, use
-            # the first candidate and mark the passage for another round.
+            # Determine which passages still require another round and
+            # select the best candidate for each key.  For each key, the
+            # first passing candidate is chosen.  If no candidate passed,
+            # the first candidate is chosen as a fallback and the key
+            # remains scheduled for another round.
             next_to_check: List[Tuple[int, int]] = []
-            for key in failed_keys:
+            for key in to_check:
                 row_idx, rev_idx = key
                 candidates = candidate_map.get(key, [])
                 results = cand_results_map.get(key, [])
@@ -410,24 +411,24 @@ class Paraphrase:
                         chosen_text = cand_text
                         passed_flag = True
                         break
-                # If no candidate passed, fall back to the first candidate
-                # if available.
+                # If no candidate passed and at least one candidate
+                # exists, choose the first candidate as a fallback.
                 if chosen_text is None and candidates:
                     chosen_text = candidates[0]
                     passed_flag = False
-                # Update the paraphrase mapping with the chosen text if
-                # available.
+                # Update the response map with the chosen paraphrase.
                 if chosen_text is not None:
                     resp_map[(row_idx, rev_idx)] = chosen_text
-                    # Schedule another round if the chosen candidate did
-                    # not pass validation.
+                    # If the candidate did not pass validation, schedule
+                    # another round.
                     if not passed_flag:
                         next_to_check.append(key)
                 else:
-                    # If no candidates were generated, keep the key for
-                    # another round.
+                    # If no candidates were produced (which should not
+                    # happen), keep the key for another round to avoid
+                    # losing the entry entirely.
                     next_to_check.append(key)
 
-            # Prepare for the next validation round.
+            # Prepare for the next round.
             to_check = next_to_check
             round_number += 1
