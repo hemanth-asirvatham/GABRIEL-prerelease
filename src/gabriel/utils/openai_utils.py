@@ -48,6 +48,7 @@ from collections import defaultdict
 
 from gabriel.utils.logging import get_logger, set_log_level
 import logging
+import math
 import pandas as pd
 from aiolimiter import AsyncLimiter
 from tqdm.auto import tqdm
@@ -931,7 +932,7 @@ async def get_all_responses(
     # details on how the concurrency cap is calculated.
     n_parallels: int = 750,
     max_retries: int = 4,
-    timeout_factor: float = 1.5,
+    timeout_factor: float = 1.25,
     max_timeout: int = 300,
     dynamic_timeout: bool = True,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
@@ -956,11 +957,13 @@ async def get_all_responses(
 
     This function handles rate limiting, optional batch submission, dynamic
     timeout adjustment and printing of helpful usage summaries.  When
-    ``dynamic_timeout`` is enabled, the timeout is derived from the 95th
-    percentile of recent response durations, multiplied by ``timeout_factor``
-    and capped by ``max_timeout``.  The calculation also considers currently
-    in‑flight requests so that the timeout can adapt quickly even for large
-    jobs.
+    ``dynamic_timeout`` is enabled, the timeout starts as unlimited.  Once
+    responses have been received for 95% of ``n_parallels`` workers, the
+    longest observed response duration is multiplied by ``timeout_factor``
+    (default 1.25) and capped by ``max_timeout`` to derive a timeout that is
+    applied to all in‑flight and subsequent requests.  The timeout is
+    increased if slower responses are later observed, and any request
+    exceeding the current limit is cancelled and retried.
 
     The function remains backwards compatible with the original version,
     except that the parameter ``max_tokens`` has been renamed to
@@ -1638,15 +1641,15 @@ async def get_all_responses(
     # than overrunning the API’s quota.  We do not apply any dynamic
     # scaling factor here; concurrency has already been capped based on
     # the budgets and average prompt length.
-    nonlocal_timeout: float = timeout
+    nonlocal_timeout: float = float("inf") if dynamic_timeout else timeout
     req_lim = AsyncLimiter(allowed_req_pm, 60)
     tok_lim = AsyncLimiter(allowed_tok_pm, 60)
     response_times: List[float] = []
-    inflight: Dict[str, float] = {}
+    max_observed_time: float = 0.0
+    inflight: Dict[str, Tuple[float, asyncio.Task]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
-    # Count of timeout errors is no longer used for dynamic timeout adjustment.
     call_count = 0
-    min_samples_for_timeout = max(10, min(len(todo_pairs), n_parallels))
+    samples_for_timeout = max(1, min(len(todo_pairs), int(0.95 * n_parallels)))
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in todo_pairs:
         queue.put_nowait((item[0], item[1], max_retries))
@@ -1692,30 +1695,24 @@ async def get_all_responses(
             )
 
     async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout
+        nonlocal nonlocal_timeout, max_observed_time
         if not dynamic_timeout:
             return
-        sample_count = len(response_times) + len(inflight)
-        if sample_count < min_samples_for_timeout:
+        if len(response_times) < samples_for_timeout:
             return
         try:
-            now = time.time()
-            elapsed_inflight = [now - s for s in inflight.values()]
-            combined = response_times + elapsed_inflight
-            sorted_times = sorted(combined)
-            q95_index = max(0, int(0.95 * (len(sorted_times) - 1)))
-            q95 = sorted_times[q95_index]
-            if elapsed_inflight:
-                q95 = max(q95, max(elapsed_inflight) * 1.5)
-            new_timeout = min(max_timeout, max(timeout, timeout_factor * q95))
-            if (
-                new_timeout > nonlocal_timeout * 1.2
-                or new_timeout < nonlocal_timeout * 0.8
-            ):
+            max_observed_time = max(max_observed_time, max(response_times))
+            new_timeout = min(max_timeout, timeout_factor * max_observed_time)
+            if math.isinf(nonlocal_timeout) or new_timeout > nonlocal_timeout:
                 logger.debug(
-                    f"[dynamic timeout] Updating timeout from {nonlocal_timeout:.1f}s to {new_timeout:.1f}s based on observed latency."
+                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on longest observed latency."
                 )
                 nonlocal_timeout = new_timeout
+            if not math.isinf(nonlocal_timeout):
+                now = time.time()
+                for ident, (start, task) in list(inflight.items()):
+                    if now - start > nonlocal_timeout and not task.done():
+                        task.cancel()
         except Exception:
             pass
 
@@ -1748,20 +1745,27 @@ async def get_all_responses(
                 call_count += 1
                 error_logs.setdefault(ident, [])
                 start = time.time()
-                inflight[ident] = start
-                resps, t, raw = await asyncio.wait_for(
+                call_timeout = None if math.isinf(nonlocal_timeout) else nonlocal_timeout
+                task = asyncio.create_task(
                     get_response(
                         prompt,
                         n=n,
-                        timeout=nonlocal_timeout,
+                        timeout=call_timeout,
                         use_dummy=use_dummy,
                         images=prompt_images.get(str(ident)) if prompt_images else None,
                         audio=prompt_audio.get(str(ident)) if prompt_audio else None,
                         return_raw=True,
                         **get_response_kwargs,
-                    ),
-                    timeout=nonlocal_timeout,
+                    )
                 )
+                inflight[ident] = (start, task)
+                try:
+                    resps, t, raw = await task
+                except asyncio.CancelledError:
+                    inflight.pop(ident, None)
+                    raise asyncio.TimeoutError(
+                        f"API call timed out after {nonlocal_timeout} s"
+                    )
                 inflight.pop(ident, None)
                 response_times.append(t)
                 await adjust_timeout()
@@ -1959,7 +1963,18 @@ async def get_all_responses(
                 active_workers -= 1
                 queue.task_done()
 
+    async def timeout_watcher() -> None:
+        while True:
+            await asyncio.sleep(0.5)
+            if not dynamic_timeout or math.isinf(nonlocal_timeout):
+                continue
+            now = time.time()
+            for ident, (start, task) in list(inflight.items()):
+                if now - start > nonlocal_timeout and not task.done():
+                    task.cancel()
+
     # Spawn workers and ensure they are cleaned up on exit or cancellation
+    watcher = asyncio.create_task(timeout_watcher())
     workers = [asyncio.create_task(worker()) for _ in range(n_parallels)]
     try:
         await queue.join()
@@ -1969,7 +1984,9 @@ async def get_all_responses(
     finally:
         for w in workers:
             w.cancel()
+        watcher.cancel()
         worker_results = await asyncio.gather(*workers, return_exceptions=True)
+        await asyncio.gather(watcher, return_exceptions=True)
         for res in worker_results:
             if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
                 # flush partial results before raising
