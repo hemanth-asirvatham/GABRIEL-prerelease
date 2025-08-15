@@ -932,7 +932,7 @@ async def get_all_responses(
     # average prompt length.  See `_print_usage_overview` for more
     # details on how the concurrency cap is calculated.
     n_parallels: int = 750,
-    max_retries: int = 4,
+    max_retries: int = 3,
     timeout_factor: float = 1.5,
     max_timeout: int = 300,
     dynamic_timeout: bool = True,
