@@ -779,6 +779,10 @@ async def get_response(
         ]
         try:
             raw = await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            for t in tasks:
+                t.cancel()
+            raise
         except asyncio.TimeoutError:
             err = Exception(f"API call timed out after {timeout} s")
             logger.error(f"[get_response] {err}")
@@ -855,6 +859,10 @@ async def get_response(
         ]
         try:
             raw = await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            for t in tasks:
+                t.cancel()
+            raise
         except asyncio.TimeoutError:
             err = Exception(f"API call timed out after {timeout} s")
             logger.error(f"[get_response] {err}")
@@ -1629,7 +1637,8 @@ async def get_all_responses(
     # than overrunning the API’s quota.  We do not apply any dynamic
     # scaling factor here; concurrency has already been capped based on
     # the budgets and average prompt length.
-    nonlocal_timeout: Optional[float] = None if dynamic_timeout else timeout
+    nonlocal_timeout: float = timeout
+    warmup_complete = not dynamic_timeout
     req_lim = AsyncLimiter(allowed_req_pm, 60)
     tok_lim = AsyncLimiter(allowed_tok_pm, 60)
     response_times: Deque[float] = deque(maxlen=timeout_window)
@@ -1685,11 +1694,10 @@ async def get_all_responses(
             )
 
     async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout, ema_latency
+        nonlocal nonlocal_timeout, ema_latency, warmup_complete
         if not dynamic_timeout:
             return
-        # During the warm‑up phase we collect latencies without imposing a timeout.
-        if nonlocal_timeout is None:
+        if not warmup_complete:
             if len(response_times) < warmup_target:
                 return
             try:
@@ -1697,16 +1705,16 @@ async def get_all_responses(
                 q95_index = max(0, int(0.95 * (len(sorted_times) - 1)))
                 baseline = sorted_times[q95_index]
                 ema_latency = baseline
-                nonlocal_timeout = min(
-                    max_timeout, max(1.0, timeout_factor * baseline)
-                )
-                logger.debug(
-                    f"[dynamic timeout] Initial timeout set to {nonlocal_timeout:.1f}s based on warm-up samples."
-                )
+                new_timeout = min(max_timeout, max(timeout, timeout_factor * baseline))
+                if abs(new_timeout - nonlocal_timeout) > 1e-6:
+                    logger.debug(
+                        f"[dynamic timeout] Initial timeout set to {new_timeout:.1f}s based on warm-up samples."
+                    )
+                nonlocal_timeout = new_timeout
+                warmup_complete = True
             except Exception:
                 pass
             return
-        # Update timeout using an EMA of recent latencies
         try:
             latest = response_times[-1]
             if ema_latency is None:
@@ -1717,7 +1725,7 @@ async def get_all_responses(
             q95_index = max(0, int(0.95 * (len(sorted_times) - 1)))
             perc = sorted_times[q95_index]
             candidate = max(ema_latency, perc) * timeout_factor
-            new_timeout = min(max_timeout, max(1.0, candidate))
+            new_timeout = min(max_timeout, max(timeout, candidate))
             if abs(new_timeout - nonlocal_timeout) > 1e-6:
                 logger.debug(
                     f"[dynamic timeout] Updating timeout from {nonlocal_timeout:.1f}s to {new_timeout:.1f}s based on observed latency."
@@ -1853,9 +1861,8 @@ async def get_all_responses(
                 # Treat timeouts as observations at the current timeout
                 # threshold so that ``adjust_timeout`` can react even when
                 # many calls fail before completing.
-                if nonlocal_timeout is not None:
-                    response_times.append(nonlocal_timeout)
-                    await adjust_timeout()
+                response_times.append(nonlocal_timeout)
+                await adjust_timeout()
                 error_logs[ident].append(str(e))
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
