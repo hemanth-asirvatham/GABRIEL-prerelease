@@ -54,6 +54,7 @@ from aiolimiter import AsyncLimiter
 from tqdm.auto import tqdm
 import openai
 import statistics
+import numpy as np
 import tiktoken
 from dataclasses import dataclass
 
@@ -959,10 +960,10 @@ async def get_all_responses(
     timeout adjustment and printing of helpful usage summaries.  When
     ``dynamic_timeout`` is enabled, the timeout starts as unlimited.  Once
     responses have been received for 95% of ``n_parallels`` workers, the
-    longest observed response duration is multiplied by ``timeout_factor``
-    (default 1.25) and capped by ``max_timeout`` to derive a timeout that is
-    applied to all in‑flight and subsequent requests.  The timeout is
-    increased if slower responses are later observed, and any request
+    95th percentile of successful response durations is multiplied by
+    ``timeout_factor`` (default 1.25) and capped by ``max_timeout`` to derive
+    a timeout that is applied to all in‑flight and subsequent requests.  The
+    timeout is increased if slower responses are later observed, and any request
     exceeding the current limit is cancelled and retried.
 
     The function remains backwards compatible with the original version,
@@ -1644,8 +1645,7 @@ async def get_all_responses(
     nonlocal_timeout: float = float("inf") if dynamic_timeout else timeout
     req_lim = AsyncLimiter(allowed_req_pm, 60)
     tok_lim = AsyncLimiter(allowed_tok_pm, 60)
-    response_times: List[float] = []
-    max_observed_time: float = 0.0
+    success_times: List[float] = []
     inflight: Dict[str, Tuple[float, asyncio.Task]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     call_count = 0
@@ -1695,17 +1695,17 @@ async def get_all_responses(
             )
 
     async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout, max_observed_time
+        nonlocal nonlocal_timeout
         if not dynamic_timeout:
             return
-        if len(response_times) < samples_for_timeout:
+        if len(success_times) < samples_for_timeout:
             return
         try:
-            max_observed_time = max(max_observed_time, max(response_times))
-            new_timeout = min(max_timeout, timeout_factor * max_observed_time)
+            p95 = float(np.percentile(success_times, 95))
+            new_timeout = min(max_timeout, timeout_factor * p95)
             if math.isinf(nonlocal_timeout) or new_timeout > nonlocal_timeout:
                 logger.debug(
-                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on longest observed latency."
+                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 95th percentile latency."
                 )
                 nonlocal_timeout = new_timeout
             if not math.isinf(nonlocal_timeout):
@@ -1767,7 +1767,7 @@ async def get_all_responses(
                         f"API call timed out after {nonlocal_timeout} s"
                     )
                 inflight.pop(ident, None)
-                response_times.append(t)
+                success_times.append(t)
                 await adjust_timeout()
                 # collect usage
                 total_input = sum(getattr(r.usage, "input_tokens", 0) for r in raw)
@@ -1850,8 +1850,6 @@ async def get_all_responses(
             except asyncio.TimeoutError as e:
                 status.num_timeout_errors += 1
                 logger.warning(f"Timeout error for {ident}: {e}")
-                elapsed = time.time() - start
-                response_times.append(elapsed)
                 inflight.pop(ident, None)
                 await adjust_timeout()
                 error_logs[ident].append(str(e))
