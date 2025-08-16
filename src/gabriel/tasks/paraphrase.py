@@ -362,7 +362,8 @@ class Paraphrase:
                         "Previously, the original text was taken and modified, following the provided instructions, to create the modified text. "
                         "Does the modified text faithfully apply the instructions as a transformation of "
                         "the original text? Answer True if the modification follows "
-                        "the instructions to a satisfactory, though not necessarily perfect, degree."
+                        "the instructions to a satisfactory, though not necessarily perfect, degree. "
+                        "Tolerate some imperfection and inconsistency, as long as the spirit of the instructions is obeyed to the extent that is reasonable. "
                         "Again, the modification instructions that need to be validated are: "
                         f"{self.cfg.instructions.strip()}\n\n"
                     )
