@@ -241,7 +241,8 @@ class Paraphrase:
             "instructions_followed": (
                 "Return True if the instructions were largely (even if not perfectly) followed in turning the "
                 "original text into the modified text (i.e. the modified text mostly exhibits the spirit of the instructions "
-                "even if not everything is exact). False otherwise, if there are still important shortcomings in the modified text vis a vis the instructions."
+                "even if not everything is exact). Be quite forgiving; understand that the modifications won't be perfect. "
+                "False otherwise, if there are still important shortcomings in the modified text vis a vis the instructions."
             )
         }
         classify_cfg = ClassifyConfig(
@@ -363,7 +364,7 @@ class Paraphrase:
                         "Does the modified text faithfully apply the instructions as a transformation of "
                         "the original text? Answer True if the modification follows "
                         "the instructions to a satisfactory, though not necessarily perfect, degree. "
-                        "Tolerate some imperfection and inconsistency, as long as the spirit of the instructions is obeyed to the extent that is reasonable. "
+                        "Tolerate some imperfection and inconsistency, as long as the spirit of the instructions is obeyed to the extent that is reasonable. Be reasonably forgiving. "
                         "Again, the modification instructions that need to be validated are: "
                         f"{self.cfg.instructions.strip()}\n\n"
                     )
