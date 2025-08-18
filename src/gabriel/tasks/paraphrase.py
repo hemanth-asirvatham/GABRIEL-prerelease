@@ -268,7 +268,7 @@ class Paraphrase:
             if round_number == 0:
                 candidates_per_key = max(self.cfg.n_initial_candidates, 1)
             else:
-                candidates_per_key = max(self.cfg.n_validation_candidates + 3 * (round_number - 1), 1)
+                candidates_per_key = max(self.cfg.n_validation_candidates * round_number, 1)
 
             # Build paraphrase prompts for every key still requiring
             # validation.  Each key may produce multiple candidates.
