@@ -18,8 +18,8 @@ _lazy_imports = {
     "ParaphraseConfig": ".paraphrase",
     "Regional": ".regional",
     "RegionalConfig": ".regional",
-    "RecursiveEloRater": ".recursive_elo",
-    "RecursiveEloConfig": ".recursive_elo",
+    "RecursiveRank": ".recursive_rank",
+    "RecursiveRankConfig": ".recursive_rank",
     "CountyCounter": ".county_counter",
 }
 
