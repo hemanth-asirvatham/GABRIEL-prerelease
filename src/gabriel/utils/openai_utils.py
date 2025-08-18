@@ -1016,15 +1016,7 @@ async def get_all_responses(
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
-    expanded = Path(os.path.expandvars(os.path.expanduser(save_path)))
-    save_path = str(expanded)
-    save_dir = expanded.parent
-    if save_dir and str(save_dir):
-        try:
-            save_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            # Ignore errors here; they will surface when attempting to write
-            pass
+    save_path = Path(os.path.expandvars(os.path.expanduser(save_path)))
     if reset_files:
         for p in (save_path, save_path + ".batch_state.json"):
             try:
