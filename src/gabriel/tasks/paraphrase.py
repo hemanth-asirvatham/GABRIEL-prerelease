@@ -242,6 +242,7 @@ class Paraphrase:
                 "Return True if the instructions were largely (even if not perfectly) followed in turning the "
                 "original text into the modified text (i.e. the modified text mostly exhibits the spirit of the instructions "
                 "even if not everything is exact). Be quite forgiving; understand that the modifications won't be perfect. "
+                "Ensure the spirit of the instructions is followed, even if not word for word. "
                 "False otherwise, if there are still important shortcomings in the modified text vis a vis the instructions."
             )
         }
@@ -267,7 +268,7 @@ class Paraphrase:
             if round_number == 0:
                 candidates_per_key = max(self.cfg.n_initial_candidates, 1)
             else:
-                candidates_per_key = max(self.cfg.n_validation_candidates, 1)
+                candidates_per_key = max(self.cfg.n_validation_candidates + 3 * (round_number - 1), 1)
 
             # Build paraphrase prompts for every key still requiring
             # validation.  Each key may produce multiple candidates.
