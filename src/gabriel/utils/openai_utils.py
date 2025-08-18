@@ -1025,6 +1025,7 @@ async def get_all_responses(
             except Exception:
                 pass
     if os.path.exists(save_path) and not reset_files:
+        print("Reading from existing files...")
         df = pd.read_csv(save_path)
         df = df.drop_duplicates(subset=["Identifier"], keep="last")
         df["Response"] = df["Response"].apply(_de)
