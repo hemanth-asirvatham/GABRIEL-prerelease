@@ -39,6 +39,7 @@ async def rate(
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = RateConfig(
         attributes=attributes,
@@ -80,6 +81,7 @@ async def classify(
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = ClassifyConfig(
         labels=labels,
@@ -121,6 +123,7 @@ async def deidentify(
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = DeidentifyConfig(
         save_dir=save_dir,
@@ -162,6 +165,7 @@ async def rank(
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = RankConfig(
         attributes=attributes,
@@ -209,6 +213,7 @@ async def codify(
     reasoning_summary: Optional[str] = None,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     coder = Codify()
     return await coder.codify(
@@ -255,7 +260,7 @@ async def paraphrase(
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Paraphrase`."""
-
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = ParaphraseConfig(
         instructions=instructions,
@@ -303,6 +308,7 @@ async def whatever(
 
     Results are saved to ``save_dir/file_name``.
     """
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, file_name)
     return await get_all_responses(
