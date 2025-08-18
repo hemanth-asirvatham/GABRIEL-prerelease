@@ -40,6 +40,7 @@ import asyncio
 import csv
 import json
 import os
+from pathlib import Path
 import random
 import tempfile
 import time
@@ -1014,15 +1015,13 @@ async def get_all_responses(
     cutoff = _decide_default_max_output_tokens(user_cutoff, rate_headers)
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     # Always load or initialise the CSV
-    # Ensure the directory for save_path exists.  Without this, attempts to
-    # write responses to a non‑existent folder will result in file errors.  We
-    # only create the parent directory if it is non‑empty (e.g. when the user
-    # specifies a path like ``folder/file.csv``); otherwise os.path.dirname
-    # returns an empty string and ``makedirs`` would raise.
-    save_dir = os.path.dirname(save_path)
-    if save_dir:
+    # Expand variables in save_path and ensure the parent directory exists.
+    expanded = Path(os.path.expandvars(os.path.expanduser(save_path)))
+    save_path = str(expanded)
+    save_dir = expanded.parent
+    if save_dir and str(save_dir):
         try:
-            os.makedirs(save_dir, exist_ok=True)
+            save_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             # Ignore errors here; they will surface when attempting to write
             pass

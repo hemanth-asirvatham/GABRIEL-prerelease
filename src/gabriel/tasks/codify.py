@@ -1,5 +1,6 @@
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -529,7 +530,9 @@ class Codify:
             Enhanced dataframe with columns for each category (if categories provided)
             or with 'coded_passages' column containing full category dict (if dynamic)
         """
-        os.makedirs(save_dir, exist_ok=True)
+        expanded = Path(os.path.expandvars(os.path.expanduser(save_dir)))
+        expanded.mkdir(parents=True, exist_ok=True)
+        save_dir = str(expanded)
 
         df_proc = df.reset_index(drop=True).copy()
         
