@@ -1016,7 +1016,7 @@ async def get_all_responses(
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
-    save_path = Path(os.path.expandvars(os.path.expanduser(save_path)))
+    save_path = os.path.expandvars(os.path.expanduser(save_path))
     if reset_files:
         for p in (save_path, save_path + ".batch_state.json"):
             try:
