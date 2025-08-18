@@ -973,7 +973,7 @@ async def get_all_responses(
             rate_headers=rate_headers,
         )
         example_prompt, _ = todo_pairs[0]
-        logger.info(f"Example prompt: {example_prompt}")
+        logger.warning(f"Example prompt: {example_prompt}")
     # Dynamically adjust the maximum number of parallel workers based on rate
     # limits.  We base the concurrency on your API’s per‑minute request and
     # token budgets and the average prompt length.  This calculation only
