@@ -7,6 +7,7 @@ from gabriel.utils import openai_utils, safest_json
 from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig
+from gabriel.tasks.extract import Extract, ExtractConfig
 from gabriel.tasks.regional import Regional, RegionalConfig
 from gabriel.tasks.county_counter import CountyCounter
 import gabriel
@@ -207,6 +208,14 @@ def test_classification_dummy(tmp_path):
     assert "yes" in res.columns
 
 
+def test_extraction_dummy(tmp_path):
+    cfg = ExtractConfig(attributes={"year": ""}, save_dir=str(tmp_path), use_dummy=True)
+    task = Extract(cfg)
+    df = pd.DataFrame({"txt": ["a"]})
+    res = asyncio.run(task.run(df, column_name="txt"))
+    assert "year" in res.columns
+
+
 def test_classification_multirun(tmp_path):
     cfg = ClassifyConfig(labels={"yes": ""}, save_dir=str(tmp_path), use_dummy=True, n_runs=2)
     task = Classify(cfg)
@@ -270,6 +279,17 @@ def test_api_wrappers(tmp_path):
         )
     )
     assert "yes" in classified.columns
+
+    extracted = asyncio.run(
+        gabriel.extract(
+            df,
+            "txt",
+            attributes={"year": ""},
+            save_dir=str(tmp_path / "extr"),
+            use_dummy=True,
+        )
+    )
+    assert "year" in extracted.columns
 
     deidentified = asyncio.run(
         gabriel.deidentify(

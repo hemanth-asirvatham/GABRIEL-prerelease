@@ -16,6 +16,8 @@ _lazy_imports = {
     "Codify": ".codify",
     "Paraphrase": ".paraphrase",
     "ParaphraseConfig": ".paraphrase",
+    "Extract": ".extract",
+    "ExtractConfig": ".extract",
     "Regional": ".regional",
     "RegionalConfig": ".regional",
     "RecursiveRank": ".recursive_rank",

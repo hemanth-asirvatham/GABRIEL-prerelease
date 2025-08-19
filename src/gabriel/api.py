@@ -13,6 +13,8 @@ from .tasks import (
     Deidentifier,
     DeidentifyConfig,
     Codify,
+    Extract,
+    ExtractConfig,
     Paraphrase,
     ParaphraseConfig,
 )
@@ -59,6 +61,49 @@ async def rate(
         df,
         column_name,
         reset_files=reset_files,
+    )
+
+async def extract(
+    df: pd.DataFrame,
+    column_name: str,
+    *,
+    attributes: dict[str, str],
+    save_dir: str,
+    additional_instructions: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 750,
+    n_runs: int = 1,
+    reset_files: bool = False,
+    use_dummy: bool = False,
+    file_name: str = "extraction.csv",
+    modality: str = "text",
+    reasoning_effort: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
+    types: Optional[dict[str, any]] = None,
+    **cfg_kwargs,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Extract`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = ExtractConfig(
+        attributes=attributes,
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        n_runs=n_runs,
+        use_dummy=use_dummy,
+        additional_instructions=additional_instructions,
+        modality=modality,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        **cfg_kwargs,
+    )
+    return await Extract(cfg).run(
+        df,
+        column_name,
+        reset_files=reset_files,
+        types=types,
     )
 
 async def classify(

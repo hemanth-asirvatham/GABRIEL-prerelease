@@ -6,6 +6,7 @@ from . import tasks as _tasks
 from .api import (
     rate,
     classify,
+    extract,
     deidentify,
     rank,
     codify,
@@ -23,6 +24,7 @@ except PackageNotFoundError:  # pragma: no cover - package not installed
 __all__ = list(_tasks.__all__) + [
     "rate",
     "classify",
+    "extract",
     "deidentify",
     "rank",
     "codify",
