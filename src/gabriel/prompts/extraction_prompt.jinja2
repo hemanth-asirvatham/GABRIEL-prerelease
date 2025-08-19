@@ -24,7 +24,7 @@ Your task: for each attribute below, extract the specific information requested 
 Provide each value as a string.
 Provide only the extracted datapoint requested in as precise a form as possible.
 Give the datapoint and nothing else; no extra commentary or explanation.
-Whenever possible/relevant, leave it in a purely numeric string form (e.g. "235" not "year is 235" or "210-250").
+Whenever possible/relevant, leave it in a purely numeric string form (e.g. "235" not "year is 235" or "235 CE" or "210-250").
 If the information cannot be found or is not known, return placeholder "unknown" (always exactly that word).
 
 BEGIN ATTRIBUTES
@@ -33,13 +33,13 @@ END ATTRIBUTES
 Each attribute key tells you what to extract. If a definition is provided, closely follow it to anchor what you provide; otherwise rely on your best consistent interpretation.
 
 General formatting rules (pay attention to attribute definitions for exact requirements):
-Year: Return years only (e.g. "1984", "629"). Use “BCE” suffix only if applicable (e.g. "356 BCE"), else just year alone. Avoid vague year ranges (e.g. "1980s", "early 20th century", "1250-1260"); aim for a single, specific year.
+Year: Return years only (e.g. "1984", "629"). Use negative numbers for BCE years (e.g. "-356" not "356 BCE"). Avoid vague year ranges (e.g. "1980s", "early 20th century", "1250-1260"); aim for a single, specific year.
 Date: Use ISO format "YYYY-MM-DD"; drop any extraneous words (e.g. not "June 5, 2020" but "2020-06-05").
 Prices: Don't include any currency symbols or commas (e.g. not "$16.85" but "16.85").
 Names/Places/Other Text: Provide the exact requested phrase without additional commentary (e.g. "Marilyn Monroe", "New York City", "The Beatles", etc.).
 Use the specific value that matches the attribute definition best (e.g. the primary year of invention rather than a range).
 Do not round (e.g. not "1860" but "1863", not "100" but "112"). Even if approximating a specific datapoint, don't round or use ranges - provide the best possible exact value.
-Consistent formatting is critical; stick to the attribute definition.
+Consistent formatting is critical; stick to the attribute definition and these rules.
 If the task is not possible, return "unknown" for that attribute.
 
 Output JSON only, in following format:
