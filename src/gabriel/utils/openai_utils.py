@@ -46,6 +46,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import defaultdict
+import pickle
 
 from gabriel.utils.logging import get_logger, set_log_level
 import logging
@@ -902,6 +903,142 @@ def _de(x: Any) -> Any:
         return None
     parsed = safe_json(x)
     return parsed if parsed else None
+
+
+async def get_embedding(
+    text: str,
+    *,
+    model: str = "text-embedding-3-small",
+    timeout: Optional[float] = None,
+    use_dummy: bool = False,
+    return_raw: bool = False,
+    logging_level: Optional[Union[str, int]] = None,
+    **kwargs: Any,
+) -> Tuple[List[float], float]:
+    """Minimal async call to OpenAI's embedding endpoint or dummy response."""
+
+    if use_dummy:
+        dummy = [float(len(text))]
+        return (dummy, 0.0, {}) if return_raw else (dummy, 0.0)
+
+    if logging_level is not None:
+        set_log_level(logging_level)
+    _require_api_key()
+
+    global client_async
+    if client_async is None:
+        client_async = openai.AsyncOpenAI()
+
+    start = time.time()
+    try:
+        raw = await client_async.embeddings.create(
+            model=model,
+            input=text,
+            **({"timeout": timeout} if timeout is not None else {}),
+            **kwargs,
+        )
+    except asyncio.TimeoutError:
+        err = Exception(f"API call timed out after {timeout} s")
+        logger.error(f"[get_embedding] {err}")
+        raise err
+    except Exception as e:
+        err = Exception(f"API call resulted in exception: {e!r}")
+        logger.error(f"[get_embedding] {err}")
+        raise err
+
+    embed = raw.data[0].embedding
+    duration = time.time() - start
+    if return_raw:
+        return embed, duration, raw
+    return embed, duration
+
+
+async def get_all_embeddings(
+    texts: List[str],
+    identifiers: Optional[List[str]] = None,
+    *,
+    model: str = "text-embedding-3-small",
+    save_path: str = "embeddings.pkl",
+    reset_file: bool = False,
+    n_parallels: int = 400,
+    timeout: Optional[float] = None,
+    save_every_x: int = 10000,
+    use_dummy: bool = False,
+    verbose: bool = True,
+    logging_level: Union[str, int] = "warning",
+    **get_embedding_kwargs: Any,
+) -> Dict[str, List[float]]:
+    """Retrieve embeddings for a list of texts with simple concurrency."""
+
+    if not use_dummy:
+        _require_api_key()
+    set_log_level(logging_level)
+    logger = get_logger(__name__)
+
+    if identifiers is None:
+        identifiers = texts
+
+    save_path = os.path.expanduser(os.path.expandvars(save_path))
+    embeddings: Dict[str, List[float]] = {}
+    if not reset_file and os.path.exists(save_path):
+        try:
+            with open(save_path, "rb") as f:
+                embeddings = pickle.load(f)
+        except Exception:
+            embeddings = {}
+
+    items = [
+        (i, t) for i, t in zip(identifiers, texts) if i not in embeddings
+    ]
+    if not items:
+        return embeddings
+
+    queue: asyncio.Queue[Tuple[str, str]] = asyncio.Queue()
+    for item in items:
+        queue.put_nowait(item)
+
+    pbar = tqdm(total=len(items), disable=not verbose, desc="Getting embeddings")
+    processed = 0
+
+    async def worker() -> None:
+        nonlocal processed
+        while True:
+            try:
+                identifier, text = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                emb, _ = await get_embedding(
+                    text,
+                    model=model,
+                    timeout=timeout,
+                    use_dummy=use_dummy,
+                    **get_embedding_kwargs,
+                )
+                embeddings[identifier] = emb
+            except Exception as e:  # pragma: no cover - log but continue
+                logger.error(f"[get_all_embeddings] {identifier} failed: {e}")
+            processed += 1
+            if processed % save_every_x == 0:
+                with open(save_path, "wb") as f:
+                    pickle.dump(embeddings, f)
+            pbar.update(1)
+            queue.task_done()
+
+    workers = [
+        asyncio.create_task(worker())
+        for _ in range(max(1, min(n_parallels, queue.qsize())))
+    ]
+    await queue.join()
+    for w in workers:
+        w.cancel()
+    await asyncio.gather(*workers, return_exceptions=True)
+    pbar.close()
+
+    with open(save_path, "wb") as f:
+        pickle.dump(embeddings, f)
+
+    return embeddings
 
 
 async def get_all_responses(

@@ -1,6 +1,11 @@
 """Utility helpers for GABRIEL."""
 
-from .openai_utils import get_response, get_all_responses
+from .openai_utils import (
+    get_response,
+    get_all_responses,
+    get_embedding,
+    get_all_embeddings,
+)
 from .image_utils import encode_image
 from .audio_utils import encode_audio
 from .media_utils import load_image_inputs, load_audio_inputs
@@ -20,6 +25,8 @@ from .word_matching import (
 __all__ = [
     "get_response",
     "get_all_responses",
+    "get_embedding",
+    "get_all_embeddings",
     "get_logger",
     "set_log_level",
     "Teleprompter",

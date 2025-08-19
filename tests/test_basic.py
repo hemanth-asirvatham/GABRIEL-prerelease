@@ -58,6 +58,11 @@ def test_get_response_audio_dummy():
     assert responses and responses[0].startswith("DUMMY")
 
 
+def test_get_embedding_dummy():
+    emb, _ = asyncio.run(openai_utils.get_embedding("hi", use_dummy=True))
+    assert isinstance(emb, list) and emb and isinstance(emb[0], float)
+
+
 def test_safest_json_codeblock_list():
     raw = ["```json\n{\n \"speech\": true,\n \"music\": false\n}\n```"]
     parsed = asyncio.run(safest_json(raw))
@@ -121,6 +126,18 @@ def test_get_all_responses_audio_dummy(tmp_path):
         )
     )
     assert len(df) == 1
+
+
+def test_get_all_embeddings_dummy(tmp_path):
+    res = asyncio.run(
+        openai_utils.get_all_embeddings(
+            texts=["a", "b"],
+            identifiers=["1", "2"],
+            save_path=str(tmp_path / "emb.pkl"),
+            use_dummy=True,
+        )
+    )
+    assert set(res.keys()) == {"1", "2"}
 
 
 def test_ratings_dummy(tmp_path):
