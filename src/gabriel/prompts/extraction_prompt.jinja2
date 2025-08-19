@@ -1,0 +1,63 @@
+{% if modality == "text" %}
+BEGIN TEXT ENTRY
+{{ text }}
+END TEXT ENTRY
+Read the *entire* text carefully from start to finish. Do not skim—comprehend all details, including information buried deep in the content.
+{% elif modality == "image" %}
+Carefully inspect all visual elements of the image. Capture any textual or numeric information present, as well as visual details that could convey data relevant to the attributes.
+{% elif modality == "audio" %}
+Listen to the audio fully. Extract specific facts, names, dates, and other information from both speech and any other relevant audio content.
+{% elif modality == "entity" %}
+Entity: {{ text }}
+Use your prodigious internal knowledge on the item/entity "{{ text }}".
+Consider all relevant factual details (e.g. year of birth, location, inventor, price, etc.) that fit the requested attributes.
+Use your considerable knowledge to extract the needed information as precisely as possible.
+{% elif modality == "web" %}
+Entity: {{ text }}
+Comprehensively explore the web for all relevant information on the item/entity "{{ text }}".
+Ensure you collect a highly truthful, accurate, comprehensive, and representative picture of "{{ text }}" from the web.
+Focus on collecting information needed for the attributes, sourcing accurate, factual details about "{{ text }}".
+Use all the knowledge and information at your disposal to extract the needed information as precisely as possible.
+{% endif %}
+
+Your task: for each attribute below, extract the specific information requested (e.g. year of invention, price, death year, product launch date, etc.).
+Provide each value as a string.
+Provide only the extracted datapoint requested in as precise a form as possible.
+Give the datapoint and nothing else; no extra commentary or explanation.
+Whenever possible/relevant, leave it in a purely numeric string form (e.g. "235" not "year is 235" or "210-250").
+If the information cannot be found or is not known, return placeholder "unknown" (always exactly that word).
+
+BEGIN ATTRIBUTES
+{{ attributes | shuffled_dict }}
+END ATTRIBUTES
+Each attribute key tells you what to extract. If a definition is provided, closely follow it to anchor what you provide; otherwise rely on your best consistent interpretation.
+
+General formatting rules (pay attention to attribute definitions for exact requirements):
+Year: Return years only (e.g. "1984", "629"). Use “BCE” suffix only if applicable (e.g. "356 BCE"), else just year alone. Avoid vague year ranges (e.g. "1980s", "early 20th century", "1250-1260"); aim for a single, specific year.
+Date: Use ISO format "YYYY-MM-DD"; drop any extraneous words (e.g. not "June 5, 2020" but "2020-06-05").
+Prices: Don't include any currency symbols or commas (e.g. not "$16.85" but "16.85").
+Names/Places/Other Text: Provide the exact requested phrase without additional commentary (e.g. "Marilyn Monroe", "New York City", "The Beatles", etc.).
+Use the specific value that matches the attribute definition best (e.g. the primary year of invention rather than a range).
+Do not round (e.g. not "1860" but "1863", not "100" but "112"). Even if approximating a specific datapoint, don't round or use ranges - provide the best possible exact value.
+Consistent formatting is critical; stick to the attribute definition.
+If the task is not possible, return "unknown" for that attribute.
+
+Output JSON only, in following format:
+{
+    "<insert attribute name here>": "<insert corresponding extracted value or "unknown" here>",
+    "<attribute name>": "<extracted value or unknown>",
+    ...
+}
+
+Attributes you are extracting info on are: {{ attributes.keys() | shuffled }}
+Assess EVERY attribute; use "unknown" if needed but no drops. Use these attribute names verbatim, with absolutely no modification.
+Same case, same spelling, same punctuation, same formatting.
+
+{% if additional_instructions %}
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate yourself).
+If they conflict with the other instructions, these user instructions take precedence.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
