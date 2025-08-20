@@ -17,6 +17,8 @@ from .tasks import (
     ExtractConfig,
     Paraphrase,
     ParaphraseConfig,
+    Compare,
+    CompareConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -329,6 +331,51 @@ async def paraphrase(
     return await Paraphrase(cfg).run(
         df,
         column_name,
+        reset_files=reset_files,
+    )
+
+
+async def compare(
+    df: pd.DataFrame,
+    circle_column_name: str,
+    square_column_name: str,
+    *,
+    save_dir: str,
+    differentiation: bool = True,
+    additional_instructions: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 750,
+    n_runs: int = 1,
+    reset_files: bool = False,
+    use_dummy: bool = False,
+    file_name: str = "comparison_responses.csv",
+    modality: str = "text",
+    reasoning_effort: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
+    **cfg_kwargs,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Compare`."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = CompareConfig(
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        n_runs=n_runs,
+        use_dummy=use_dummy,
+        differentiation=differentiation,
+        additional_instructions=additional_instructions or "",
+        modality=modality,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        **cfg_kwargs,
+    )
+    return await Compare(cfg).run(
+        df,
+        circle_column_name,
+        square_column_name,
         reset_files=reset_files,
     )
 
