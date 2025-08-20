@@ -1,0 +1,99 @@
+Your goal is to step back and propose exactly {{ bucket_count }} broader "bucket" terms that could serve as mutually exclusive groupings to capture many of these individual raw terms while still being specific.
+Buckets should be stylistically similar to the raw terms themselves (short phrases) and can in fact be identical to one of the raw terms if that term already captures a broader grouping.
+
+Each bucket should plausibly group multiple raw terms.
+It is okay if some raw terms don't fit cleanly into any of your final buckets; aim though for your mutually exclusive buckets to jointly cover as many of the raw terms as reasonable.
+Do not use vague catch-all categories like "miscellaneous" or "other".
+The goal is to identify umbrella terms that meaningfully group subsets of the raw terms without losing important distinctions, specificity, and substance.
+
+Below are the raw terms to consider.
+BEGIN RAW TERMS
+{{ terms }}
+END RAW TERMS
+
+Produce exactly {{ bucket_count }} bucket terms.
+They should together capture as many raw terms as is reasonable, without vagueness and still being mutually exclusive, descriptive, and specific.
+Avoid buckets that are combinations of multiple distinct buckets, like "housing and employment issues" or "family and financial problems".
+Each bucket should be a single coherent concept, specific and distinct from the others.
+Ensure bucket terms resemble raw terms in writing style, specificity, and substance.
+
+Really avoid vague buckets that are catch-alls or "other" categories.
+If a potential bucket you have in mind is too vague and catch-all, consider a more specific term that captures a narrower but still meaningful grouping of raw terms with more precision to what those terms are about.
+Have a strong preference for descriptive, specific, and directional bucket terms - avoid vague and overly broad buckets, and avoid buckets where it is not clear what it means for a relevant piece of content to have more or less of the attribute.
+No vague, trivial, or overly abstract buckets.
+It is better to make a too specific than a too vague bucket, even if it means capturing fewer raw terms.
+Consider carefully whether the buckets you are considering creating are meaningful, specific, interesting, and capturing the largest and most important clusters of raw terms.
+Output exactly {{ bucket_count }} mutually exclusive, specific, and well constructed bucket terms.
+
+{% if differentiation %}
+Understand that these raw terms are differences that have been assessed as distinguishing features between two pieces of content, so consider bucket terms that maintain that spirit of distinguishing between two classes of content.
+Specifically, realize that "square" and "circle" correspond to two classes of content as references.
+So if raw terms you are grouping mention "circle" having an attribute or "square" having an attribute more than "circle", then those reference classes must be in the bucket name.
+Crucial: you must distinguish between the the two classes of content. "square exhibits more X" and "circle exhibits more X" do NOT mean the same thing and don't belong in the same bucket.
+But "square exhibits more X" and "circle lacks X" DO mean the same thing and DO belong in the same bucket.
+Ensure you are only bucketizing differences that actually mean the same thing; it is possible to even have both directions of the same attribute as two different buckets, if both versions are prevalent in the raw terms.
+
+Buckets must be clear on which class has more of the attribute (e.g. "square entries have more X" or "circle entries lack Y").
+Each bucket term should be a directional statement (e.g. "circle entries showcase stronger communication amongst colleagues", "square entries use lots of first person perspective", "square entries invoke more chronic health issues", "circle entries involve more complications from type 2 diabetes", "square entries have few direct quotes from evidence", etc) rather than an "X vs Y" phrase.
+Focus on the most salient and common differences between the two classes of content, specifically as they appear in the raw terms.
+TO BE CLEAR, all bucket terms you write must explicitly state something in the vein of "circle entries have more X" or "square entries lack Y" etc.
+All buckets must make explicit references to one or the other class of entries ("square entries" or "circle entries"), and some property of that entry class that distinguishes it from the other class.
+Bucket definitions must clearly explain what it means for a square entry to have more of the attribute than a circle entry (or vice versa, depending on the bucket), grounded in examples from the raw terms.
+{% endif %}
+
+{% if voting %}
+You are selecting the {{ bucket_count }} bucket terms by voting.
+The only bucket terms you can choose from are from the following set of bucket candidates:
+BEGIN BUCKET CANDIDATES
+{{ bucket_candidates }}
+END BUCKET CANDIDATES
+
+From these candidates only, choose the buckets (verbatim as they appear in the candidate keys) that best group the raw terms with the desired specificity, substance, and mutual exclusivity.
+    {% if selected_buckets and selected_buckets|length > 0 %}
+The following bucket terms have **already been selected**; you should **not** select any similar/overlapping buckets from the candidate list:
+
+BEGIN ALREADY FINALIZED BUCKETS
+{{ selected_buckets }}
+END ALREADY FINALIZED BUCKETS
+
+You only need to vote for {{ bucket_count - selected_buckets|length }} additional buckets, not the full {{ bucket_count }}.
+This is because the ultimate, final set of the best, mutually exclusive buckets will be the union of the already selected buckets and the additional buckets you vote for.
+Thus, when voting for the {{ bucket_count - selected_buckets|length }} additional buckets, ensure they are mutually exclusive both with each other **and** with the already selected buckets above.
+Consider the selected buckets to locked in; your new selections should not overlap with them at all.
+Choose the {{ bucket_count - selected_buckets|length }} additional buckets from the candidate list such that the final set of all selected buckets (including the already selected ones) are mutually exclusive from each other and excellent at grouping as many raw terms as reasonable, without losing specificity and substance.
+It is like being GM of an NBA team: you already have some players on the roster, and you need to pick new ones that fit well with the existing ones and make a great team overall.
+These already finalized buckets are your existing players; now focus on identifying the best complementary pieces to add to the team to get the best overall coverage with the final set of buckets.
+It is essential you avoid voting for terms that overlap with the already selected buckets.
+Build a full, mutually exclusive set of buckets that together capture the biggest themes present in the raw terms, amongst the totality of all existing and new buckets you are voting for.
+
+Again, the already selected buckets are: {{ selected_buckets.keys() }}
+You must vote for exactly {{ bucket_count - selected_buckets|length }} additional buckets.
+    {% else %}
+You must vote for exactly {{ bucket_count }} buckets from the candidate list keys.
+    {% endif %}
+Output JSON only, in following format:
+{
+    "<insert first voted for candidate bucket here verbatim>": "<insert short 1 sentence justification on why this bucket and how it is mutually exclusive from all other selected buckets here>",
+    "<second voted for candidate bucket verbatim>": "...",
+    ...
+}
+{% else %}
+Each bucket definition/justification should concisely (1-3 sentences) explain what it means to fall into that bucket, also mentioning some member raw terms/direct evidence as illustrative examples.
+It should be clear what it means for some relevant content to fall into each bucket or have more/less of it as an attribute.
+Output JSON only, in following format:
+{
+    "<insert bucket here>": "<insert efficient definition of bucket and justification with direct examples, evidence, and reasoning (1-3 sentences)>",
+    "<bucket>": "...",
+    ...
+}
+{% endif %}
+
+{% if additional_instructions %}
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate yourself).
+If they conflict with the other instructions, these user instructions take precedence.
+If they specify a specific scope to confine your buckets to, it is essential you comply with that scope, focus closely on it, and not output any buckets outside of it.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
