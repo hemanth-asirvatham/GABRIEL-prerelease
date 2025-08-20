@@ -13,7 +13,7 @@ from scipy.cluster.vq import kmeans2
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, get_all_embeddings
+from ..utils import safest_json, safe_json, get_all_embeddings
 
 
 @dataclass
@@ -139,14 +139,28 @@ class Deduplicate:
 
         mappings: Dict[str, str] = {}
         for items, res in zip(batches, parsed):
+            # The model may return a JSON string or wrap the list in quotes.
+            if isinstance(res, str):
+                res = safe_json(res)
             if isinstance(res, list):
+                norm_list: List[Dict[str, str]] = []
                 for row in res:
-                    if not isinstance(row, dict):
-                        continue
-                    inp = row.get("input")
-                    mapped = row.get("mapped")
-                    if isinstance(inp, str) and isinstance(mapped, str) and inp in items:
-                        mappings[inp] = mapped
+                    if isinstance(row, dict):
+                        norm_list.append(row)
+                    elif isinstance(row, str):
+                        inner = safe_json(row)
+                        if isinstance(inner, dict):
+                            norm_list.append(inner)
+                res_iter = norm_list
+            elif isinstance(res, dict):
+                res_iter = [res]
+            else:
+                res_iter = []
+            for row in res_iter:
+                inp = row.get("input")
+                mapped = row.get("mapped")
+                if isinstance(inp, str) and isinstance(mapped, str) and inp in items:
+                    mappings[inp] = mapped
 
         for rep in uniques:
             mappings.setdefault(rep, rep)

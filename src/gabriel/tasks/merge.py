@@ -13,7 +13,7 @@ from scipy.cluster.vq import kmeans2
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, get_all_embeddings
+from ..utils import safest_json, safe_json, get_all_embeddings
 
 
 @dataclass
@@ -206,6 +206,21 @@ class Merge:
         long_set = set(long_uniques)
         matches: Dict[str, str] = {}
         for clus, res in zip(clusters, parsed):
+            # Handle common cases where the model wraps the dict in a list or
+            # returns it as a JSON-encoded string.
+            if isinstance(res, list):
+                combined: Dict[str, str] = {}
+                for item in res:
+                    if isinstance(item, dict):
+                        combined.update(item)
+                    elif isinstance(item, str):
+                        inner = safe_json(item)
+                        if isinstance(inner, dict):
+                            combined.update(inner)
+                res = combined
+            elif isinstance(res, str):
+                res = safe_json(res)
+
             if isinstance(res, dict):
                 for k, v in res.items():
                     if k in clus and v in long_set:
