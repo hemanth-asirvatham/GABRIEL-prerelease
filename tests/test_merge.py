@@ -49,3 +49,16 @@ def test_merge_trailing_space(mock_resp, tmp_path):
     df2 = pd.DataFrame({"val": [1], "term": ["Apple"]})
     merged = asyncio.run(task.run(df1, df2, on="term"))
     assert merged["val"].iloc[0] == 1
+
+
+@patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
+def test_merge_html_entities(mock_resp, tmp_path):
+    mock_resp.return_value = pd.DataFrame(
+        {"Identifier": ["merge_00000"], "Response": ['{"B. Pôssas": "B. Pôssas"}']}
+    )
+    cfg = MergeConfig(save_dir=str(tmp_path), use_embeddings=False)
+    task = Merge(cfg)
+    df1 = pd.DataFrame({"term": ["B. Pôssas"]})
+    df2 = pd.DataFrame({"val": [1], "term": ["B. P&#244;ssas"]})
+    merged = asyncio.run(task.run(df1, df2, on="term"))
+    assert merged["val"].iloc[0] == 1

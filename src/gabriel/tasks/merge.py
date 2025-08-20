@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import html
+import unicodedata
+
 import numpy as np
 import pandas as pd
 from scipy.cluster.vq import kmeans2
@@ -47,7 +50,10 @@ class Merge:
     @staticmethod
     def _normalize(val: str) -> str:
         """Normalize strings for fuzzy matching."""
-        return re.sub(r"[^0-9a-z]+", "", val.lower())
+        # Convert HTML entities and strip accents before keeping alphanumeric
+        txt = html.unescape(val).lower()
+        txt = unicodedata.normalize("NFKD", txt)
+        return "".join(ch for ch in txt if ch.isalnum())
 
     @classmethod
     def _deduplicate(
