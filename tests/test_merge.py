@@ -1,6 +1,6 @@
 import asyncio
 import pandas as pd
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 import gabriel
 from gabriel.tasks.merge import Merge, MergeConfig
@@ -36,3 +36,16 @@ def test_merge_api(tmp_path):
     )
     assert "val" in merged.columns
     assert len(merged) == 3
+
+
+@patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
+def test_merge_trailing_space(mock_resp, tmp_path):
+    mock_resp.return_value = pd.DataFrame(
+        {"Identifier": ["merge_00000"], "Response": ['{"apple ": "Apple"}']}
+    )
+    cfg = MergeConfig(save_dir=str(tmp_path), use_embeddings=False)
+    task = Merge(cfg)
+    df1 = pd.DataFrame({"term": ["apple"]})
+    df2 = pd.DataFrame({"val": [1], "term": ["Apple"]})
+    merged = asyncio.run(task.run(df1, df2, on="term"))
+    assert merged["val"].iloc[0] == 1
