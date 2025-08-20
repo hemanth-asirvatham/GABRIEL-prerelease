@@ -4,7 +4,7 @@ BEGIN RAW TERMS
 END RAW TERMS
 
 Deduplicate these raw terms.
-Do this by exhaustively identifying all subsets of raw terms that are largely equivalent to each other.
+Do this by exhaustively identifying all subsets of raw terms such that all terms in the subset are largely equivalent to each other.
 For each subset, map the raw terms to a single representative term.
 The representative term must be one of the raw terms in the subset - it should be the best, most specific representative of the subset.
 Strongly prefer precise and detailed representative terms; avoid vague, overly broad, or overly abstract representative terms (vague terms are better as simple members of the subset, not representatives).
