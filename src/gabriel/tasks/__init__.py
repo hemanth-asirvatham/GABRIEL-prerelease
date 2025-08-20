@@ -23,6 +23,8 @@ _lazy_imports = {
     "RecursiveRank": ".recursive_rank",
     "RecursiveRankConfig": ".recursive_rank",
     "CountyCounter": ".county_counter",
+    "Compare": ".compare",
+    "CompareConfig": ".compare",
 }
 
 __all__ = list(_lazy_imports.keys())
