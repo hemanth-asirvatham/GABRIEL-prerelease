@@ -83,7 +83,7 @@ class Deduplicate:
                 texts=uniques,
                 identifiers=uniques,
                 save_path=os.path.join(self.cfg.save_dir, "deduplicate_embeddings.pkl"),
-                reset_files=reset_files,
+                reset_file=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 verbose=False,
             )

@@ -110,7 +110,7 @@ class Merge:
                 texts=short_uniques,
                 identifiers=short_uniques,
                 save_path=os.path.join(self.cfg.save_dir, "short_embeddings.pkl"),
-                reset_files=reset_files,
+                reset_file=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 verbose=False,
             )
@@ -118,7 +118,7 @@ class Merge:
                 texts=long_uniques,
                 identifiers=long_uniques,
                 save_path=os.path.join(self.cfg.save_dir, "long_embeddings.pkl"),
-                reset_files=reset_files,
+                reset_file=reset_files,
                 use_dummy=self.cfg.use_dummy,
                 verbose=False,
             )
