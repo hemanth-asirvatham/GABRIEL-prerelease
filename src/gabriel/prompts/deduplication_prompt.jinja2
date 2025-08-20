@@ -1,0 +1,37 @@
+Consider the following raw terms:
+BEGIN RAW TERMS
+{{ raw_terms }}
+END RAW TERMS
+
+Deduplicate these raw terms.
+Do this by exhaustively identifying all subsets of raw terms that are largely equivalent to each other.
+For each subset, map the raw terms to a single representative term.
+The representative term must be one of the raw terms in the subset - it should be the best, most specific representative of the subset.
+Strongly prefer precise and detailed representative terms; avoid vague, overly broad, or overly abstract representative terms (vague terms are better as simple members of the subset, not representatives).
+Important: all raw terms that are not duplicates should be left alone and not included in output.
+Only output the deduplication map, exhaustively compiling all subsets of largely equivalent raw terms and ignoring the rest.
+
+All terms in the map must be taken from the raw terms verbatim, absolutely no modification.
+Same case, same spelling, same punctuation, same formatting.
+
+Output JSON only, in following format:
+{
+    "<insert representative term here>": ["<insert raw term in corresponding subset here>", "<raw term>", ...],
+    "<representative term>": ["<raw term>", ...],
+    ...
+}
+
+Again: representative term is generally not the broadest catch-all raw term; it is specific, precise, detailed - the term that all other raw terms in the subset are largely equivalent to.
+Include the representative term twice: both as the key AND as member in the list of raw terms in subset.
+Don't force meaningfully distinct terms into the same subset; it is fine if most or all terms are ignored and not deduplicated because they have no duplicate(s).
+If no duplicates present, output an empty JSON.
+Nonetheless, be thorough and exhaustive in your deduplication - even pairs of just two equivalent terms must be deduplicated.
+
+{% if additional_instructions %}
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate yourself).
+If they conflict with the other instructions, these user instructions take precedence.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
