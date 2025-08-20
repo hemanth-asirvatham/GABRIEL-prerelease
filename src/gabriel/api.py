@@ -21,6 +21,8 @@ from .tasks import (
     CompareConfig,
     Merge,
     MergeConfig,
+    Deduplicate,
+    DeduplicateConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -378,6 +380,47 @@ async def compare(
         df,
         circle_column_name,
         square_column_name,
+        reset_files=reset_files,
+    )
+
+
+async def deduplicate(
+    df: pd.DataFrame,
+    on: str,
+    *,
+    save_dir: str,
+    additional_instructions: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 750,
+    n_runs: int = 1,
+    reset_files: bool = False,
+    use_dummy: bool = False,
+    file_name: str = "deduplicate_responses.csv",
+    use_embeddings: bool = True,
+    group_size: int = 500,
+    max_timeout: Optional[float] = None,
+    **cfg_kwargs,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Deduplicate`."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = DeduplicateConfig(
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        n_runs=n_runs,
+        use_dummy=use_dummy,
+        max_timeout=max_timeout,
+        additional_instructions=additional_instructions,
+        use_embeddings=use_embeddings,
+        group_size=group_size,
+        **cfg_kwargs,
+    )
+    return await Deduplicate(cfg).run(
+        df,
+        on=on,
         reset_files=reset_files,
     )
 
