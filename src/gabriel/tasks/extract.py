@@ -218,8 +218,11 @@ class Extract:
                 full_records.append(rec)
 
         full_df = pd.DataFrame(full_records).set_index(["id", "run"])
-        disagg_path = os.path.join(self.cfg.save_dir, f"{base_name}_full_disaggregated.csv")
-        full_df.to_csv(disagg_path, index_label=["id", "run"])
+        if self.cfg.n_runs > 1:
+            disagg_path = os.path.join(
+                self.cfg.save_dir, f"{base_name}_full_disaggregated.csv"
+            )
+            full_df.to_csv(disagg_path, index_label=["id", "run"])
 
         def _pick_first(s: pd.Series) -> str:
             for val in s.dropna():

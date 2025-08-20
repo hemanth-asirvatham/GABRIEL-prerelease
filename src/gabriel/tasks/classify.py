@@ -289,8 +289,11 @@ class Classify:
             )
 
         full_df = pd.DataFrame(full_records).set_index(["text", "run"])
-        disagg_path = os.path.join(self.cfg.save_dir, f"{base_name}_full_disaggregated.csv")
-        full_df.to_csv(disagg_path, index_label=["text", "run"])
+        if self.cfg.n_runs > 1:
+            disagg_path = os.path.join(
+                self.cfg.save_dir, f"{base_name}_full_disaggregated.csv"
+            )
+            full_df.to_csv(disagg_path, index_label=["text", "run"])
 
         # aggregate across runs using a minimum frequency threshold
         def _min_freq(s: pd.Series) -> Optional[bool]:
