@@ -45,22 +45,27 @@ class Merge:
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _deduplicate(series: pd.Series) -> Tuple[List[str], Dict[str, List[str]], Dict[str, str]]:
-        """Return (unique_values, rep_to_group, orig_to_rep) for a Series."""
-        rep_map: Dict[str, str] = {}
+    def _normalize(val: str) -> str:
+        """Normalize strings for fuzzy matching."""
+        return re.sub(r"[^0-9a-z]+", "", val.lower())
+
+    @classmethod
+    def _deduplicate(
+        cls, series: pd.Series
+    ) -> Tuple[List[str], Dict[str, List[str]], Dict[str, str]]:
+        """Return (unique_values, rep_to_group, norm_to_rep) for a Series."""
+        norm_map: Dict[str, str] = {}
         groups: Dict[str, List[str]] = {}
-        orig_to_rep: Dict[str, str] = {}
         for val in series.dropna().astype(str):
-            norm = re.sub(r"[^0-9a-z]+", "", val.lower())
-            if norm in rep_map:
-                rep = rep_map[norm]
+            norm = cls._normalize(val)
+            if norm in norm_map:
+                rep = norm_map[norm]
                 groups[rep].append(val)
             else:
-                rep_map[norm] = val
+                norm_map[norm] = val
                 groups[val] = [val]
-            orig_to_rep[val] = rep_map[norm]
         uniques = list(groups.keys())
-        return uniques, groups, orig_to_rep
+        return uniques, groups, norm_map
 
     # ------------------------------------------------------------------
     async def run(
@@ -95,9 +100,9 @@ class Merge:
             short_df, long_df = df_right.reset_index(drop=True), df_left.reset_index(drop=True)
             short_key, long_key = right_key, left_key
 
-        # Deduplicate keys
-        short_uniques, short_groups, _ = self._deduplicate(short_df[short_key])
-        long_uniques, long_groups, _ = self._deduplicate(long_df[long_key])
+        # Deduplicate keys and track normalized maps
+        short_uniques, short_groups, short_norm_map = self._deduplicate(short_df[short_key])
+        long_uniques, long_groups, long_norm_map = self._deduplicate(long_df[long_key])
 
         use_embeddings = self.cfg.use_embeddings and len(long_uniques) >= self.cfg.long_list_len
 
@@ -203,9 +208,9 @@ class Merge:
             *[safest_json(resp_map.get(i, "")) for i in identifiers]
         )
 
-        long_set = set(long_uniques)
         matches: Dict[str, str] = {}
         for clus, res in zip(clusters, parsed):
+            clus_norm = {self._normalize(s): s for s in clus}
             # Handle common cases where the model wraps the dict in a list or
             # returns it as a JSON-encoded string.
             if isinstance(res, list):
@@ -223,17 +228,22 @@ class Merge:
 
             if isinstance(res, dict):
                 for k, v in res.items():
-                    if k in clus and v in long_set:
-                        matches[k] = v
+                    if not isinstance(k, str) or not isinstance(v, str):
+                        continue
+                    k_norm = self._normalize(k)
+                    v_norm = self._normalize(v)
+                    if k_norm in clus_norm and v_norm in long_norm_map:
+                        short_rep = clus_norm[k_norm]
+                        long_rep = long_norm_map[v_norm]
+                        matches[short_rep] = long_rep
 
         records: List[Dict[str, str]] = []
-        for short_rep, long_rep in matches.items():
-            for s in short_groups.get(short_rep, []):
-                for l in long_groups.get(long_rep, []):
-                    records.append({short_key: s, long_key: l})
-
         if short_key == long_key:
             temp_col = f"{long_key}_match"
+            for short_rep, long_rep in matches.items():
+                for s in short_groups.get(short_rep, []):
+                    for l in long_groups.get(long_rep, []):
+                        records.append({short_key: s, temp_col: l})
             map_df = pd.DataFrame(records, columns=[short_key, temp_col])
             map_df[short_key] = map_df[short_key].astype(object)
             map_df[temp_col] = map_df[temp_col].astype(object)
@@ -247,6 +257,10 @@ class Merge:
             )
             merged = merged.drop(columns=[temp_col])
         else:
+            for short_rep, long_rep in matches.items():
+                for s in short_groups.get(short_rep, []):
+                    for l in long_groups.get(long_rep, []):
+                        records.append({short_key: s, long_key: l})
             map_df = pd.DataFrame(records, columns=[short_key, long_key])
             map_df[short_key] = map_df[short_key].astype(object)
             map_df[long_key] = map_df[long_key].astype(object)
