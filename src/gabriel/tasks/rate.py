@@ -247,8 +247,11 @@ class Rate:
                 full_records.append(rec)
 
         full_df = pd.DataFrame(full_records).set_index(["id", "run"])
-        disagg_path = os.path.join(self.cfg.save_dir, f"{base_name}_full_disaggregated.csv")
-        full_df.to_csv(disagg_path, index_label=["id", "run"])
+        if self.cfg.n_runs > 1:
+            disagg_path = os.path.join(
+                self.cfg.save_dir, f"{base_name}_full_disaggregated.csv"
+            )
+            full_df.to_csv(disagg_path, index_label=["id", "run"])
 
         # aggregate across runs
         agg_df = full_df.groupby("id")[list(self.cfg.attributes)].mean()
