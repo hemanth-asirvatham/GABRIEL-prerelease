@@ -1,0 +1,23 @@
+You are given a list of items that may contain duplicates.
+
+Group ID: {{ group_id }}
+BEGIN ITEMS
+{{ items }}
+END ITEMS
+
+For any items that refer to the same real-world entity, map the non-representative items to a single representative item from the list. Use the exact text of the items as they appear above.
+
+Output JSON as an array of objects with the following keys:
+- "input": the item from the list that has a duplicate.
+- "mapped": the representative item from the list it should map to.
+- "match_type": short description of the relationship between the two items.
+- "confidence": a number from 0 to 1 representing confidence in the mapping.
+- "justification": brief reason for the mapping.
+
+Only include items that need to be mapped; omit unique items with no duplicates.
+
+{% if additional_instructions %}
+BEGIN ADDITIONAL INSTRUCTIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS
+{% endif %}
