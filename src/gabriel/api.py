@@ -19,6 +19,8 @@ from .tasks import (
     ParaphraseConfig,
     Compare,
     CompareConfig,
+    Merge,
+    MergeConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -376,6 +378,57 @@ async def compare(
         df,
         circle_column_name,
         square_column_name,
+        reset_files=reset_files,
+    )
+
+
+async def merge(
+    df_left: pd.DataFrame,
+    df_right: pd.DataFrame,
+    *,
+    save_dir: str,
+    on: Optional[str] = None,
+    left_on: Optional[str] = None,
+    right_on: Optional[str] = None,
+    how: str = "left",
+    additional_instructions: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 750,
+    n_runs: int = 1,
+    reset_files: bool = False,
+    use_dummy: bool = False,
+    file_name: str = "merge_responses.csv",
+    use_embeddings: bool = True,
+    short_list_len: int = 25,
+    long_list_len: int = 500,
+    max_timeout: Optional[float] = None,
+    **cfg_kwargs,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Merge`."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = MergeConfig(
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        n_runs=n_runs,
+        use_dummy=use_dummy,
+        max_timeout=max_timeout,
+        additional_instructions=additional_instructions,
+        use_embeddings=use_embeddings,
+        short_list_len=short_list_len,
+        long_list_len=long_list_len,
+        **cfg_kwargs,
+    )
+    return await Merge(cfg).run(
+        df_left,
+        df_right,
+        on=on,
+        left_on=left_on,
+        right_on=right_on,
+        how=how,
         reset_files=reset_files,
     )
 

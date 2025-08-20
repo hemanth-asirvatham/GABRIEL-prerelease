@@ -25,6 +25,8 @@ _lazy_imports = {
     "CountyCounter": ".county_counter",
     "Compare": ".compare",
     "CompareConfig": ".compare",
+    "Merge": ".merge",
+    "MergeConfig": ".merge",
 }
 
 __all__ = list(_lazy_imports.keys())
