@@ -41,7 +41,7 @@ def test_merge_api(tmp_path):
 @patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
 def test_merge_trailing_space(mock_resp, tmp_path):
     mock_resp.return_value = pd.DataFrame(
-        {"Identifier": ["merge_00000"], "Response": ['{"apple ": "Apple"}']}
+        {"Identifier": ["merge_00_00000"], "Response": ['{"apple ": "Apple"}']}
     )
     cfg = MergeConfig(save_dir=str(tmp_path), use_embeddings=False)
     task = Merge(cfg)
@@ -54,7 +54,7 @@ def test_merge_trailing_space(mock_resp, tmp_path):
 @patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
 def test_merge_html_entities(mock_resp, tmp_path):
     mock_resp.return_value = pd.DataFrame(
-        {"Identifier": ["merge_00000"], "Response": ['{"B. Pôssas": "B. Pôssas"}']}
+        {"Identifier": ["merge_00_00000"], "Response": ['{"B. Pôssas": "B. Pôssas"}']}
     )
     cfg = MergeConfig(save_dir=str(tmp_path), use_embeddings=False)
     task = Merge(cfg)
@@ -62,3 +62,22 @@ def test_merge_html_entities(mock_resp, tmp_path):
     df2 = pd.DataFrame({"val": [1], "term": ["B. P&#244;ssas"]})
     merged = asyncio.run(task.run(df1, df2, on="term"))
     assert merged["val"].iloc[0] == 1
+
+
+@patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
+def test_merge_max_attempts(mock_resp, tmp_path):
+    mock_resp.side_effect = [
+        pd.DataFrame({"Identifier": ["merge_00_00000"], "Response": ['{"apple": "Apple"}']}),
+        pd.DataFrame({"Identifier": ["merge_01_00000"], "Response": ['{"banana": "Banana"}']}),
+    ]
+    cfg = MergeConfig(
+        save_dir=str(tmp_path),
+        use_embeddings=False,
+        short_list_len=1,
+        max_attempts=2,
+    )
+    task = Merge(cfg)
+    df1 = pd.DataFrame({"term": ["apple", "banana"]})
+    df2 = pd.DataFrame({"val": [1, 2], "term": ["Apple", "Banana"]})
+    merged = asyncio.run(task.run(df1, df2, on="term"))
+    assert set(merged["val"].dropna()) == {1, 2}
