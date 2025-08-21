@@ -86,7 +86,7 @@ Compile all relevant differences; be thorough.
 
 When listing differences, explicitly note whether "square" or "circle" shows more or less of the attribute. For example, say "circle has more X" or "square lacks Y".
 Each extracted term should be a directional statement (e.g. "square exhibits strong communication amongst colleagues", "circle uses lots of first person perspective", "square involves more chronic health issues", "complications from type 2 diabetes seen in square", "circle has no direct quotes from evidence", etc) rather than an "X vs Y" phrase.
-Strong preference for descriptive, highly specific, and directional terms - avoid vague and broad terms, and terms where it is unclear what it means for an entry to have more or less of the term.
+Strong preference for descriptive, highly specific, and directional terms-avoid vague and broad terms, and terms where it is unclear what it means for an entry to have more or less of the term.
 Again: all about differences. An attribute shown in one entry but not the other is a difference. An attribute shown to a greater extent in one entry than the other is a difference.
 
 Shortened example output:
@@ -97,8 +97,7 @@ Shortened example output:
 }
 
 {% else %}
-Your task is to list concise, mutually exclusive terms or short phrases that best explain how entry "circle" is similar to entry
-"square".
+Your task is to list concise, mutually exclusive terms or short phrases that best explain how entry "circle" is similar to entry "square".
 These terms should be specific and reflect clear similarities observable between these particular entries.
 There can be any number of terms from none up; do not invent terms if there is no meaningful similarity.
 Compile all relevant similarities; be thorough.
@@ -112,10 +111,10 @@ Shortened example output:
 
 {% endif %}
 
-
 Don't be vague or generic. Be precise and parsimonious.
 Each term must have a brief justification, directly quoting/using evidence from the entries where relevant.
-No terms, one term, three, six, many terms may apply - don't skip any applicable terms but output zero/few if that is the correct choice.
+No terms, one term, three, six, many terms may apply-don't skip any applicable terms but output zero/few if that is the correct choice.
+Avoid trivial and pedantic terms; only substantive, meaningful terms-zero/fewer terms better than pointless trivialities.
 
 Output JSON only, mapping each term to a 1-3 sentence justification:
 {
