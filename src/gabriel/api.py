@@ -1,7 +1,7 @@
 import asyncio
 import os
 import pandas as pd
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 from .tasks import (
     Rate,
@@ -25,6 +25,8 @@ from .tasks import (
     DeduplicateConfig,
     Bucket,
     BucketConfig,
+    Discover,
+    DiscoverConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -421,6 +423,68 @@ async def bucket(
     return await Bucket(cfg).run(
         df,
         column_name,
+        reset_files=reset_files,
+    )
+
+
+async def discover(
+    df: pd.DataFrame,
+    *,
+    column_name: Optional[str] = None,
+    circle_column_name: Optional[str] = None,
+    square_column_name: Optional[str] = None,
+    save_dir: str,
+    additional_instructions: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 400,
+    n_runs: int = 1,
+    min_frequency: float = 0.6,
+    bucket_count: int = 10,
+    differentiate: bool = True,
+    max_words_per_call: int = 1000,
+    max_categories_per_call: int = 8,
+    use_dummy: bool = False,
+    modality: str = "text",
+    reasoning_effort: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
+    reset_files: bool = False,
+    **cfg_kwargs,
+) -> Dict[str, pd.DataFrame]:
+    """Convenience wrapper for :class:`gabriel.tasks.Discover`.
+
+    Returns intermediate DataFrames from each step of the discovery pipeline.
+    When ``circle_column_name`` and ``square_column_name`` are provided,
+    classification is performed twice (once evaluating the circle entry and
+    once the square entry) using prompts that contain both entries.
+    A ``summary`` key is included in the result describing label prevalence
+    differences between the two directions (``difference_pct`` expresses
+    circle minus square in percentage points).
+    """
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = DiscoverConfig(
+        save_dir=save_dir,
+        model=model,
+        n_parallels=n_parallels,
+        n_runs=n_runs,
+        min_frequency=min_frequency,
+        bucket_count=bucket_count,
+        additional_instructions=additional_instructions,
+        differentiate=differentiate,
+        max_words_per_call=max_words_per_call,
+        max_categories_per_call=max_categories_per_call,
+        use_dummy=use_dummy,
+        modality=modality,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        **cfg_kwargs,
+    )
+    return await Discover(cfg).run(
+        df,
+        column_name=column_name,
+        circle_column_name=circle_column_name,
+        square_column_name=square_column_name,
         reset_files=reset_files,
     )
 
