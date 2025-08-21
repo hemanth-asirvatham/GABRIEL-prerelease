@@ -16,7 +16,7 @@ Follow the specific definitions of the categories in assigning them to snippets/
 {% else %}
 Consider the broad topic alluded to in these user instructions:
 BEGIN USER INSTRUCTIONS
-{{ user_instructions }}
+{{ additional_instructions }}
 END USER INSTRUCTIONS
 Consider the specific category labels that fall under the broad topic alluded to in the user instructions.
 For example, if the broad topic is Bible verses, the specific category labels would be specific Bible verses like "John 3:16" or "Psalm 23:1".
@@ -60,9 +60,10 @@ Output a JSON in the following format:
 }
 
 {% if categories %}
-Again: the categories you are marking are: {{ categories.keys() }}
+Again: the categories you are marking are: {{ categories.keys() | shuffled }}
 
 Ensure you input these category names verbatim into the JSON.
+Exact spelling/capitalization/underscoring/any other formatting of the category names must be preserved.
 Carefully consider the entire text for each and every category; do not skip any (though it is possible that some categories are not present in the text, in which case you should have the category name in the JSON but an empty list of snippets/subsections).
 {% endif %}
 It is possible and often the case that text will overlap between categories, in which case you should mark the text for each applicable category separately. The same area of text can be marked for multiple categories.
@@ -87,9 +88,4 @@ If the user indicates a different scope of how large the snippets/subsections sh
 BEGIN ADDITIONAL INSTRUCTIONS
 {{ additional_instructions }}
 END ADDITIONAL INSTRUCTIONS
-{% endif %}
-
-{% if categories %}
-Once more, the categories you are marking are: {{ categories.keys() }}
-Remember these category names must be output verbatim in the JSON; exact spelling and capitalization and underscoring and any other formatting must be preserved.
 {% endif %}
