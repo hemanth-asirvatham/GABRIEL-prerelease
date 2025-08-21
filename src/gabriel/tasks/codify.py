@@ -493,10 +493,9 @@ class Codify:
         column_name: str,
         *,
         categories: Optional[Dict[str, str]] = None,
-        user_instructions: str = "",
+        additional_instructions: str = "",
         max_words_per_call: int = 1000,
         max_categories_per_call: int = 8,
-        additional_instructions: str = "",
         n_parallels: int = 750,
         model: str = "gpt-5-mini",
         save_dir: str,
@@ -514,10 +513,11 @@ class Codify:
             df: Input dataframe
             column_name: Column containing text to code
             categories: Dict mapping category names to their definitions (optional)
-            user_instructions: Instructions for dynamic category discovery when categories is None
+            additional_instructions: Additional instructions for the prompt. When
+                ``categories`` is ``None``, this must describe the broad topic for
+                dynamic category discovery.
             max_words_per_call: Maximum words per API call (default 1000)
             max_categories_per_call: Maximum categories per API call (default 8)
-            additional_instructions: Additional instructions for the prompt
             n_parallels: Number of parallel API calls
             model: Model to use for coding
             save_dir: Directory for saving results
@@ -535,10 +535,21 @@ class Codify:
         save_dir = str(expanded)
 
         df_proc = df.reset_index(drop=True).copy()
-        
+
+        # Normalize additional instructions so empty strings count as missing
+        if additional_instructions is not None:
+            additional_instructions = additional_instructions.strip()
+        if not additional_instructions:
+            additional_instructions = None
+
         # Determine if we're in dynamic category mode
         dynamic_mode = categories is None
-        
+
+        if dynamic_mode and not additional_instructions:
+            raise ValueError(
+                "additional_instructions must be provided when categories is None"
+            )
+
         # Create category batches for processing
         if dynamic_mode:
             # In dynamic mode, we have only one "batch" per text chunk
@@ -568,11 +579,10 @@ class Codify:
                 # Process each category batch for this chunk
                 for batch_idx, category_batch in enumerate(category_batches):
                     if dynamic_mode:
-                        # Dynamic mode: use user_instructions
+                        # Dynamic mode: use additional instructions as topic guidance
                         prompt = template.render(
                             text=chunk,
                             categories=None,
-                            user_instructions=user_instructions,
                             additional_instructions=additional_instructions,
                         )
                         batch_suffix = ""
@@ -582,7 +592,6 @@ class Codify:
                         prompt = template.render(
                             text=chunk,
                             categories=batch_categories,
-                            user_instructions="",
                             additional_instructions=additional_instructions,
                         )
                         batch_suffix = f"_batch_{batch_idx}"
