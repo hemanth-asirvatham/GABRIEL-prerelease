@@ -23,7 +23,7 @@ class CompareConfig:
     n_runs: int = 1
     use_dummy: bool = False
     max_timeout: Optional[float] = None
-    differentiation: bool = True
+    differentiate: bool = True
     additional_instructions: Optional[str] = None
     modality: str = "text"
     reasoning_effort: Optional[str] = None
@@ -79,7 +79,7 @@ class Compare:
                 self.template.render(
                     entry_circle=circle_text,
                     entry_square=square_text,
-                    differentiation=self.cfg.differentiation,
+                    differentiate=self.cfg.differentiate,
                     additional_instructions=self.cfg.additional_instructions or "",
                     circle_first=True,
                     modality=self.cfg.modality,
