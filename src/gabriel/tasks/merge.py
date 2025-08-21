@@ -110,6 +110,9 @@ class Merge:
         short_uniques, short_groups, short_norm_map = self._deduplicate(short_df[short_key])
         long_uniques, long_groups, long_norm_map = self._deduplicate(long_df[long_key])
 
+        # Build a global norm→representative map for the left-hand keys.
+        global_short_norm_map = {self._normalize(s): s for s in short_uniques}
+
         use_embeddings = self.cfg.use_embeddings and len(long_uniques) >= self.cfg.long_list_len
 
         clusters: List[List[str]] = []
@@ -216,11 +219,9 @@ class Merge:
 
         matches: Dict[str, str] = {}
         for clus, res in zip(clusters, parsed):
-            clus_norm = {self._normalize(s): s for s in clus}
-            # Handle common cases where the model wraps the dict in a list or
-            # returns it as a JSON-encoded string.
+            # Flatten lists/JSON strings into a single dict
             if isinstance(res, list):
-                combined: Dict[str, str] = {}
+                combined = {}
                 for item in res:
                     if isinstance(item, dict):
                         combined.update(item)
@@ -238,8 +239,9 @@ class Merge:
                         continue
                     k_norm = self._normalize(k)
                     v_norm = self._normalize(v)
-                    if k_norm in clus_norm and v_norm in long_norm_map:
-                        short_rep = clus_norm[k_norm]
+                    # Look up the key in the global map rather than restricting to the current cluster
+                    if k_norm in global_short_norm_map and v_norm in long_norm_map:
+                        short_rep = global_short_norm_map[k_norm]
                         long_rep = long_norm_map[v_norm]
                         matches[short_rep] = long_rep
 
