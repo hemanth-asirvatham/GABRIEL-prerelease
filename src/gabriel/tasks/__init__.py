@@ -29,6 +29,8 @@ _lazy_imports = {
     "MergeConfig": ".merge",
     "Deduplicate": ".deduplicate",
     "DeduplicateConfig": ".deduplicate",
+    "Bucket": ".bucket",
+    "BucketConfig": ".bucket",
 }
 
 __all__ = list(_lazy_imports.keys())
