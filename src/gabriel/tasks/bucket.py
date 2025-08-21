@@ -19,7 +19,7 @@ from ..utils import safest_json
 class BucketConfig:
     """Configuration for :class:`Bucket`."""
 
-    bucket_count: int
+    bucket_count: int = 10
     save_dir: str = "buckets"
     file_name: str = "bucket_definitions.csv"
     model: str = "gpt-5-mini"
