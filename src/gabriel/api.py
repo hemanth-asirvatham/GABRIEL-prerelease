@@ -444,6 +444,7 @@ async def merge(
     use_embeddings: bool = True,
     short_list_len: int = 25,
     long_list_len: int = 500,
+    max_attempts: int = 1,
     max_timeout: Optional[float] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
@@ -463,6 +464,7 @@ async def merge(
         use_embeddings=use_embeddings,
         short_list_len=short_list_len,
         long_list_len=long_list_len,
+        max_attempts=max_attempts,
         **cfg_kwargs,
     )
     return await Merge(cfg).run(
