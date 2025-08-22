@@ -119,3 +119,28 @@ def test_merge_progress_tracking(mock_resp, tmp_path):
     assert list(progress["matches_this_round"]) == [1, 1]
     assert list(progress["total_matches"]) == [1, 2]
     assert list(progress["remaining"]) == [1, 0]
+
+
+@patch("gabriel.tasks.merge.get_all_embeddings", new_callable=AsyncMock)
+@patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
+def test_merge_auto_match(mock_resp, mock_emb, tmp_path):
+    async def dummy_get_all_embeddings(texts, identifiers=None, **kwargs):
+        mapping = {
+            "apple": [1.0, 0.0],
+            "banana": [0.0, 1.0],
+            "Apple": [1.0, 0.0],
+            "Banana": [0.0, 1.0],
+            "Pear": [-1.0, 0.0],
+        }
+        return {t: mapping[t] for t in texts}
+
+    mock_emb.side_effect = dummy_get_all_embeddings
+    cfg = MergeConfig(
+        save_dir=str(tmp_path), use_embeddings=True, use_dummy=False, long_list_len=1
+    )
+    task = Merge(cfg)
+    df1 = pd.DataFrame({"term": ["apple", "banana"]})
+    df2 = pd.DataFrame({"val": [1, 2, 3], "term": ["Apple", "Banana", "Pear"]})
+    merged = asyncio.run(task.run(df1, df2, on="term"))
+    assert set(merged["val"].dropna()) == {1, 2}
+    assert mock_resp.await_count == 0

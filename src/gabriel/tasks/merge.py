@@ -34,9 +34,12 @@ class MergeConfig:
     additional_instructions: Optional[str] = None
     use_embeddings: bool = True
     short_list_len: int = 20
-    long_list_len: int = 500
+    long_list_len: int = 400
     max_attempts: int = 5
     short_list_multiplier: float = 0.5
+    auto_match_threshold: float = 0.85
+    use_best_auto_match: bool = True
+    candidate_scan_chunks: int = 5
 
 
 class Merge:
@@ -145,13 +148,34 @@ class Merge:
                 verbose=False,
             )
 
-        def _build_groups(remaining_short: List[str], short_len: int) -> Tuple[List[List[str]], List[List[str]]]:
-            clusters: List[List[str]] = []
+        matches: Dict[str, str] = {}
+        remaining = short_uniques[:]
+        if use_embeddings and self.cfg.auto_match_threshold > 0:
+            short_matrix = np.array([short_emb[s] for s in remaining], dtype=float)
+            long_matrix = np.array([long_emb[t] for t in long_uniques], dtype=float)
+            short_norms = np.linalg.norm(short_matrix, axis=1) + 1e-8
+            long_norms = np.linalg.norm(long_matrix, axis=1) + 1e-8
+            sims = (short_matrix @ long_matrix.T) / (short_norms[:, None] * long_norms[None, :])
+            for i, s in enumerate(remaining):
+                row = sims[i]
+                above = np.where(row >= self.cfg.auto_match_threshold)[0]
+                if len(above) == 1:
+                    matches[s] = long_uniques[above[0]]
+                elif len(above) > 1 and self.cfg.use_best_auto_match:
+                    best_idx = above[np.argmax(row[above])]
+                    matches[s] = long_uniques[best_idx]
+            remaining = [s for s in remaining if s not in matches]
+
+        def _build_groups(
+            remaining_short: List[str], short_len: int, extra_scans: int = 1
+        ) -> Tuple[List[List[str]], List[List[str]]]:
+            clusters_out: List[List[str]] = []
             candidates: List[List[str]] = []
             if use_embeddings and short_emb:
                 arr = np.array([short_emb[s] for s in remaining_short], dtype=float)
                 k = max(1, int(np.ceil(len(remaining_short) / short_len)))
                 centroids, labels = kmeans2(arr, k, minit="points")
+                cluster_sets: List[List[str]] = []
                 centroid_list: List[np.ndarray] = []
                 for cluster_id in range(k):
                     members = [remaining_short[i] for i, lbl in enumerate(labels) if lbl == cluster_id]
@@ -159,37 +183,51 @@ class Merge:
                         continue
                     for j in range(0, len(members), short_len):
                         subset = members[j : j + short_len]
-                        clusters.append(subset)
+                        cluster_sets.append(subset)
                         centroid_list.append(np.mean([short_emb[m] for m in subset], axis=0))
 
                 long_matrix = np.array([long_emb[t] for t in long_uniques], dtype=float)
                 long_norms = np.linalg.norm(long_matrix, axis=1) + 1e-8
-                for cent in centroid_list:
+                for subset, cent in zip(cluster_sets, centroid_list):
                     sims = long_matrix @ cent / (np.linalg.norm(cent) * long_norms)
-                    top_idx = np.argsort(sims)[::-1][: self.cfg.long_list_len]
-                    candidate = [long_uniques[i] for i in top_idx]
-                    candidates.append(candidate)
+                    order = np.argsort(sims)[::-1]
+                    for scan in range(extra_scans):
+                        start = scan * self.cfg.long_list_len
+                        end = start + self.cfg.long_list_len
+                        idx_slice = order[start:end]
+                        if len(idx_slice) == 0:
+                            continue
+                        candidate = [long_uniques[i] for i in idx_slice]
+                        candidates.append(candidate)
+                        clusters_out.append(subset)
             else:
                 short_sorted = sorted(remaining_short, key=lambda x: x.lower())
                 long_sorted = sorted(long_uniques, key=lambda x: x.lower())
-                for i in range(0, len(short_sorted), short_len):
-                    clusters.append(short_sorted[i : i + short_len])
                 if len(long_sorted) <= self.cfg.long_list_len:
-                    candidates = [list(long_sorted) for _ in clusters]
+                    base_candidate = list(long_sorted)
+                    for i in range(0, len(short_sorted), short_len):
+                        subset = short_sorted[i : i + short_len]
+                        for _ in range(extra_scans):
+                            clusters_out.append(subset)
+                            candidates.append(base_candidate)
                 else:
                     import bisect
 
                     lower_long = [s.lower() for s in long_sorted]
-                    for clus in clusters:
-                        mid = clus[len(clus) // 2].lower()
+                    for i in range(0, len(short_sorted), short_len):
+                        subset = short_sorted[i : i + short_len]
+                        mid = subset[len(subset) // 2].lower()
                         idx = bisect.bisect_left(lower_long, mid)
                         start = max(0, idx - self.cfg.long_list_len // 2)
-                        end = start + self.cfg.long_list_len
-                        if end > len(long_sorted):
-                            end = len(long_sorted)
-                            start = max(0, end - self.cfg.long_list_len)
-                        candidates.append(list(long_sorted[start:end]))
-            return clusters, candidates
+                        for scan in range(extra_scans):
+                            scan_start = start + scan * self.cfg.long_list_len
+                            scan_end = scan_start + self.cfg.long_list_len
+                            if scan_end > len(long_sorted):
+                                scan_end = len(long_sorted)
+                                scan_start = max(0, scan_end - self.cfg.long_list_len)
+                            clusters_out.append(subset)
+                            candidates.append(list(long_sorted[scan_start:scan_end]))
+            return clusters_out, candidates
 
         def _parse_response(res: Any) -> Dict[str, str]:
             """Normalize raw model output into a dictionary."""
@@ -214,8 +252,6 @@ class Merge:
                 return {k: v for k, v in res.items() if isinstance(k, str) and isinstance(v, str)}
             return {}
 
-        matches: Dict[str, str] = {}
-        remaining = short_uniques[:]
         save_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
         progress_path = os.path.join(self.cfg.save_dir, "merge_progress.csv")
         if reset_files and os.path.exists(progress_path):
@@ -235,7 +271,8 @@ class Merge:
                 clusters = data.get("clusters", [])
                 candidates = data.get("candidates", [])
             else:
-                clusters, candidates = _build_groups(remaining, cur_short_len)
+                extra = self.cfg.candidate_scan_chunks if attempt >= 2 else 1
+                clusters, candidates = _build_groups(remaining, cur_short_len, extra)
                 with open(group_path, "w", encoding="utf-8") as f:
                     json.dump({"clusters": clusters, "candidates": candidates}, f)
 
@@ -306,10 +343,25 @@ class Merge:
                         continue
                     max_count = max(counts.values())
                     top_candidates = [v for v, c in counts.items() if c == max_count]
+                    chosen: Optional[str] = None
                     if len(top_candidates) == 1:
-                        v = top_candidates[0]
+                        chosen = top_candidates[0]
+                    elif use_embeddings and short_emb and long_emb:
+                        s_vec = np.array(short_emb.get(s, []), dtype=float)
+                        if s_vec.size:
+                            sims: Dict[str, float] = {}
+                            s_norm_val = np.linalg.norm(s_vec) + 1e-8
+                            for cand in top_candidates:
+                                l_vec = np.array(long_emb.get(cand, []), dtype=float)
+                                if l_vec.size:
+                                    sims[cand] = float(
+                                        s_vec @ l_vec / (s_norm_val * (np.linalg.norm(l_vec) + 1e-8))
+                                    )
+                            if sims:
+                                chosen = max(sims, key=sims.get)
+                    if chosen:
                         k_norm = s_norm
-                        v_norm = self._normalize(v)
+                        v_norm = self._normalize(chosen)
                         if k_norm in global_short_norm_map and v_norm in long_norm_map:
                             short_rep = global_short_norm_map[k_norm]
                             long_rep = long_norm_map[v_norm]
