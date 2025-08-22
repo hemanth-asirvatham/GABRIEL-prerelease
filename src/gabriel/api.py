@@ -549,7 +549,7 @@ async def merge(
     use_embeddings: bool = True,
     short_list_len: int = 25,
     long_list_len: int = 500,
-    max_attempts: int = 1,
+    max_attempts: int = 5,
     max_timeout: Optional[float] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
