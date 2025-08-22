@@ -5,7 +5,7 @@ END SHORT LIST
 
 Your task is to find matches for each short list term in the long list:
 BEGIN LONG LIST
-{{ long_list | tojson(indent=2) }}
+{{ long_list | tojson(indent=0) }}
 END LONG LIST
 
 For each short list term, find a suitable match in the long list that is as close as possible in meaning/substance to the short list term.
@@ -15,6 +15,9 @@ If no suitable match, do not include that short list term in your output.
 Only output short list/long list term pairs that are genuine matches.
 If multiple long list terms are good matches for a given short list term, output only the single best match.
 A single long list term can be used for multiple short list terms separately, if you are confident that is the best match for each (e.g. both "olmsted" and "hennepin" map to "minnesota").
+Pay attention to abbreviations/acronyms and their potential expanded forms; ensure match makes logical sense.
+Don't include short terms in output unless high confidence in match-no great options means no match.
+No weak/poor matches, but aim to match every single short list term that has a high confidence match.
 
 Output JSON only, in following format:
 {
@@ -24,12 +27,12 @@ Output JSON only, in following format:
 }
 
 Again, the short list terms you are finding matches for are: {{ short_list.keys() | shuffled }}
-Assess EVERY short list term; include all that you find matches for in your output.
+Assess EVERY short list term thoroughly; include all with confident matches in your output.
 Don't include any short list terms with no match, but be exhaustive in your search before deciding there is no match.
 Term names from both lists must be taken verbatim, with absolutely no modification.
 Same case, same spelling, same punctuation, same formatting.
 It is imperative your keys are verbatim from the short list specifically, while the values are verbatim from the long list.
-Any unique subtleties in spelling, formatting, etc must be preserved specific to each list for the mapping to work.
+Any unique subtleties in spelling, formatting, etc must be preserved EXACTLY AS GIVEN and SPECIFIC to its corresponding list for mapping to work.
 
 {% if additional_instructions %}
 The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate yourself).
