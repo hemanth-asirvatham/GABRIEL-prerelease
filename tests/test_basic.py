@@ -2,14 +2,11 @@ import asyncio
 import pandas as pd
 
 from gabriel.core.prompt_template import PromptTemplate
-from gabriel.utils.teleprompter import Teleprompter
 from gabriel.utils import openai_utils, safest_json
 from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig
 from gabriel.tasks.extract import Extract, ExtractConfig
-from gabriel.tasks.regional import Regional, RegionalConfig
-from gabriel.tasks.county_counter import CountyCounter
 import gabriel
 
 
@@ -30,12 +27,6 @@ def test_shuffled_dict_rendering():
     rendered = tmpl.render(text="x", attributes={"clarity": "Is the text clear?"})
     assert "OrderedDict" not in rendered
     assert "{" in rendered and "}" in rendered
-
-
-def test_teleprompter():
-    tele = Teleprompter()
-    out = tele.generic_elo_prompt(text_circle="a", text_square="b", attributes=["one"], instructions="test")
-    assert "test" in out
 
 
 def test_get_response_dummy():
@@ -231,30 +222,7 @@ def test_classify_parse_dict(tmp_path):
     task = Classify(cfg)
     parsed = asyncio.run(task._parse({"yes": True}, ["yes"]))
     assert parsed["yes"] is True
-
-
-def test_regional_dummy(tmp_path):
-    data = pd.DataFrame({"county": ["A", "B"]})
-    cfg = RegionalConfig(save_dir=str(tmp_path), use_dummy=True)
-    task = Regional(data, "county", topics=["economy"], cfg=cfg)
-    df = asyncio.run(task.run())
-    assert "economy" in df.columns
-
-
-def test_county_counter_dummy(tmp_path):
-    data = pd.DataFrame({"county": ["A"], "fips": ["00001"]})
-    counter = CountyCounter(
-        data,
-        county_col="county",
-        topics=["econ"],
-        fips_col="fips",
-        save_dir=str(tmp_path),
-        use_dummy=True,
-        n_elo_rounds=1,
-    )
-    df = asyncio.run(counter.run())
-    assert "econ" in df.columns
-
+    
 
 def test_api_wrappers(tmp_path):
     df = pd.DataFrame({"txt": ["hello"]})
