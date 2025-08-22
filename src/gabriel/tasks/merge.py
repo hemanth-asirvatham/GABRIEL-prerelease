@@ -26,7 +26,7 @@ class MergeConfig:
 
     save_dir: str = "merge"
     file_name: str = "merge_responses.csv"
-    model: str = "gpt-5-mini"
+    model: str = "gpt-5-nano"
     n_parallels: int = 750
     n_runs: int = 1
     use_dummy: bool = False
