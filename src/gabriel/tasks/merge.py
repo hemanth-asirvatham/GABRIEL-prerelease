@@ -33,11 +33,11 @@ class MergeConfig:
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None
     use_embeddings: bool = True
-    short_list_len: int = 20
-    long_list_len: int = 400
+    short_list_len: int = 16
+    long_list_len: int = 256
     max_attempts: int = 4
     short_list_multiplier: float = 0.5
-    auto_match_threshold: float = 0.7
+    auto_match_threshold: float = 0.75
     use_best_auto_match: bool = True
     candidate_scan_chunks: int = 5
 
