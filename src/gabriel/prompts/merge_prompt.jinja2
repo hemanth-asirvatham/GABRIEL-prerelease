@@ -7,6 +7,7 @@ Your task is to find matches for each short list term in the long list:
 BEGIN LONG LIST
 {{ long_list }}
 END LONG LIST
+Consider the long list options thoroughly-beginning, middle, end. Don't skim.
 
 For each short list term, find a suitable match in the long list that is as close as possible in meaning/substance to the short list term.
 Think of this as an intelligent fuzzy matching task - it might be as obvious as a different spelling/formatting of the same term (e.g. "Mary Monroe" and "Marilyn Monroe"; "John Kennedy" and "JFK"; "cook" and "Cook County, IL").
@@ -17,8 +18,8 @@ Output only the single best match or "no certain match".
 A single long list term can be used for multiple short list terms separately, if you are confident that is the best match for each (e.g. "minnesota" for both "olmsted" and "hennepin").
 Abbreviations/acronyms: ensure match is logical expansion.
 Especially if term is short or acronym, only match if certain.
-Use "no certain match" unless very high confidence in match-no great match means "no certain match", nothing forced.
-No weak/poor matches, but aim to match every short list term that has a great match.
+Use "no certain match" unless extremely confident in match.
+Don't force mediocre matches; default to "no certain match" unless you see a definitive match.
 
 Output JSON only, in following format:
 {
