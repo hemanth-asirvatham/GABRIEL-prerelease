@@ -33,11 +33,11 @@ class MergeConfig:
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None
     use_embeddings: bool = True
-    short_list_len: int = 25
-    long_list_len: int = 500
-    max_attempts: int = 5
+    short_list_len: int = 20
+    long_list_len: int = 400
+    max_attempts: int = 4
     short_list_multiplier: float = 0.5
-    auto_match_threshold: float = 0.7
+    auto_match_threshold: float = 0.65
     use_best_auto_match: bool = True
     candidate_scan_chunks: int = 5
 
@@ -271,7 +271,7 @@ class Merge:
                 clusters = data.get("clusters", [])
                 candidates = data.get("candidates", [])
             else:
-                extra = self.cfg.candidate_scan_chunks if attempt >= 2 else 1
+                extra = self.cfg.candidate_scan_chunks if attempt >= 1 else 1
                 clusters, candidates = _build_groups(remaining, cur_short_len, extra)
                 with open(group_path, "w", encoding="utf-8") as f:
                     json.dump({"clusters": clusters, "candidates": candidates}, f)
