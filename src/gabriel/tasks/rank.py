@@ -47,7 +47,8 @@ from pathlib import Path
 import random
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
+import json
 
 import numpy as np
 import pandas as pd
@@ -623,6 +624,246 @@ class Rank:
             item_ids, texts_by_id, current_ratings, se_full, mpr
         )
 
+    async def _catch_up_existing_rounds(
+        self,
+        new_ids: List[str],
+        round_indices: List[int],
+        item_ids: List[str],
+        texts_by_id: Dict[str, str],
+        images_by_id: Dict[str, List[str]],
+        audio_by_id: Dict[str, List[Dict[str, str]]],
+        attr_batches: List[List[str]],
+        attr_keys: List[str],
+        history_pairs: Dict[str, List[Tuple[str, str]]],
+        ratings: Dict[str, Dict[str, float]],
+        se_store: Dict[str, Dict[str, float]],
+        base_name: str,
+        df_proc: pd.DataFrame,
+        _write_checkpoint: Callable[[], None],
+        current_ratings: Optional[Dict[str, float]],
+        se_agg_local: Optional[Dict[str, float]],
+        reset_files: bool,
+        **kwargs: Any,
+    ) -> None:
+        if not new_ids:
+            return
+        for rnd in round_indices:
+            round_path = os.path.join(self.cfg.save_dir, f"{base_name}_round{rnd}.csv")
+            if not os.path.exists(round_path):
+                continue
+            try:
+                df_round = pd.read_csv(round_path)
+            except Exception:
+                continue
+            counts: Dict[str, int] = {}
+            if {"IdA", "IdB"}.issubset(df_round.columns):
+                for a, b in zip(df_round["IdA"], df_round["IdB"]):
+                    counts[str(a)] = counts.get(str(a), 0) + 1
+                    counts[str(b)] = counts.get(str(b), 0) + 1
+            else:
+                for ident in df_round.get("Identifier", []):
+                    parts = str(ident).split("|")
+                    if len(parts) != 5:
+                        continue
+                    _, _, _, id_a, id_b = parts
+                    counts[id_a] = counts.get(id_a, 0) + 1
+                    counts[id_b] = counts.get(id_b, 0) + 1
+            pairs_needed: List[Tuple[str, str]] = []
+            for nid in new_ids:
+                needed = self.cfg.matches_per_round - counts.get(nid, 0)
+                if needed <= 0:
+                    continue
+                opponents = [i for i in item_ids if i != nid]
+                self.rng.shuffle(opponents)
+                for opp in opponents[:needed]:
+                    pairs_needed.append((nid, opp))
+            if not pairs_needed:
+                continue
+            prompts: List[str] = []
+            ids: List[str] = []
+            pair_images: Dict[str, List[str]] = {}
+            pair_audio: Dict[str, List[Dict[str, str]]] = {}
+            meta_map: Dict[str, Tuple[int, int, str, str]] = {}
+            id_to_circle_first: Dict[str, bool] = {}
+            for batch_idx, batch in enumerate(attr_batches):
+                attr_def_map = (
+                    {a: self.cfg.attributes[a] for a in batch}
+                    if isinstance(self.cfg.attributes, dict)
+                    else {a: "" for a in batch}
+                )
+                for pair_idx, (id_a, id_b) in enumerate(pairs_needed):
+                    raw_ident = f"catchup|{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}"
+                    sha8 = hashlib.sha1(raw_ident.encode()).hexdigest()[:8]
+                    circle_first_flag = (
+                        self.cfg.circle_first
+                        if self.cfg.circle_first is not None
+                        else self.rng.random() < 0.5
+                    )
+                    id_to_circle_first[sha8] = circle_first_flag
+                    prompts.append(
+                        self.template.render(
+                            entry_circle=texts_by_id[id_a],
+                            entry_square=texts_by_id[id_b],
+                            attributes=attr_def_map,
+                            additional_instructions=self.cfg.additional_instructions or "",
+                            modality=self.cfg.modality,
+                            circle_first=circle_first_flag,
+                        )
+                    )
+                    ids.append(sha8)
+                    meta_map[sha8] = (batch_idx, pair_idx, id_a, id_b)
+                    if images_by_id:
+                        imgs = []
+                        ia = images_by_id.get(id_a, [])
+                        ib = images_by_id.get(id_b, [])
+                        if circle_first_flag:
+                            if ia:
+                                imgs.extend(ia)
+                            if ib:
+                                imgs.extend(ib)
+                        else:
+                            if ib:
+                                imgs.extend(ib)
+                            if ia:
+                                imgs.extend(ia)
+                        if imgs:
+                            pair_images[sha8] = imgs
+                    if audio_by_id:
+                        auds = []
+                        aa = audio_by_id.get(id_a, [])
+                        ab = audio_by_id.get(id_b, [])
+                        if circle_first_flag:
+                            if aa:
+                                auds.extend(aa)
+                            if ab:
+                                auds.extend(ab)
+                        else:
+                            if ab:
+                                auds.extend(ab)
+                            if aa:
+                                auds.extend(aa)
+                        if auds:
+                            pair_audio[sha8] = auds
+            if not prompts:
+                continue
+            resp_df = await get_all_responses(
+                prompts=prompts,
+                identifiers=ids,
+                prompt_images=pair_images or None,
+                prompt_audio=pair_audio or None,
+                n_parallels=self.cfg.n_parallels,
+                model=self.cfg.model,
+                json_mode=self.cfg.modality != "audio",
+                save_path=round_path,
+                reset_files=reset_files,
+                use_dummy=self.cfg.use_dummy,
+                max_timeout=self._MAX_TIMEOUT,
+                max_retries=1,
+                reasoning_effort=self.cfg.reasoning_effort,
+                reasoning_summary=self.cfg.reasoning_summary,
+                **kwargs,
+            )
+            resp_df["Batch"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[0]
+            )
+            resp_df["Pair"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[1]
+            )
+            resp_df["IdA"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[2]
+            )
+            resp_df["IdB"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[3]
+            )
+            resp_df.to_csv(round_path, index=False)
+
+            async def _coerce_dict(raw: Any) -> Dict[str, Any]:
+                obj = await safest_json(raw)
+                if isinstance(obj, dict):
+                    return obj
+                if isinstance(obj, str):
+                    obj2 = await safest_json(obj)
+                    if isinstance(obj2, dict):
+                        return obj2
+                if isinstance(obj, list) and obj:
+                    inner = await safest_json(obj[0])
+                    if isinstance(inner, dict):
+                        return inner
+                return {}
+
+            for ident, resp in zip(resp_df.Identifier, resp_df.Response):
+                meta = meta_map.get(str(ident))
+                if not meta:
+                    continue
+                batch_idx, _, id_a, id_b = meta
+                safe_obj = await _coerce_dict(resp)
+                if not safe_obj:
+                    continue
+                batch = attr_batches[batch_idx]
+                batch_attr_map = {str(k).strip().lower(): k for k in batch}
+                for attr_raw, winner_raw in safe_obj.items():
+                    attr_key_l = str(attr_raw).strip().lower()
+                    if attr_key_l not in batch_attr_map:
+                        continue
+                    real_attr = batch_attr_map[attr_key_l]
+                    val = winner_raw
+                    if isinstance(val, dict) and "winner" in val:
+                        val = val.get("winner")
+                    if isinstance(val, str):
+                        v = val.strip().lower()
+                    else:
+                        v = ""
+                    if v.startswith(("cir", "c", "left", "text a")):
+                        history_pairs[real_attr].append((id_a, id_b))
+                    elif v.startswith(("squ", "b", "right", "text b")):
+                        history_pairs[real_attr].append((id_b, id_a))
+                    elif v.startswith("draw") or v.startswith("insufficient"):
+                        history_pairs[real_attr].append((id_a, id_b))
+                        history_pairs[real_attr].append((id_b, id_a))
+                    else:
+                        continue
+            se_agg_next: Dict[str, float] = {i: 0.0 for i in item_ids}
+            se_agg_counts: Dict[str, int] = {i: 0 for i in item_ids}
+            for attr in attr_keys:
+                outcomes = history_pairs[attr]
+                if len(outcomes) == 0:
+                    continue
+                bt_scores, n_ij, p_ij = self._fit_bt(
+                    item_ids=item_ids,
+                    outcomes=outcomes,
+                    pseudo=self.cfg.learning_rate,
+                    max_iter=self._MAX_ITER,
+                    tol=self._TOL,
+                    return_info=True,
+                )
+                for i in item_ids:
+                    ratings[i][attr] = bt_scores[i]
+                if self.cfg.compute_se:
+                    s_vec = np.array([bt_scores[i] for i in item_ids])
+                    se_vec = self._bt_standard_errors(
+                        s=s_vec,
+                        n_ij=n_ij,
+                        p_ij=p_ij,
+                        ridge=self._SE_RIDGE,
+                    )
+                    for i, se_val in zip(item_ids, se_vec):
+                        se_store[attr][i] = float(se_val)
+                        se_agg_next[i] += float(se_val)
+                        se_agg_counts[i] += 1
+            if self.cfg.compute_se:
+                for i in item_ids:
+                    if se_agg_counts[i] > 0:
+                        se_agg_next[i] /= se_agg_counts[i]
+                    else:
+                        se_agg_next[i] = 1.0
+                self._last_se_agg = se_agg_next
+            for attr in attr_keys:
+                vals = [ratings[i][attr] for i in item_ids]
+                mean_val = float(np.mean(vals))
+                for i in item_ids:
+                    ratings[i][attr] -= mean_val
+            _write_checkpoint()
+
     # ------------------------------------------------------------------
     # Main ranking loop
     # ------------------------------------------------------------------
@@ -669,6 +910,7 @@ class Rank:
         # prepare file paths
         base_name = os.path.splitext(self.cfg.file_name)[0]
         final_path = os.path.join(self.cfg.save_dir, f"{base_name}_final.csv")
+        attr_path = os.path.join(self.cfg.save_dir, f"{base_name}_attrs.json")
 
         kwargs.setdefault("use_web_search", self.cfg.modality == "web")
         if n_runs is not None:
@@ -676,6 +918,37 @@ class Rank:
                 "Parameter 'n_runs' is ignored. Use 'n_rounds' to control the number of iterations. "
                 f"Current n_rounds={self.cfg.n_rounds}."
             )
+
+        df_proc = df.reset_index(drop=True).copy()
+        # assign a stable identifier per row using an sha1 hash
+        df_proc["_id"] = (
+            df_proc[column_name]
+            .astype(str)
+            .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
+        )
+        if reset_files and os.path.exists(attr_path):
+            try:
+                os.remove(attr_path)
+            except Exception:
+                pass
+        if os.path.exists(attr_path):
+            try:
+                with open(attr_path) as f:
+                    saved_attrs = json.load(f)
+                if saved_attrs != self.cfg.attributes:
+                    print(
+                        "[Rank] Loading existing attributes from save directory. If you want to use different attributes, set reset_files=True or use a different save_dir."
+                    )
+                    print(saved_attrs)
+                    self.cfg.attributes = saved_attrs
+            except Exception:
+                pass
+        else:
+            try:
+                with open(attr_path, "w") as f:
+                    json.dump(self.cfg.attributes, f, indent=2)
+            except Exception:
+                pass
         # Determine how many rounds have already been processed when
         # `reset_files` is False.  We look for files named
         # ``<base_name>_round<k>.csv`` to infer progress.  If a final
@@ -684,14 +957,13 @@ class Rank:
         # is ``True``, all progress is ignored and the computation
         # restarts from round 0.
         start_round = 0
+        existing_rounds: List[int] = []
         if not reset_files:
-            existing_rounds: List[int] = []
             try:
                 for fname in os.listdir(self.cfg.save_dir):
                     if fname.startswith(f"{base_name}_round") and fname.endswith(
                         ".csv"
                     ):
-                        # Extract the integer after "round"
                         try:
                             idx_str = fname[
                                 len(base_name) + 6 : -4
@@ -702,27 +974,21 @@ class Rank:
                             continue
             except Exception:
                 existing_rounds = []
-            if existing_rounds:
-                last_completed = max(existing_rounds)
-                # If all rounds have been processed, return the final
-                # results immediately (if the checkpoint exists)
-                if last_completed >= self.cfg.n_rounds - 1 and os.path.exists(
-                    final_path
-                ):
-                    return pd.read_csv(final_path)
-                # Otherwise resume from the next round
-                start_round = last_completed + 1
-        else:
-            # When reset_files is True we will recompute from scratch
-            start_round = 0
-        # copy and prepare the input DataFrame
-        df_proc = df.reset_index(drop=True).copy()
-        # assign a stable identifier per row using an sha1 hash
-        df_proc["_id"] = (
-            df_proc[column_name]
-            .astype(str)
-            .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
-        )
+        if existing_rounds:
+            last_completed = max(existing_rounds)
+            if os.path.exists(final_path):
+                try:
+                    final_df = pd.read_csv(final_path)
+                    final_ids = set(
+                        final_df[column_name]
+                        .astype(str)
+                        .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
+                    )
+                    if last_completed >= self.cfg.n_rounds - 1 and set(df_proc["_id"]) <= final_ids:
+                        return final_df
+                except Exception:
+                    pass
+            start_round = last_completed + 1
         # extract contents and build lookup
         if self.cfg.modality in {"image", "audio"}:
             texts = list(zip(df_proc["_id"], ["" for _ in df_proc[column_name]]))
@@ -962,6 +1228,34 @@ class Rank:
                         ratings[i][attr] -= mean_val
                 # Write checkpoint after this replayed round
                 _write_checkpoint()
+
+        # Determine if any new items were added and need to catch up on existing rounds
+        seen_ids: set[str] = set()
+        for pair_list in history_pairs.values():
+            for a, b in pair_list:
+                seen_ids.add(a)
+                seen_ids.add(b)
+        new_ids = [i for i in item_ids if i not in seen_ids]
+        await self._catch_up_existing_rounds(
+            new_ids=new_ids,
+            round_indices=list(range(start_round)),
+            item_ids=item_ids,
+            texts_by_id=texts_by_id,
+            images_by_id=images_by_id,
+            audio_by_id=audio_by_id,
+            attr_batches=attr_batches,
+            attr_keys=attr_keys,
+            history_pairs=history_pairs,
+            ratings=ratings,
+            se_store=se_store,
+            base_name=base_name,
+            df_proc=df_proc,
+            _write_checkpoint=_write_checkpoint,
+            current_ratings=None,
+            se_agg_local=self._last_se_agg,
+            reset_files=reset_files,
+            **kwargs,
+        )
 
         # Now proceed with new rounds starting from ``start_round``
         for rnd in range(start_round, self.cfg.n_rounds):
