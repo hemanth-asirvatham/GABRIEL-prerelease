@@ -33,9 +33,10 @@ class MergeConfig:
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None
     use_embeddings: bool = True
-    short_list_len: int = 25
+    short_list_len: int = 20
     long_list_len: int = 500
     max_attempts: int = 1
+    short_list_multiplier: float = 0.5
 
 
 class Merge:
@@ -144,20 +145,20 @@ class Merge:
                 verbose=False,
             )
 
-        def _build_groups(remaining_short: List[str]) -> Tuple[List[List[str]], List[List[str]]]:
+        def _build_groups(remaining_short: List[str], short_len: int) -> Tuple[List[List[str]], List[List[str]]]:
             clusters: List[List[str]] = []
             candidates: List[List[str]] = []
             if use_embeddings and short_emb:
                 arr = np.array([short_emb[s] for s in remaining_short], dtype=float)
-                k = max(1, int(np.ceil(len(remaining_short) / self.cfg.short_list_len)))
+                k = max(1, int(np.ceil(len(remaining_short) / short_len)))
                 centroids, labels = kmeans2(arr, k, minit="points")
                 centroid_list: List[np.ndarray] = []
                 for cluster_id in range(k):
                     members = [remaining_short[i] for i, lbl in enumerate(labels) if lbl == cluster_id]
                     if not members:
                         continue
-                    for j in range(0, len(members), self.cfg.short_list_len):
-                        subset = members[j : j + self.cfg.short_list_len]
+                    for j in range(0, len(members), short_len):
+                        subset = members[j : j + short_len]
                         clusters.append(subset)
                         centroid_list.append(np.mean([short_emb[m] for m in subset], axis=0))
 
@@ -166,14 +167,15 @@ class Merge:
                 for cent in centroid_list:
                     sims = long_matrix @ cent / (np.linalg.norm(cent) * long_norms)
                     top_idx = np.argsort(sims)[::-1][: self.cfg.long_list_len]
-                    candidates.append([long_uniques[i] for i in top_idx])
+                    candidate = [long_uniques[i] for i in top_idx]
+                    candidates.append(candidate)
             else:
                 short_sorted = sorted(remaining_short, key=lambda x: x.lower())
                 long_sorted = sorted(long_uniques, key=lambda x: x.lower())
-                for i in range(0, len(short_sorted), self.cfg.short_list_len):
-                    clusters.append(short_sorted[i : i + self.cfg.short_list_len])
+                for i in range(0, len(short_sorted), short_len):
+                    clusters.append(short_sorted[i : i + short_len])
                 if len(long_sorted) <= self.cfg.long_list_len:
-                    candidates = [long_sorted for _ in clusters]
+                    candidates = [list(long_sorted) for _ in clusters]
                 else:
                     import bisect
 
@@ -186,8 +188,31 @@ class Merge:
                         if end > len(long_sorted):
                             end = len(long_sorted)
                             start = max(0, end - self.cfg.long_list_len)
-                        candidates.append(long_sorted[start:end])
+                        candidates.append(list(long_sorted[start:end]))
             return clusters, candidates
+
+        def _parse_response(res: Any) -> Dict[str, str]:
+            """Normalize raw model output into a dictionary."""
+            if isinstance(res, list):
+                combined: Dict[str, str] = {}
+                for item in res:
+                    if isinstance(item, dict):
+                        for k, v in item.items():
+                            if isinstance(k, str) and isinstance(v, str):
+                                combined[k] = v
+                    elif isinstance(item, str):
+                        inner = safe_json(item)
+                        if isinstance(inner, dict):
+                            for k, v in inner.items():
+                                if isinstance(k, str) and isinstance(v, str):
+                                    combined[k] = v
+                res = combined
+            elif isinstance(res, str):
+                res = safe_json(res)
+
+            if isinstance(res, dict):
+                return {k: v for k, v in res.items() if isinstance(k, str) and isinstance(v, str)}
+            return {}
 
         matches: Dict[str, str] = {}
         remaining = short_uniques[:]
@@ -195,6 +220,7 @@ class Merge:
         for attempt in range(self.cfg.max_attempts):
             if not remaining:
                 break
+            cur_short_len = max(1, int(self.cfg.short_list_len * (self.cfg.short_list_multiplier ** attempt)))
             group_path = os.path.join(self.cfg.save_dir, f"merge_groups_attempt{attempt}.json")
             if os.path.exists(group_path) and not reset_files:
                 with open(group_path, "r", encoding="utf-8") as f:
@@ -202,22 +228,29 @@ class Merge:
                 clusters = data.get("clusters", [])
                 candidates = data.get("candidates", [])
             else:
-                clusters, candidates = _build_groups(remaining)
+                clusters, candidates = _build_groups(remaining, cur_short_len)
                 with open(group_path, "w", encoding="utf-8") as f:
                     json.dump({"clusters": clusters, "candidates": candidates}, f)
 
             prompts: List[str] = []
             identifiers: List[str] = []
+            base_ids: List[str] = []
             for idx, (short_terms, long_terms) in enumerate(zip(clusters, candidates)):
                 short_dict = {s: "" for s in short_terms}
-                prompts.append(
-                    self.template.render(
-                        short_list=short_dict,
-                        long_list=long_terms,
-                        additional_instructions=self.cfg.additional_instructions or "",
-                    )
+                prompt = self.template.render(
+                    short_list=short_dict,
+                    long_list=list(long_terms),
+                    additional_instructions=self.cfg.additional_instructions or "",
                 )
-                identifiers.append(f"merge_{attempt:02d}_{idx:05d}")
+                base_id = f"merge_{attempt:02d}_{idx:05d}"
+                base_ids.append(base_id)
+                if self.cfg.n_runs > 1:
+                    for run in range(self.cfg.n_runs):
+                        prompts.append(prompt)
+                        identifiers.append(f"{base_id}_run{run}")
+                else:
+                    prompts.append(prompt)
+                    identifiers.append(base_id)
 
             if prompts:
                 resp_df = await get_all_responses(
@@ -240,28 +273,36 @@ class Merge:
                 *[safest_json(resp_map.get(i, "")) for i in identifiers]
             )
 
-            for clus, res in zip(clusters, parsed):
-                # Flatten lists/JSON strings into a single dict
-                if isinstance(res, list):
-                    combined = {}
-                    for item in res:
-                        if isinstance(item, dict):
-                            combined.update(item)
-                        elif isinstance(item, str):
-                            inner = safe_json(item)
-                            if isinstance(inner, dict):
-                                combined.update(inner)
-                    res = combined
-                elif isinstance(res, str):
-                    res = safe_json(res)
+            responses_by_base: Dict[str, List[Dict[str, str]]] = {bid: [] for bid in base_ids}
+            for ident, res in zip(identifiers, parsed):
+                base_id = ident.rsplit("_run", 1)[0] if self.cfg.n_runs > 1 else ident
+                responses_by_base.setdefault(base_id, []).append(_parse_response(res))
 
-                if isinstance(res, dict):
-                    for k, v in res.items():
-                        if not isinstance(k, str) or not isinstance(v, str):
-                            continue
-                        k_norm = self._normalize(k)
+            for clus, base_id in zip(clusters, base_ids):
+                results = responses_by_base.get(base_id, [])
+                normalized_results = [
+                    {
+                        self._normalize(k): v
+                        for k, v in res.items()
+                        if isinstance(k, str) and isinstance(v, str)
+                    }
+                    for res in results
+                ]
+                for s in clus:
+                    counts: Dict[str, int] = {}
+                    s_norm = self._normalize(s)
+                    for res_map in normalized_results:
+                        val = res_map.get(s_norm)
+                        if val:
+                            counts[val] = counts.get(val, 0) + 1
+                    if not counts:
+                        continue
+                    max_count = max(counts.values())
+                    top_candidates = [v for v, c in counts.items() if c == max_count]
+                    if len(top_candidates) == 1:
+                        v = top_candidates[0]
+                        k_norm = s_norm
                         v_norm = self._normalize(v)
-                        # Look up the key in the global map rather than restricting to the current cluster
                         if k_norm in global_short_norm_map and v_norm in long_norm_map:
                             short_rep = global_short_norm_map[k_norm]
                             long_rep = long_norm_map[v_norm]
