@@ -37,7 +37,7 @@ class MergeConfig:
     long_list_len: int = 400
     max_attempts: int = 4
     short_list_multiplier: float = 0.5
-    auto_match_threshold: float = 0.65
+    auto_match_threshold: float = 0.7
     use_best_auto_match: bool = True
     candidate_scan_chunks: int = 5
 
