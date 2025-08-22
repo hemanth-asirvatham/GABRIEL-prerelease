@@ -640,41 +640,6 @@ async def whatever(
     )
 
 
-async def custom_prompt(
-    prompts: list[str],
-    identifiers: list[str],
-    *,
-    save_dir: str,
-    file_name: str = "custom_prompt_responses.csv",
-    model: str = "gpt-5-mini",
-    json_mode: bool = False,
-    use_web_search: bool = False,
-    n_parallels: int = 750,
-    use_dummy: bool = False,
-    reset_files: bool = False,
-    reasoning_effort: Optional[str] = None,
-    reasoning_summary: Optional[str] = None,
-    **kwargs,
-) -> pd.DataFrame:
-    """Backward compatible alias for :func:`whatever`."""
-
-    return await whatever(
-        prompts,
-        identifiers,
-        save_dir=save_dir,
-        file_name=file_name,
-        model=model,
-        json_mode=json_mode,
-        use_web_search=use_web_search,
-        n_parallels=n_parallels,
-        use_dummy=use_dummy,
-        reset_files=reset_files,
-        reasoning_effort=reasoning_effort,
-        reasoning_summary=reasoning_summary,
-        **kwargs,
-    )
-
-
 def view_coded_passages(
     df: pd.DataFrame,
     column_name: str,
