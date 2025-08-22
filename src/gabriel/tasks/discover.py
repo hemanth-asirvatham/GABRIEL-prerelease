@@ -51,37 +51,6 @@ class Discover:
         cfg.save_dir = str(expanded)
         self.cfg = cfg
 
-    @staticmethod
-    def _swap_circle_square(text: str) -> str:
-        """Swap 'circle' and 'square' in ``text`` preserving case."""
-
-        def repl(match: re.Match[str]) -> str:
-            word = match.group(0)
-            replacement = "square" if word.lower() == "circle" else "circle"
-            if word.isupper():
-                return replacement.upper()
-            if word[0].isupper():
-                return replacement.capitalize()
-            return replacement
-
-        return re.sub(r"(?i)circle|square", repl, text)
-
-    @staticmethod
-    def _format_pair(circle: Any, square: Any) -> str:
-        return (
-            "BEGIN ENTRY circle\n"
-            f"{circle}\n"
-            "END ENTRY circle\n\n"
-            "BEGIN ENTRY square\n"
-            f"{square}\n"
-            "END ENTRY square"
-        )
-
-    @staticmethod
-    def _combine_media(circle: Any, square: Any) -> List[Any]:
-        circ_list = circle if isinstance(circle, list) else ([circle] if circle is not None else [])
-        sq_list = square if isinstance(square, list) else ([square] if square is not None else [])
-        return circ_list + sq_list
 
     async def run(
         self,
@@ -92,7 +61,7 @@ class Discover:
         square_column_name: Optional[str] = None,
         reset_files: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, pd.DataFrame]:
+    ) -> Dict[str, Any]:
         """Execute the discovery pipeline.
 
         Args:
@@ -215,77 +184,49 @@ class Discover:
                 "modality": self.cfg.modality,
                 "reasoning_effort": self.cfg.reasoning_effort,
                 "reasoning_summary": self.cfg.reasoning_summary,
+                "n_attributes_per_run": len(labels),
+                "differentiate": True,
+                "additional_instructions": self.cfg.additional_instructions or "",
             }
 
-            pair_instr = (
-                "Each sample contains two entries: 'circle' and 'square'. "
-                "Determine if the label applies to the {subject} entry, using the other entry only as context. "
-                "If images or audio are provided, the content for the {subject} entry appears first."
-            )
-            addl = self.cfg.additional_instructions or ""
-            circ_addl = "\n".join(filter(None, [pair_instr.format(subject="circle"), addl]))
-            sq_addl = "\n".join(
-                filter(None, [self._swap_circle_square(pair_instr.format(subject="circle")), self._swap_circle_square(addl)])
-            )
+            def swap_cs(text: str) -> str:
+                def repl(match: re.Match[str]) -> str:
+                    word = match.group(0)
+                    return "square" if word.lower() == "circle" else "circle"
+                return re.sub(r"(?i)circle|square", repl, text)
 
             circ_cfg = ClassifyConfig(
                 labels=labels,
                 save_dir=os.path.join(self.cfg.save_dir, "classify_circle"),
-                additional_instructions=circ_addl,
                 **base_cfg,  # type: ignore[arg-type]
             )
 
-            swapped_labels = {
-                self._swap_circle_square(k): self._swap_circle_square(v) for k, v in labels.items()
-            }
+            swapped_labels = {swap_cs(k): swap_cs(v) for k, v in labels.items()}
             sq_cfg = ClassifyConfig(
                 labels=swapped_labels,
                 save_dir=os.path.join(self.cfg.save_dir, "classify_square"),
-                additional_instructions=sq_addl,
                 **base_cfg,  # type: ignore[arg-type]
             )
-
-            pair_df = df.reset_index(drop=True).copy()
-            if self.cfg.modality in {"text", "entity", "web"}:
-                pair_df["_pair_circle"] = [
-                    self._format_pair(c, s)
-                    for c, s in zip(df[circle_column_name], df[square_column_name])
-                ]  # type: ignore[arg-type]
-                pair_df["_pair_square"] = [
-                    self._format_pair(s, c)
-                    for c, s in zip(df[circle_column_name], df[square_column_name])
-                ]  # type: ignore[arg-type]
-            else:
-                pair_df["_pair_circle"] = [
-                    self._combine_media(c, s)
-                    for c, s in zip(df[circle_column_name], df[square_column_name])
-                ]  # type: ignore[arg-type]
-                pair_df["_pair_square"] = [
-                    self._combine_media(s, c)
-                    for c, s in zip(df[circle_column_name], df[square_column_name])
-                ]  # type: ignore[arg-type]
 
             circ_clf = Classify(circ_cfg)
             sq_clf = Classify(sq_cfg)
 
             circ_df = await circ_clf.run(
-                pair_df,
-                "_pair_circle",
+                df,
+                circle_column_name=circle_column_name,  # type: ignore[arg-type]
+                square_column_name=square_column_name,  # type: ignore[arg-type]
                 reset_files=reset_files,
             )
             circ_df = circ_df.rename(columns={lab: f"{lab}_circle" for lab in labels})
-            circ_df = circ_df.drop(columns=["_pair_circle"], errors="ignore")
 
             sq_df = await sq_clf.run(
-                pair_df,
-                "_pair_square",
+                df,
+                circle_column_name=circle_column_name,  # type: ignore[arg-type]
+                square_column_name=square_column_name,  # type: ignore[arg-type]
                 reset_files=reset_files,
             )
-            sq_df = sq_df.rename(
-                columns={self._swap_circle_square(lab): f"{lab}_square" for lab in labels}
-            )
-            sq_df = sq_df.drop(columns=["_pair_square"], errors="ignore")
-            sq_cols = [c for c in sq_df.columns if c.endswith("_square")]
+            sq_df = sq_df.rename(columns={swap_cs(lab): f"{lab}_square" for lab in labels})
+            sq_cols = [f"{lab}_square" for lab in labels]
             classify_result = circ_df.join(sq_df[sq_cols])
             summary_records: List[Dict[str, Any]] = []
             for lab in labels:
@@ -300,8 +241,8 @@ class Discover:
                     "circle_true": circ_true,
                     "square_true": sq_true,
                     "total": total,
-                    "difference_pct": diff,
-                })
+                "difference_pct": diff,
+            })
             summary_df = pd.DataFrame(summary_records)
         else:
             clf_cfg = ClassifyConfig(
@@ -316,6 +257,7 @@ class Discover:
                 modality=self.cfg.modality,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
+                n_attributes_per_run=len(labels),
             )
             clf = Classify(clf_cfg)
             classify_result = await clf.run(
@@ -324,11 +266,13 @@ class Discover:
                 reset_files=reset_files,
             )
 
-        result: Dict[str, pd.DataFrame] = {
+        result: Dict[str, Any] = {
             "candidates": candidate_df,
-            "buckets": bucket_df,
+            "buckets": labels,
             "classification": classify_result,
         }
+        if not bucket_df.empty:
+            result["bucket_df"] = bucket_df
         if summary_df is not None:
             result["summary"] = summary_df
         if compare_df is not None:
