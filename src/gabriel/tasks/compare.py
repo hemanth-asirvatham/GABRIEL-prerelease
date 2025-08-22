@@ -16,7 +16,6 @@ from ..utils import (
     safest_json,
     load_image_inputs,
     load_audio_inputs,
-    swap_circle_square,
 )
 
 
@@ -82,9 +81,6 @@ class Compare:
         prompts: List[str] = []
         ids: List[str] = []
         id_to_circle_first: Dict[str, bool] = {}
-        base_template = self.template.text
-        tmpl_square = PromptTemplate(base_template)
-        tmpl_circle = PromptTemplate(swap_circle_square(base_template))
         for circle, square in pairs:
             ident = hashlib.sha1(f"{circle}|{square}".encode()).hexdigest()[:8]
             ids.append(ident)
@@ -100,14 +96,14 @@ class Compare:
             square_text = (
                 square if self.cfg.modality in {"text", "entity", "web"} else ""
             )
-            tmpl = tmpl_circle if circle_first_flag else tmpl_square
             prompts.append(
-                tmpl.render(
+                self.template.render(
                     entry_circle=circle_text,
                     entry_square=square_text,
                     differentiate=self.cfg.differentiate,
                     additional_instructions=self.cfg.additional_instructions or "",
                     modality=self.cfg.modality,
+                    circle_first=circle_first_flag,
                 )
             )
 

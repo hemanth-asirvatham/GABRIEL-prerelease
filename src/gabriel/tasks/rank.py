@@ -62,7 +62,6 @@ from gabriel.utils import (
     safest_json,
     load_image_inputs,
     load_audio_inputs,
-    swap_circle_square,
 )
 
 
@@ -633,6 +632,7 @@ class Rank:
         column_name: str,
         *,
         reset_files: bool = False,
+        n_runs: Optional[int] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """Execute the ranking procedure.
@@ -649,6 +649,11 @@ class Rank:
             recompute the rankings.  Otherwise, if the final output
             file already exists on disk it will be loaded and returned
             immediately.
+        n_runs:
+            Deprecated/ignored parameter provided for compatibility
+            with :class:`Rate`. When supplied, a message is printed
+            noting that ``n_rounds`` controls the number of iterations
+            and that ``n_runs`` has no effect.
         **kwargs:
             Additional keyword arguments forwarded to
             :func:`get_all_responses`.  Useful for passing through
@@ -666,6 +671,11 @@ class Rank:
         final_path = os.path.join(self.cfg.save_dir, f"{base_name}_final.csv")
 
         kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        if n_runs is not None:
+            print(
+                "Parameter 'n_runs' is ignored. Use 'n_rounds' to control the number of iterations. "
+                f"Current n_rounds={self.cfg.n_rounds}."
+            )
         # Determine how many rounds have already been processed when
         # `reset_files` is False.  We look for files named
         # ``<base_name>_round<k>.csv`` to infer progress.  If a final
@@ -754,9 +764,6 @@ class Rank:
             for i in range(0, len(attr_keys), self.cfg.n_attributes_per_run)
         ]
 
-        base_template = self.template.text
-        tmpl_square = PromptTemplate(base_template)
-        tmpl_circle = PromptTemplate(swap_circle_square(base_template))
 
         # Helper function to write the current results to the final CSV.  This
         # builds the output DataFrame from the current ``df_proc`` and
@@ -993,15 +1000,15 @@ class Rank:
                         else self.rng.random() < 0.5
                     )
                     id_to_circle_first[sha8] = circle_first_flag
-                    tmpl = tmpl_circle if circle_first_flag else tmpl_square
                     prompts.append(
-                        tmpl.render(
+                        self.template.render(
                             entry_circle=t_a,
                             entry_square=t_b,
                             attributes=attr_def_map,
                             additional_instructions=self.cfg.additional_instructions
                             or "",
                             modality=self.cfg.modality,
+                            circle_first=circle_first_flag,
                         )
                     )
                     ids.append(sha8)

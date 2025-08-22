@@ -1,6 +1,6 @@
 {% import "snippets.jinja2" as snip %}
 {% if differentiate %}
-{{ snip.pair_entries(modality, entry_square, entry_circle) }}
+{{ snip.pair_entries(modality, entry_square, entry_circle, circle_first=circle_first|default(false)) }}
 You are specifically looking at features that distinguish the following two passages from each other.
 When deciding which bucket terms apply, what that means is whether the bucket term in question captures a key difference between the two passages.
 Pay close attention to the specific passage type, square or circle.

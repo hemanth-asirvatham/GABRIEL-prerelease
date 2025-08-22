@@ -1,5 +1,5 @@
 {% import "snippets.jinja2" as snip %}
-{{ snip.pair_entries(modality, entry_square, entry_circle) }}
+{{ snip.pair_entries(modality, entry_square, entry_circle, circle_first=circle_first|default(false)) }}
 
 {% if differentiate %}
 Your task is to list concise, mutually exclusive terms or short phrases that best explain how entry "circle" differs from entry "square".
