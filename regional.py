@@ -21,7 +21,7 @@ class Regional:
         save_dir: str = os.path.expanduser("~/Documents/runs"),
         run_name: Optional[str] = None,
         model: str = "gpt-5-mini",
-        n_parallels: int = 400,
+        n_parallels: int = 750,
         use_dummy: bool = False,
         additional_instructions: str = "",
         reasoning_effort: Optional[str] = None,

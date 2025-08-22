@@ -20,7 +20,7 @@ class DiscoverConfig:
 
     save_dir: str = "discover"
     model: str = "gpt-5-mini"
-    n_parallels: int = 400
+    n_parallels: int = 750
     n_runs: int = 1
     min_frequency: float = 0.6
     bucket_count: int = 10
@@ -30,6 +30,12 @@ class DiscoverConfig:
     max_categories_per_call: int = 8
     use_dummy: bool = False
     modality: str = "text"
+    n_terms_per_prompt: int = 250
+    repeat_bucketing: int = 5
+    repeat_voting: int = 20
+    next_round_frac: float = 0.5
+    top_k_per_round: int = 1
+    raw_term_definitions: bool = True
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
 
@@ -111,12 +117,24 @@ class Discover:
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
             )
-            candidates: List[str] = []
+            term_defs: Dict[str, str] = {}
             if "coded_passages" in codify_df:
                 for entry in codify_df["coded_passages"].dropna():
                     if isinstance(entry, dict):
-                        candidates.extend(entry.keys())
-            candidate_df = pd.DataFrame({"term": sorted(set(candidates))})
+                        for k, v in entry.items():
+                            if k not in term_defs:
+                                if isinstance(v, list) and v:
+                                    term_defs[k] = str(v[0])
+                                else:
+                                    term_defs[k] = str(v) if v is not None else ""
+            if self.cfg.raw_term_definitions:
+                candidate_df = (
+                    pd.DataFrame({"term": [term_defs]})
+                    if term_defs
+                    else pd.DataFrame({"term": []})
+                )
+            else:
+                candidate_df = pd.DataFrame({"term": sorted(set(term_defs.keys()))})
         else:
             cmp_cfg = CompareConfig(
                 save_dir=os.path.join(self.cfg.save_dir, "compare"),
@@ -137,8 +155,20 @@ class Discover:
                 square_column_name,  # type: ignore[arg-type]
                 reset_files=reset_files,
             )
-            attrs = [str(a) for a in compare_df["attribute"].dropna().tolist()]
-            candidate_df = pd.DataFrame({"term": sorted(set(attrs))})
+            term_defs = {}
+            for attr, expl in zip(
+                compare_df["attribute"], compare_df["explanation"]
+            ):
+                if pd.notna(attr) and attr not in term_defs:
+                    term_defs[attr] = str(expl) if pd.notna(expl) else ""
+            if self.cfg.raw_term_definitions:
+                candidate_df = (
+                    pd.DataFrame({"term": [term_defs]})
+                    if term_defs
+                    else pd.DataFrame({"term": []})
+                )
+            else:
+                candidate_df = pd.DataFrame({"term": sorted(set(term_defs.keys()))})
 
         # ── 2. bucketisation ───────────────────────────────────────────
         bucket_df: pd.DataFrame
@@ -153,6 +183,12 @@ class Discover:
                 use_dummy=self.cfg.use_dummy,
                 additional_instructions=self.cfg.additional_instructions,
                 differentiate=self.cfg.differentiate if pair else False,
+                n_terms_per_prompt=self.cfg.n_terms_per_prompt,
+                repeat_bucketing=self.cfg.repeat_bucketing,
+                repeat_voting=self.cfg.repeat_voting,
+                next_round_frac=self.cfg.next_round_frac,
+                top_k_per_round=self.cfg.top_k_per_round,
+                raw_term_definitions=self.cfg.raw_term_definitions,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
             )

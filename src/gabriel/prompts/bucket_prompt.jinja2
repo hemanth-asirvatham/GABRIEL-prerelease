@@ -56,18 +56,18 @@ BEGIN ALREADY FINALIZED BUCKETS
 {{ selected_buckets }}
 END ALREADY FINALIZED BUCKETS
 
-You only need to vote for {{ bucket_count - selected_buckets|length }} additional buckets, not the full {{ bucket_count }}.
+You only need to vote for {{ bucket_count - (selected_buckets|length) }} additional buckets, not the full {{ bucket_count }}.
 This is because the ultimate, final set of the best, mutually exclusive buckets will be the union of the already selected buckets and the additional buckets you vote for.
-Thus, when voting for the {{ bucket_count - selected_buckets|length }} additional buckets, ensure they are mutually exclusive both with each other **and** with the already selected buckets above.
+Thus, when voting for the {{ bucket_count - (selected_buckets|length) }} additional buckets, ensure they are mutually exclusive both with each other **and** with the already selected buckets above.
 Consider the selected buckets to locked in; your new selections should not overlap with them at all.
-Choose the {{ bucket_count - selected_buckets|length }} additional buckets from the candidate list such that the final set of all selected buckets (including the already selected ones) are mutually exclusive from each other and excellent at grouping as many raw terms as reasonable, without losing specificity and substance.
+Choose the {{ bucket_count - (selected_buckets|length) }} additional buckets from the candidate list such that the final set of all selected buckets (including the already selected ones) are mutually exclusive from each other and excellent at grouping as many raw terms as reasonable, without losing specificity and substance.
 It is like being GM of an NBA team: you already have some players on the roster, and you need to pick new ones that fit well with the existing ones and make a great team overall.
 These already finalized buckets are your existing players; now focus on identifying the best complementary pieces to add to the team to get the best overall coverage with the final set of buckets.
 It is essential you avoid voting for terms that overlap with the already selected buckets.
 Build a full, mutually exclusive set of buckets that together capture the biggest themes present in the raw terms, amongst the totality of all existing and new buckets you are voting for.
 
 Again, the already selected buckets are: {{ selected_buckets.keys() }}
-You must vote for exactly {{ bucket_count - selected_buckets|length }} additional buckets.
+You must vote for exactly {{ bucket_count - (selected_buckets|length) }} additional buckets.
     {% else %}
 You must vote for exactly {{ bucket_count }} buckets from the candidate list keys.
     {% endif %}
