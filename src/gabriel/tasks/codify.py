@@ -15,13 +15,19 @@ from ..utils import (
     safe_json,
 )
 
+from __future__ import annotations
+
+from ..core.prompt_template import PromptTemplate
+from ..utils import safest_json, load_image_inputs, load_audio_inputs
+
+
 
 class Codify:
     """Pipeline for coding passages of text according to specified categories."""
 
-    def __init__(self, teleprompter: Optional[Teleprompter] = None) -> None:
-        self.teleprompter = teleprompter or Teleprompter()
+    def __init__(self) -> None:
         self.hit_rate_stats = {}  # Track hit rates across all texts
+        self.template = PromptTemplate.from_package("codify_prompt.jinja2")
 
     @staticmethod
     def view(
@@ -562,7 +568,7 @@ class Codify:
             ]
         
         # Build prompts for all text chunks and category batches
-        template = self.teleprompter.env.get_template("codify_prompt.jinja2")
+        template = self.template
         prompts: List[str] = []
         identifiers: List[str] = []
         text_index_to_chunks: Dict[int, List[int]] = {}  # Maps original text index to chunk indices
