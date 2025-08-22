@@ -250,7 +250,7 @@ class Clique:
         repeat_voting: int = 20,
         next_round_frac: float = 0.5,
         min_bucket_size: int = 1,
-        n_parallels: int = 400,
+        n_parallels: int = 750,
         model: str = "o4-mini",
         reasoning_effort: str = "low",
         save_root: str = os.path.expanduser("~/Documents/runs"),

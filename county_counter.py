@@ -28,7 +28,7 @@ class CountyCounter:
         reasoning_effort: Optional[str] = None,
         reasoning_summary: Optional[str] = None,
         search_context_size: str = "medium",
-        n_parallels: int = 400,
+        n_parallels: int = 750,
         n_elo_rounds: int = 15,
         elo_timeout: float = 60.0,
         use_dummy: bool = False,

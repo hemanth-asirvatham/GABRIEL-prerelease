@@ -23,7 +23,7 @@ class BucketConfig:
     save_dir: str = "buckets"
     file_name: str = "bucket_definitions.csv"
     model: str = "gpt-5-mini"
-    n_parallels: int = 400
+    n_parallels: int = 750
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None
@@ -33,6 +33,7 @@ class BucketConfig:
     repeat_voting: int = 20
     next_round_frac: float = 0.5
     top_k_per_round: int = 1
+    raw_term_definitions: bool = True
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
 
@@ -64,15 +65,32 @@ class Bucket:
         **kwargs: Any,
     ) -> pd.DataFrame:
         df_proc = df.reset_index(drop=True).copy()
-        terms_raw = [str(t) for t in df_proc[column_name].dropna().tolist()]
+        raw_entries = df_proc[column_name].dropna().tolist()
 
-        # Deduplicate while preserving order
         seen: set[str] = set()
         terms: List[str] = []
-        for t in terms_raw:
-            if t not in seen:
-                seen.add(t)
-                terms.append(t)
+        term_map: Dict[str, str] = {}
+        for entry in raw_entries:
+            if isinstance(entry, dict):
+                for k, v in entry.items():
+                    key = str(k)
+                    if key not in seen:
+                        seen.add(key)
+                        terms.append(key)
+                    term_map.setdefault(key, str(v) if v is not None else "")
+            elif isinstance(entry, list):
+                for item in entry:
+                    key = str(item)
+                    if key not in seen:
+                        seen.add(key)
+                        terms.append(key)
+                    term_map.setdefault(key, "")
+            else:
+                key = str(entry)
+                if key not in seen:
+                    seen.add(key)
+                    terms.append(key)
+                term_map.setdefault(key, "")
 
         if not terms:
             return pd.DataFrame(columns=["bucket", "definition"])
@@ -87,9 +105,14 @@ class Bucket:
                 for i in range(0, len(terms), self.cfg.n_terms_per_prompt)
             ]
             for ci, chunk in enumerate(chunks):
+                chunk_data = (
+                    {t: term_map.get(t, "") for t in chunk}
+                    if self.cfg.raw_term_definitions
+                    else chunk
+                )
                 prompts.append(
                     self.template.render(
-                        terms=chunk,
+                        terms=chunk_data,
                         bucket_count=self.cfg.bucket_count,
                         differentiate=self.cfg.differentiate,
                         additional_instructions=self.cfg.additional_instructions or "",
@@ -136,8 +159,13 @@ class Bucket:
                     for i in range(0, len(opts), self.cfg.n_terms_per_prompt)
                 ]
                 for ci, ch in enumerate(chunks):
-                    sample_terms = random.sample(
+                    sample_list = random.sample(
                         terms, min(len(terms), self.cfg.n_terms_per_prompt)
+                    )
+                    sample_terms = (
+                        {t: term_map.get(t, "") for t in sample_list}
+                        if self.cfg.raw_term_definitions
+                        else sample_list
                     )
                     pr.append(
                         self.template.render(

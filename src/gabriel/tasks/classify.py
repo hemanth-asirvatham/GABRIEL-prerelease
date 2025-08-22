@@ -33,7 +33,7 @@ class ClassifyConfig:
     save_dir: str = "classifier"
     file_name: str = "classify_responses.csv"
     model: str = "gpt-5-mini"
-    n_parallels: int = 400
+    n_parallels: int = 750
     n_runs: int = 1
     min_frequency: float = 0.6
     additional_instructions: str = ""

@@ -35,7 +35,7 @@ class EloConfig:
     add_zscore: bool = True
     final_filename: str = "ratings_final.csv"
     save_per_round: bool = True
-    n_parallels: int = 400
+    n_parallels: int = 750
     model: str = "gpt-5-mini"
     use_dummy: bool = False
     max_timeout: Optional[float] = None
