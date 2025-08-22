@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import random
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, DefaultDict, Dict, List, Optional
@@ -13,7 +14,12 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, load_image_inputs, load_audio_inputs
+from ..utils import (
+    safest_json,
+    load_image_inputs,
+    load_audio_inputs,
+    swap_circle_square,
+)
 
 
 # ────────────────────────────
@@ -38,6 +44,8 @@ class ClassifyConfig:
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    differentiate: bool = False
+    circle_first: Optional[bool] = None
 
 
 # ────────────────────────────
@@ -54,7 +62,9 @@ class Classify:
     _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
 
     # -----------------------------------------------------------------
-    def __init__(self, cfg: ClassifyConfig, template: Optional[PromptTemplate] = None) -> None:  # noqa: D401,E501
+    def __init__(
+        self, cfg: ClassifyConfig, template: Optional[PromptTemplate] = None
+    ) -> None:  # noqa: D401,E501
         expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
@@ -70,7 +80,9 @@ class Classify:
     def _regex(raw: str, labels: List[str]) -> Dict[str, Optional[bool]]:
         out: Dict[str, Optional[bool]] = {}
         for lab in labels:
-            pat = re.compile(rf'\s*"?\s*{re.escape(lab)}\s*"?\s*:\s*(true|false)', re.I | re.S)
+            pat = re.compile(
+                rf'\s*"?\s*{re.escape(lab)}\s*"?\s*:\s*(true|false)', re.I | re.S
+            )
             m = pat.search(raw)
             out[lab] = None if not m else m.group(1).lower() == "true"
         return out
@@ -95,9 +107,11 @@ class Classify:
                 k.strip().lower(): (
                     True
                     if str(v).strip().lower() in {"true", "yes", "1"}
-                    else False
-                    if str(v).strip().lower() in {"false", "no", "0"}
-                    else None
+                    else (
+                        False
+                        if str(v).strip().lower() in {"false", "no", "0"}
+                        else None
+                    )
                 )
                 for k, v in data.items()
             }
@@ -112,31 +126,24 @@ class Classify:
     async def run(
         self,
         df: pd.DataFrame,
-        column_name: str,
+        column_name: Optional[str] = None,
         *,
+        circle_column_name: Optional[str] = None,
+        square_column_name: Optional[str] = None,
         reset_files: bool = False,
         **kwargs: Any,
     ) -> pd.DataFrame:
-        """Classify items in ``df[column_name]`` and return ``df`` with label columns."""
+        """Classify items and return ``df`` with label columns."""
+
+        if self.cfg.differentiate:
+            if circle_column_name is None or square_column_name is None:
+                raise ValueError(
+                    "circle_column_name and square_column_name are required when differentiate is True"
+                )
+        elif column_name is None:
+            raise ValueError("column_name is required when differentiate is False")
 
         df_proc = df.reset_index(drop=True).copy()
-        values = df_proc[column_name].tolist()
-
-        texts = [str(v) for v in values]
-        base_ids: List[str] = []
-        id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
-        id_to_val: Dict[str, Any] = {}
-        prompt_texts: Dict[str, str] = {}
-
-        for row, val in enumerate(texts):
-            clean = " ".join(str(val).split())
-            sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
-            id_to_rows[sha8].append(row)
-            if len(id_to_rows[sha8]) > 1:
-                continue
-            id_to_val[sha8] = values[row]
-            prompt_texts[sha8] = str(values[row]) if self.cfg.modality in {"text", "entity", "web"} else ""
-            base_ids.append(sha8)
 
         label_items = list(self.cfg.labels.items())
         label_batches: List[Dict[str, str]] = [
@@ -146,18 +153,82 @@ class Classify:
 
         prompts: List[str] = []
         ids: List[str] = []
-        for batch_idx, batch_labels in enumerate(label_batches):
-            for ident in base_ids:
-                prompts.append(
-                    self.template.render(
-                        text=prompt_texts[ident],
-                        attributes=batch_labels,
-                        additional_instructions=self.cfg.additional_instructions,
-                        additional_guidelines=self.cfg.additional_guidelines,
-                        modality=self.cfg.modality,
-                    )
+        base_ids: List[str] = []
+        id_to_circle_first: Dict[str, bool] = {}
+        id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
+        id_to_val: Dict[str, Any] = {}
+        prompt_texts: Dict[str, str] = {}
+        prompt_circles: Dict[str, str] = {}
+        prompt_squares: Dict[str, str] = {}
+
+        if self.cfg.differentiate:
+            circles = df_proc[circle_column_name].tolist()  # type: ignore[index]
+            squares = df_proc[square_column_name].tolist()  # type: ignore[index]
+            base_template = self.template.text
+            tmpl_square = PromptTemplate(base_template)
+            tmpl_circle = PromptTemplate(swap_circle_square(base_template))
+            for row, (circ, sq) in enumerate(zip(circles, squares)):
+                clean = " ".join(str(circ).split()) + "|" + " ".join(str(sq).split())
+                sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
+                id_to_rows[sha8].append(row)
+                if len(id_to_rows[sha8]) > 1:
+                    continue
+                id_to_val[sha8] = (circ, sq)
+                prompt_circles[sha8] = (
+                    circ if self.cfg.modality in {"text", "entity", "web"} else ""
                 )
-                ids.append(f"{ident}_batch{batch_idx}")
+                prompt_squares[sha8] = (
+                    sq if self.cfg.modality in {"text", "entity", "web"} else ""
+                )
+                circle_first_flag = (
+                    self.cfg.circle_first
+                    if self.cfg.circle_first is not None
+                    else random.random() < 0.5
+                )
+                id_to_circle_first[sha8] = circle_first_flag
+                base_ids.append(sha8)
+            for batch_idx, batch_labels in enumerate(label_batches):
+                for ident in base_ids:
+                    tmpl = tmpl_circle if id_to_circle_first[ident] else tmpl_square
+                    prompts.append(
+                        tmpl.render(
+                            entry_circle=prompt_circles[ident],
+                            entry_square=prompt_squares[ident],
+                            attributes=batch_labels,
+                            additional_instructions=self.cfg.additional_instructions,
+                            additional_guidelines=self.cfg.additional_guidelines,
+                            differentiate=True,
+                            modality=self.cfg.modality,
+                        )
+                    )
+                    ids.append(f"{ident}_batch{batch_idx}")
+        else:
+            values = df_proc[column_name].tolist()  # type: ignore[index]
+            for row, val in enumerate(values):
+                clean = " ".join(str(val).split())
+                sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
+                id_to_rows[sha8].append(row)
+                if len(id_to_rows[sha8]) > 1:
+                    continue
+                id_to_val[sha8] = values[row]
+                prompt_texts[sha8] = (
+                    str(values[row])
+                    if self.cfg.modality in {"text", "entity", "web"}
+                    else ""
+                )
+                base_ids.append(sha8)
+            for batch_idx, batch_labels in enumerate(label_batches):
+                for ident in base_ids:
+                    prompts.append(
+                        self.template.render(
+                            text=prompt_texts[ident],
+                            attributes=batch_labels,
+                            additional_instructions=self.cfg.additional_instructions,
+                            additional_guidelines=self.cfg.additional_guidelines,
+                            modality=self.cfg.modality,
+                        )
+                    )
+                    ids.append(f"{ident}_batch{batch_idx}")
 
         prompt_images: Optional[Dict[str, List[str]]] = None
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
@@ -165,7 +236,23 @@ class Classify:
         if self.cfg.modality == "image":
             tmp: Dict[str, List[str]] = {}
             for ident, rows in id_to_rows.items():
-                imgs = load_image_inputs(values[rows[0]])
+                imgs: List[str] = []
+                if self.cfg.differentiate:
+                    circ, sq = id_to_val[ident]
+                    circ_imgs = load_image_inputs(circ)
+                    sq_imgs = load_image_inputs(sq)
+                    if id_to_circle_first.get(ident, False):
+                        if circ_imgs:
+                            imgs.extend(circ_imgs)
+                        if sq_imgs:
+                            imgs.extend(sq_imgs)
+                    else:
+                        if sq_imgs:
+                            imgs.extend(sq_imgs)
+                        if circ_imgs:
+                            imgs.extend(circ_imgs)
+                else:
+                    imgs = load_image_inputs(id_to_val[ident])
                 if imgs:
                     for batch_idx in range(len(label_batches)):
                         tmp[f"{ident}_batch{batch_idx}"] = imgs
@@ -173,7 +260,23 @@ class Classify:
         elif self.cfg.modality == "audio":
             tmp_a: Dict[str, List[Dict[str, str]]] = {}
             for ident, rows in id_to_rows.items():
-                auds = load_audio_inputs(values[rows[0]])
+                auds: List[Dict[str, str]] = []
+                if self.cfg.differentiate:
+                    circ, sq = id_to_val[ident]
+                    circ_auds = load_audio_inputs(circ)
+                    sq_auds = load_audio_inputs(sq)
+                    if id_to_circle_first.get(ident, False):
+                        if circ_auds:
+                            auds.extend(circ_auds)
+                        if sq_auds:
+                            auds.extend(sq_auds)
+                    else:
+                        if sq_auds:
+                            auds.extend(sq_auds)
+                        if circ_auds:
+                            auds.extend(circ_auds)
+                else:
+                    auds = load_audio_inputs(id_to_val[ident])
                 if auds:
                     for batch_idx in range(len(label_batches)):
                         tmp_a[f"{ident}_batch{batch_idx}"] = auds
@@ -252,7 +355,9 @@ class Classify:
             for run_idx in range(1, self.cfg.n_runs + 1):
                 suffix = f"_run{run_idx}"
                 sub = df_resp_all[df_resp_all.Identifier.str.endswith(suffix)].copy()
-                sub.Identifier = sub.Identifier.str.replace(suffix + "$", "", regex=True)
+                sub.Identifier = sub.Identifier.str.replace(
+                    suffix + "$", "", regex=True
+                )
                 df_resps.append(sub)
 
         # parse each run and construct disaggregated records
@@ -279,7 +384,11 @@ class Classify:
             total_orphans += orphans
             for ident in base_ids:
                 parsed = id_to_labels.get(ident, {lab: None for lab in all_labels})
-                rec = {"text": id_to_val[ident], "run": run_idx}
+                if self.cfg.differentiate:
+                    circ_val, sq_val = id_to_val[ident]
+                    rec = {"circle": circ_val, "square": sq_val, "run": run_idx}
+                else:
+                    rec = {"text": id_to_val[ident], "run": run_idx}
                 rec.update({lab: parsed.get(lab) for lab in all_labels})
                 full_records.append(rec)
 
@@ -288,12 +397,19 @@ class Classify:
                 f"[Classify] WARNING: {total_orphans} response(s) had no matching passage this run."
             )
 
-        full_df = pd.DataFrame(full_records).set_index(["text", "run"])
+        if self.cfg.differentiate:
+            full_df = pd.DataFrame(full_records).set_index(["circle", "square", "run"])
+            index_cols = ["circle", "square", "run"]
+            group_cols = ["circle", "square"]
+        else:
+            full_df = pd.DataFrame(full_records).set_index(["text", "run"])
+            index_cols = ["text", "run"]
+            group_cols = ["text"]
         if self.cfg.n_runs > 1:
             disagg_path = os.path.join(
                 self.cfg.save_dir, f"{base_name}_full_disaggregated.csv"
             )
-            full_df.to_csv(disagg_path, index_label=["text", "run"])
+            full_df.to_csv(disagg_path, index_label=index_cols)
 
         # aggregate across runs using a minimum frequency threshold
         def _min_freq(s: pd.Series) -> Optional[bool]:
@@ -303,7 +419,12 @@ class Classify:
             prop = true_count / self.cfg.n_runs
             return prop >= self.cfg.min_frequency
 
-        agg_df = pd.DataFrame({lab: full_df[lab].groupby("text").apply(_min_freq) for lab in self.cfg.labels})
+        agg_df = pd.DataFrame(
+            {
+                lab: full_df[lab].groupby(group_cols).apply(_min_freq)
+                for lab in self.cfg.labels
+            }
+        )
 
         filled = agg_df.dropna(how="all").shape[0]
         print(f"[Classify] Filled {filled}/{len(agg_df)} unique texts.")
@@ -316,10 +437,19 @@ class Classify:
         print("=================================\n")
 
         out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
-        result = df_proc.merge(agg_df, left_on=column_name, right_index=True, how="left")
+        if self.cfg.differentiate:
+            result = df_proc.merge(
+                agg_df,
+                left_on=[circle_column_name, square_column_name],
+                right_index=True,
+                how="left",
+            )
+        else:
+            result = df_proc.merge(
+                agg_df, left_on=column_name, right_index=True, how="left"
+            )
         result.to_csv(out_path, index=False)
 
         # keep raw response files for reference
 
         return result
-

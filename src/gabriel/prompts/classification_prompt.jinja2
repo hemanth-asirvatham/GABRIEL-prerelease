@@ -1,24 +1,17 @@
-{% if modality == "text" %}
-BEGIN TEXT ENTRY
-{{ text }}
-END TEXT ENTRY
-Read entire text content carefully—start, middle, end. Do not skim; comprehend whole text deeply, including subtleties buried deep in the content.
-{% elif modality == "image" %}
-Carefully consider and analyze the provided image content. Comprehend it fully, both big picture and relevant subtleties.
-{% elif modality == "audio" %}
-Carefully consider and analyze the provided audio content. Comprehend it fully, both big picture and relevant subtleties. Pay close attention to both the content as well as the tone/style of the audio, and the sonic qualities of the content's presentation.
-{% elif modality == "entity" %}
-Entity: {{ text }}
-Use your prodigious internal knowledge on the item/entity "{{ text }}".
-Comprehensively consider every relevant detail, both big picture and subtleties.
-Consider "{{ text }}" as the content to be analyzed.
-{% elif modality == "web" %}
-Entity: {{ text }}
-Comprehensively explore the web for all relevant information on the item/entity "{{ text }}".
-Ensure you collect a highly truthful, accurate, comprehensive, and representative picture of "{{ text }}" from the web.
-Consider "{{ text }}" as the content to be analyzed, fully grounded in the info you find on the web.
-Thoroughly research "{{ text }}" on the web; creatively use different search approaches; gather as much info as possible to deeply characterize the relevant aspects of "{{ text }}".
-Crucial: ONLY use the direct info you find on the web to perform your analysis. Collect the info then dispassionately analyze it with no preconceived notions.
+{% import "snippets.jinja2" as snip %}
+{% if differentiate %}
+{{ snip.pair_entries(modality, entry_square, entry_circle) }}
+You are specifically looking at features that distinguish the following two passages from each other.
+When deciding which bucket terms apply, what that means is whether the bucket term in question captures a key difference between the two passages.
+Pay close attention to the specific passage type, square or circle.
+If the bucket term is about circle having more of an attribute than square, then you should only return that bucket term if the circle passage has that attribute than the square one here.
+It is not sufficient simply for the attribute to be present; the full version of the bucket term must be met.
+If the bucket term is about square having an attribute that circle does not, then you should only return that bucket term if the square passage has that attribute while circle does not. Both conditions must be met.
+Once more: it must be clear that the full wording of the bucket term must be met, with one passage clearly having the attribute and the other not having it, or one passage clearly having more of the attribute than the other, depending on the specifics of the bucket term.
+And most critically, for the bucket term to apply, if the bucket term says circle passages have more of an attribute than square, then the circle passage must be the one that has more of that attribute than the square passage.
+If the bucket term says circle passages have more of the attribute but the square passage below is the one that has more of that attribute, then that bucket term does NOT apply and should not be included in the output.
+{% else %}
+{{ snip.single_entry(modality, text) }}
 {% endif %}
 
 Task: For each label below, decide whether it applies to the provided content.

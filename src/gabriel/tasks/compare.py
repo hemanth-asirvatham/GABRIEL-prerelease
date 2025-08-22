@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,7 +12,12 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, load_image_inputs, load_audio_inputs
+from ..utils import (
+    safest_json,
+    load_image_inputs,
+    load_audio_inputs,
+    swap_circle_square,
+)
 
 
 @dataclass
@@ -28,17 +34,22 @@ class CompareConfig:
     modality: str = "text"
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    circle_first: Optional[bool] = None
 
 
 class Compare:
     """Compare two columns row-wise using an LLM."""
 
-    def __init__(self, cfg: CompareConfig, template: Optional[PromptTemplate] = None) -> None:
+    def __init__(
+        self, cfg: CompareConfig, template: Optional[PromptTemplate] = None
+    ) -> None:
         expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
         self.cfg = cfg
-        self.template = template or PromptTemplate.from_package("comparison_prompt.jinja2")
+        self.template = template or PromptTemplate.from_package(
+            "comparison_prompt.jinja2"
+        )
 
     async def _parse(self, raw: Any) -> Dict[str, str]:
         obj = await safest_json(raw)
@@ -70,18 +81,32 @@ class Compare:
 
         prompts: List[str] = []
         ids: List[str] = []
+        id_to_circle_first: Dict[str, bool] = {}
+        base_template = self.template.text
+        tmpl_square = PromptTemplate(base_template)
+        tmpl_circle = PromptTemplate(swap_circle_square(base_template))
         for circle, square in pairs:
             ident = hashlib.sha1(f"{circle}|{square}".encode()).hexdigest()[:8]
             ids.append(ident)
-            circle_text = circle if self.cfg.modality in {"text", "entity", "web"} else ""
-            square_text = square if self.cfg.modality in {"text", "entity", "web"} else ""
+            circle_first_flag = (
+                self.cfg.circle_first
+                if self.cfg.circle_first is not None
+                else random.random() < 0.5
+            )
+            id_to_circle_first[ident] = circle_first_flag
+            circle_text = (
+                circle if self.cfg.modality in {"text", "entity", "web"} else ""
+            )
+            square_text = (
+                square if self.cfg.modality in {"text", "entity", "web"} else ""
+            )
+            tmpl = tmpl_circle if circle_first_flag else tmpl_square
             prompts.append(
-                self.template.render(
+                tmpl.render(
                     entry_circle=circle_text,
                     entry_square=square_text,
                     differentiate=self.cfg.differentiate,
                     additional_instructions=self.cfg.additional_instructions or "",
-                    circle_first=True,
                     modality=self.cfg.modality,
                 )
             )
@@ -94,10 +119,16 @@ class Compare:
                 imgs: List[str] = []
                 circle_imgs = load_image_inputs(circle)
                 square_imgs = load_image_inputs(square)
-                if circle_imgs:
-                    imgs.extend(circle_imgs)
-                if square_imgs:
-                    imgs.extend(square_imgs)
+                if id_to_circle_first.get(ident, False):
+                    if circle_imgs:
+                        imgs.extend(circle_imgs)
+                    if square_imgs:
+                        imgs.extend(square_imgs)
+                else:
+                    if square_imgs:
+                        imgs.extend(square_imgs)
+                    if circle_imgs:
+                        imgs.extend(circle_imgs)
                 if imgs:
                     tmp[ident] = imgs
             prompt_images = tmp or None
@@ -107,10 +138,16 @@ class Compare:
                 auds: List[Dict[str, str]] = []
                 circle_auds = load_audio_inputs(circle)
                 square_auds = load_audio_inputs(square)
-                if circle_auds:
-                    auds.extend(circle_auds)
-                if square_auds:
-                    auds.extend(square_auds)
+                if id_to_circle_first.get(ident, False):
+                    if circle_auds:
+                        auds.extend(circle_auds)
+                    if square_auds:
+                        auds.extend(square_auds)
+                else:
+                    if square_auds:
+                        auds.extend(square_auds)
+                    if circle_auds:
+                        auds.extend(circle_auds)
                 if auds:
                     tmp_a[ident] = auds
             prompt_audio = tmp_a or None
@@ -139,9 +176,7 @@ class Compare:
             raise RuntimeError("get_all_responses returned no DataFrame")
 
         resp_map = dict(zip(df_resp_all.Identifier, df_resp_all.Response))
-        parsed = await asyncio.gather(
-            *[self._parse(resp_map.get(i, "")) for i in ids]
-        )
+        parsed = await asyncio.gather(*[self._parse(resp_map.get(i, "")) for i in ids])
 
         records: List[Dict[str, str]] = []
         for (circle, square), res in zip(pairs, parsed):

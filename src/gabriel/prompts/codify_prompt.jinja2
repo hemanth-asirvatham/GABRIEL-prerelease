@@ -1,8 +1,12 @@
-Consider the following text:
-
-BEGIN TEXT
-{{ text }}
-END TEXT
+{% import "snippets.jinja2" as snip %}
+{% if entry_circle is defined %}
+{{ snip.pair_entries(modality, entry_square, entry_circle) }}
+{% else %}
+{{ snip.single_entry(modality, text) }}
+{% endif %}
+{% if modality != "text" %}
+If it is not text, you should not output verbatim excerpts. Instead, describe the relevant part of the {{ modality }} being coded.
+{% endif %}
 
 Your task is to act as a passage coder, as is done in the social sciences.
 

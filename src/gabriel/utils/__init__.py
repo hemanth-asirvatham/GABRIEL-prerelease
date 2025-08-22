@@ -21,6 +21,7 @@ from .word_matching import (
     robust_find_improved,
     strict_find,
 )
+from .prompt_utils import swap_circle_square
 
 __all__ = [
     "get_response",
@@ -48,4 +49,5 @@ __all__ = [
     "strict_find",
     "PassageViewer",
     "view_coded_passages",
+    "swap_circle_square",
 ]
