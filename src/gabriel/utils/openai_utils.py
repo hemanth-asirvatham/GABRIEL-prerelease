@@ -1297,9 +1297,11 @@ async def get_all_responses(
         else:
             avg_row = 0.0
             avg_1000 = 0.0
-        logger.info(
+        msg = (
             f"Total cost: ${total_cost:.4f}; average per row: ${avg_row:.4f}; average per 1000 rows: ${avg_1000:.4f}"
         )
+        print(msg)
+        logger.info(msg)
     # Filter prompts/identifiers based on what is already completed
     todo_pairs = [(p, i) for p, i in zip(prompts, identifiers) if i not in done]
     if not todo_pairs:
