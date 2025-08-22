@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -174,9 +175,8 @@ class Merge:
             if use_embeddings and short_emb:
                 arr = np.array([short_emb[s] for s in remaining_short], dtype=float)
                 k = max(1, int(np.ceil(len(remaining_short) / short_len)))
-                centroids, labels = kmeans2(arr, k, minit="points")
+                _, labels = kmeans2(arr, k, minit="points")
                 cluster_sets: List[List[str]] = []
-                centroid_list: List[np.ndarray] = []
                 for cluster_id in range(k):
                     members = [remaining_short[i] for i, lbl in enumerate(labels) if lbl == cluster_id]
                     if not members:
@@ -184,20 +184,37 @@ class Merge:
                     for j in range(0, len(members), short_len):
                         subset = members[j : j + short_len]
                         cluster_sets.append(subset)
-                        centroid_list.append(np.mean([short_emb[m] for m in subset], axis=0))
 
                 long_matrix = np.array([long_emb[t] for t in long_uniques], dtype=float)
                 long_norms = np.linalg.norm(long_matrix, axis=1) + 1e-8
-                for subset, cent in zip(cluster_sets, centroid_list):
-                    sims = long_matrix @ cent / (np.linalg.norm(cent) * long_norms)
-                    order = np.argsort(sims)[::-1]
+                for subset in cluster_sets:
+                    short_vecs = [np.array(short_emb[s], dtype=float) for s in subset]
+                    short_norms = [np.linalg.norm(vec) + 1e-8 for vec in short_vecs]
+                    orders: List[np.ndarray] = []
+                    sims_list: List[np.ndarray] = []
+                    for vec, norm in zip(short_vecs, short_norms):
+                        sims = long_matrix @ vec / (long_norms * norm)
+                        order = np.argsort(sims)[::-1]
+                        orders.append(order)
+                        sims_list.append(sims)
+
+                    per_term = max(1, math.ceil(self.cfg.long_list_len / len(subset)))
                     for scan in range(extra_scans):
-                        start = scan * self.cfg.long_list_len
-                        end = start + self.cfg.long_list_len
-                        idx_slice = order[start:end]
-                        if len(idx_slice) == 0:
+                        combined: Dict[int, float] = {}
+                        start = scan * per_term
+                        end = start + per_term
+                        for order, sims in zip(orders, sims_list):
+                            if start >= len(order):
+                                continue
+                            idx_slice = order[start:end]
+                            for idx in idx_slice:
+                                score = float(sims[idx])
+                                if idx not in combined or score > combined[idx]:
+                                    combined[idx] = score
+                        if not combined:
                             continue
-                        candidate = [long_uniques[i] for i in idx_slice]
+                        sorted_idx = sorted(combined.keys(), key=lambda i: combined[i], reverse=True)
+                        candidate = [long_uniques[i] for i in sorted_idx[: self.cfg.long_list_len]]
                         candidates.append(candidate)
                         clusters_out.append(subset)
             else:
@@ -337,7 +354,7 @@ class Merge:
                     s_norm = self._normalize(s)
                     for res_map in normalized_results:
                         val = res_map.get(s_norm)
-                        if val:
+                        if val and self._normalize(val) != "nocertainmatch":
                             counts[val] = counts.get(val, 0) + 1
                     if not counts:
                         continue
