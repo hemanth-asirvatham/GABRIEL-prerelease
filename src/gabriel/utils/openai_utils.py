@@ -961,15 +961,12 @@ async def get_all_embeddings(
     save_path: str = "embeddings.pkl",
     reset_file: bool = False,
     n_parallels: int = 150,
-    timeout: Optional[float] = None,
+    timeout: float = 30.0,
     save_every_x: int = 10000,
     use_dummy: bool = False,
     verbose: bool = True,
     logging_level: Union[str, int] = "warning",
     max_retries: int = 3,
-    timeout_factor: float = 1.75,
-    max_timeout: Optional[float] = None,
-    dynamic_timeout: bool = True,
     global_cooldown: int = 15,
     **get_embedding_kwargs: Any,
 ) -> Dict[str, List[float]]:
@@ -999,11 +996,6 @@ async def get_all_embeddings(
         return embeddings
 
     tokenizer = _get_tokenizer(model)
-    user_max_timeout = max_timeout if max_timeout is not None else timeout
-    max_timeout_val = float("inf") if user_max_timeout is None else float(user_max_timeout)
-    nonlocal_timeout: float = float("inf") if dynamic_timeout else max_timeout_val
-    success_times: List[float] = []
-    inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in items:
@@ -1014,36 +1006,13 @@ async def get_all_embeddings(
     cooldown_until = 0.0
     active_workers = 0
     concurrency_cap = max(1, min(n_parallels, queue.qsize()))
+    print(f"[init] Starting with {concurrency_cap} parallel workers")
+    logger.info(f"[init] Starting with {concurrency_cap} parallel workers")
     success_streak = 0
     success_threshold = 20
 
-    samples_for_timeout = max(1, int(0.95 * min(len(items), n_parallels)))
-
-    async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout
-        if not dynamic_timeout:
-            return
-        if len(success_times) < samples_for_timeout:
-            return
-        try:
-            p95 = float(np.percentile(success_times, 95))
-            new_timeout = min(max_timeout_val, timeout_factor * p95)
-            if math.isinf(nonlocal_timeout) or new_timeout > nonlocal_timeout:
-                logger.debug(
-                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 95th percentile latency."
-                )
-                nonlocal_timeout = new_timeout
-            if not math.isinf(nonlocal_timeout):
-                now = time.time()
-                for ident, (start, task, t_out) in list(inflight.items()):
-                    limit = min(nonlocal_timeout, t_out) if dynamic_timeout else t_out
-                    if now - start > limit and not task.done():
-                        task.cancel()
-        except Exception:
-            pass
-
     async def worker() -> None:
-        nonlocal processed, cooldown_until, active_workers, nonlocal_timeout, concurrency_cap, success_streak
+        nonlocal processed, cooldown_until, active_workers, concurrency_cap, success_streak
         while True:
             try:
                 text, ident, attempts_left = await queue.get()
@@ -1057,12 +1026,7 @@ async def get_all_embeddings(
                     await asyncio.sleep(0.01)
                 active_workers += 1
                 error_logs.setdefault(ident, [])
-                start = time.time()
-                base_timeout = nonlocal_timeout
-                multiplier = 1.5 ** (max_retries - attempts_left)
-                call_timeout = None if math.isinf(base_timeout) else base_timeout * multiplier
-                if call_timeout is not None and dynamic_timeout and not math.isinf(max_timeout_val):
-                    call_timeout = min(call_timeout, max_timeout_val)
+                call_timeout = timeout
                 task = asyncio.create_task(
                     get_embedding(
                         text,
@@ -1072,26 +1036,14 @@ async def get_all_embeddings(
                         **get_embedding_kwargs,
                     )
                 )
-                inflight[ident] = (
-                    start,
-                    task,
-                    call_timeout if call_timeout is not None else float("inf"),
-                )
-                try:
-                    emb, t = await task
-                except asyncio.CancelledError:
-                    inflight.pop(ident, None)
-                    raise asyncio.TimeoutError(f"API call timed out after {call_timeout} s")
-                inflight.pop(ident, None)
-                success_times.append(t)
-                await adjust_timeout()
+                emb, _ = await task
                 success_streak += 1
                 if success_streak >= success_threshold and concurrency_cap < n_parallels:
                     new_cap = min(n_parallels, concurrency_cap + 1)
                     if new_cap != concurrency_cap:
-                        logger.info(
-                            f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} based on successful calls."
-                        )
+                        msg = f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} based on successful calls."
+                        print(msg)
+                        logger.info(msg)
                     concurrency_cap = new_cap
                     success_streak = 0
                 embeddings[ident] = emb
@@ -1104,12 +1056,6 @@ async def get_all_embeddings(
                 success_streak = 0
                 error_logs[ident].append(str(e))
                 logger.warning(f"Timeout error for {ident}: {e}")
-                new_cap = max(1, concurrency_cap // 2)
-                if new_cap != concurrency_cap:
-                    logger.info(
-                        f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to timeout."
-                    )
-                    concurrency_cap = new_cap
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
                     await asyncio.sleep(backoff)
@@ -1121,11 +1067,11 @@ async def get_all_embeddings(
                 error_logs[ident].append(str(e))
                 logger.warning(f"Rate limit error for {ident}: {e}")
                 cooldown_until = time.time() + global_cooldown
-                new_cap = max(1, concurrency_cap // 2)
+                new_cap = max(1, concurrency_cap - 1)
                 if new_cap != concurrency_cap:
-                    logger.info(
-                        f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to rate limits."
-                    )
+                    msg = f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to rate limits."
+                    print(msg)
+                    logger.info(msg)
                     concurrency_cap = new_cap
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
