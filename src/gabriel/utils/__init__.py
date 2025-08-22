@@ -10,7 +10,6 @@ from .image_utils import encode_image
 from .audio_utils import encode_audio
 from .media_utils import load_image_inputs, load_audio_inputs
 from .logging import get_logger, set_log_level
-from .teleprompter import Teleprompter
 from .mapmaker import MapMaker, create_county_choropleth
 from .parsing import safe_json, safest_json, clean_json_df
 from .jinja import shuffled, shuffled_dict, get_env
@@ -30,7 +29,6 @@ __all__ = [
     "get_all_embeddings",
     "get_logger",
     "set_log_level",
-    "Teleprompter",
     "MapMaker",
     "create_county_choropleth",
     "safe_json",
