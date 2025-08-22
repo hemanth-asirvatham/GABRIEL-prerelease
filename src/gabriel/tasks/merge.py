@@ -217,9 +217,16 @@ class Merge:
         matches: Dict[str, str] = {}
         remaining = short_uniques[:]
         save_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
+        progress_path = os.path.join(self.cfg.save_dir, "merge_progress.csv")
+        if reset_files and os.path.exists(progress_path):
+            try:
+                os.remove(progress_path)
+            except OSError:
+                pass
         for attempt in range(self.cfg.max_attempts):
             if not remaining:
                 break
+            prev_total = len(matches)
             cur_short_len = max(1, int(self.cfg.short_list_len * (self.cfg.short_list_multiplier ** attempt)))
             group_path = os.path.join(self.cfg.save_dir, f"merge_groups_attempt{attempt}.json")
             if os.path.exists(group_path) and not reset_files:
@@ -309,6 +316,29 @@ class Merge:
                             matches[short_rep] = long_rep
 
             remaining = [s for s in remaining if s not in matches]
+            round_matches = len(matches) - prev_total
+            total_matches = len(matches)
+            missing = len(remaining)
+            print(
+                f"[Merge] Attempt {attempt}: {round_matches} matches this round, "
+                f"{total_matches} total, {missing} remaining"
+            )
+            progress_df = pd.DataFrame(
+                [
+                    {
+                        "attempt": attempt,
+                        "matches_this_round": round_matches,
+                        "total_matches": total_matches,
+                        "remaining": missing,
+                    }
+                ]
+            )
+            progress_df.to_csv(
+                progress_path,
+                mode="a",
+                header=not os.path.exists(progress_path),
+                index=False,
+            )
 
         records: List[Dict[str, str]] = []
         if short_key == long_key:
@@ -345,4 +375,5 @@ class Merge:
                 right_on=long_key,
                 suffixes=("", "_y"),
             )
+        merged = merged.drop_duplicates(subset=[short_key])
         return merged

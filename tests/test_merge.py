@@ -1,6 +1,7 @@
 import asyncio
 import pandas as pd
 from unittest.mock import patch, AsyncMock
+from pathlib import Path
 
 import gabriel
 from gabriel.tasks.merge import Merge, MergeConfig
@@ -81,3 +82,40 @@ def test_merge_max_attempts(mock_resp, tmp_path):
     df2 = pd.DataFrame({"val": [1, 2], "term": ["Apple", "Banana"]})
     merged = asyncio.run(task.run(df1, df2, on="term"))
     assert set(merged["val"].dropna()) == {1, 2}
+
+
+@patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
+def test_merge_deduplicates(mock_resp, tmp_path):
+    mock_resp.return_value = pd.DataFrame(
+        {"Identifier": ["merge_00_00000"], "Response": ['{"apple": "Apple"}']}
+    )
+    cfg = MergeConfig(save_dir=str(tmp_path), use_embeddings=False)
+    task = Merge(cfg)
+    df1 = pd.DataFrame({"term": ["apple"]})
+    df2 = pd.DataFrame({"val": [1, 2], "term": ["Apple", "Apple"]})
+    merged = asyncio.run(task.run(df1, df2, on="term"))
+    assert len(merged) == 1
+
+
+@patch("gabriel.tasks.merge.get_all_responses", new_callable=AsyncMock)
+def test_merge_progress_tracking(mock_resp, tmp_path):
+    mock_resp.side_effect = [
+        pd.DataFrame({"Identifier": ["merge_00_00000"], "Response": ['{"apple": "Apple"}']}),
+        pd.DataFrame({"Identifier": ["merge_01_00000"], "Response": ['{"banana": "Banana"}']}),
+    ]
+    cfg = MergeConfig(
+        save_dir=str(tmp_path),
+        use_embeddings=False,
+        short_list_len=1,
+        max_attempts=2,
+    )
+    task = Merge(cfg)
+    df1 = pd.DataFrame({"term": ["apple", "banana"]})
+    df2 = pd.DataFrame({"val": [1, 2], "term": ["Apple", "Banana"]})
+    merged = asyncio.run(task.run(df1, df2, on="term"))
+    progress_path = Path(tmp_path) / "merge_progress.csv"
+    assert progress_path.exists()
+    progress = pd.read_csv(progress_path)
+    assert list(progress["matches_this_round"]) == [1, 1]
+    assert list(progress["total_matches"]) == [1, 2]
+    assert list(progress["remaining"]) == [1, 0]
