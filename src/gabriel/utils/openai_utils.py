@@ -966,9 +966,15 @@ async def get_all_embeddings(
     use_dummy: bool = False,
     verbose: bool = True,
     logging_level: Union[str, int] = "warning",
+    max_retries: int = 3,
+    timeout_factor: float = 1.75,
+    max_timeout: Optional[float] = None,
+    dynamic_timeout: bool = True,
+    token_sample_size: int = 20,
+    global_cooldown: int = 15,
     **get_embedding_kwargs: Any,
 ) -> Dict[str, List[float]]:
-    """Retrieve embeddings for a list of texts with simple concurrency."""
+    """Retrieve embeddings for a list of texts with robust concurrency handling."""
 
     if not use_dummy:
         _require_api_key()
@@ -993,37 +999,233 @@ async def get_all_embeddings(
     if not items:
         return embeddings
 
-    queue: asyncio.Queue[Tuple[str, str]] = asyncio.Queue()
+    tokenizer = _get_tokenizer(model)
+    rate_headers = _get_rate_limit_headers(model)
+    user_max_timeout = max_timeout if max_timeout is not None else timeout
+    max_timeout_val = float("inf") if user_max_timeout is None else float(user_max_timeout)
+    nonlocal_timeout: float = float("inf") if dynamic_timeout else max_timeout_val
+    success_times: List[float] = []
+    inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
+    error_logs: Dict[str, List[str]] = defaultdict(list)
+    queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in items:
-        queue.put_nowait(item)
+        queue.put_nowait((item[1], item[0], max_retries))
 
-    pbar = tqdm(total=len(items), disable=not verbose, desc="Getting embeddings")
     processed = 0
+    pbar = tqdm(total=len(items), disable=not verbose, desc="Getting embeddings")
+    cooldown_until = 0.0
+    active_workers = 0
+    usage_samples: List[int] = []
+    avg_input_tokens = (
+        sum(len(tokenizer.encode(t)) for _, t in items) / max(1, len(items))
+    )
+    tokens_per_call = avg_input_tokens
+
+    def _pf(val: Optional[str]) -> Optional[float]:
+        try:
+            if val is None:
+                return None
+            s = str(val).strip()
+            if not s:
+                return None
+            f = float(s)
+            return f if f > 0 else None
+        except Exception:
+            return None
+
+    if rate_headers:
+        lim_r = _pf(rate_headers.get("limit_requests"))
+        rem_r = _pf(rate_headers.get("remaining_requests"))
+        allowed_req = rem_r if rem_r is not None else lim_r
+        lim_t = _pf(rate_headers.get("limit_tokens")) or _pf(
+            rate_headers.get("limit_tokens_usage_based")
+        )
+        rem_t = _pf(rate_headers.get("remaining_tokens")) or _pf(
+            rate_headers.get("remaining_tokens_usage_based")
+        )
+        allowed_tok = rem_t if rem_t is not None else lim_t
+    else:
+        allowed_req = None
+        allowed_tok = None
+
+    if allowed_req is None:
+        allowed_req_pm = float("inf")
+        concurrency_from_requests = None
+    else:
+        allowed_req_pm = allowed_req
+        concurrency_from_requests = int(max(1, allowed_req))
+
+    if allowed_tok is None:
+        allowed_tok_pm = float("inf")
+        concurrency_from_tokens = None
+    else:
+        allowed_tok_pm = allowed_tok
+        concurrency_from_tokens = int(max(1, allowed_tok // max(1, tokens_per_call)))
+
+    if concurrency_from_requests is None and concurrency_from_tokens is None:
+        concurrency_possible = None
+    elif concurrency_from_requests is None:
+        concurrency_possible = concurrency_from_tokens
+    elif concurrency_from_tokens is None:
+        concurrency_possible = concurrency_from_requests
+    else:
+        concurrency_possible = min(concurrency_from_requests, concurrency_from_tokens)
+
+    if concurrency_possible is not None:
+        concurrency_cap = max(1, min(n_parallels, concurrency_possible))
+    else:
+        concurrency_cap = max(1, n_parallels)
+
+    if concurrency_cap < n_parallels:
+        logger.info(
+            f"[parallel reduction] Limiting parallel workers from {n_parallels} to {concurrency_cap} based on your current rate limits."
+        )
+    n_parallels = concurrency_cap
+
+    req_lim = AsyncLimiter(
+        int(allowed_req_pm) if not math.isinf(allowed_req_pm) else n_parallels, 60
+    )
+    tok_lim = AsyncLimiter(
+        int(allowed_tok_pm)
+        if not math.isinf(allowed_tok_pm)
+        else max(1, int(tokens_per_call * n_parallels)),
+        60,
+    )
+
+    samples_for_timeout = max(1, int(0.95 * min(len(items), n_parallels)))
+
+    async def adjust_timeout() -> None:
+        nonlocal nonlocal_timeout
+        if not dynamic_timeout:
+            return
+        if len(success_times) < samples_for_timeout:
+            return
+        try:
+            p95 = float(np.percentile(success_times, 95))
+            new_timeout = min(max_timeout_val, timeout_factor * p95)
+            if math.isinf(nonlocal_timeout) or new_timeout > nonlocal_timeout:
+                logger.debug(
+                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 95th percentile latency."
+                )
+                nonlocal_timeout = new_timeout
+            if not math.isinf(nonlocal_timeout):
+                now = time.time()
+                for ident, (start, task, t_out) in list(inflight.items()):
+                    limit = min(nonlocal_timeout, t_out) if dynamic_timeout else t_out
+                    if now - start > limit and not task.done():
+                        task.cancel()
+        except Exception:
+            pass
 
     async def worker() -> None:
-        nonlocal processed
+        nonlocal processed, cooldown_until, active_workers, nonlocal_timeout, tokens_per_call, concurrency_cap
         while True:
             try:
-                identifier, text = queue.get_nowait()
-            except asyncio.QueueEmpty:
+                text, ident, attempts_left = await queue.get()
+            except asyncio.CancelledError:
                 break
             try:
-                emb, _ = await get_embedding(
-                    text,
-                    model=model,
-                    timeout=timeout,
-                    use_dummy=use_dummy,
-                    **get_embedding_kwargs,
+                now = time.time()
+                if now < cooldown_until:
+                    await asyncio.sleep(cooldown_until - now)
+                while active_workers >= concurrency_cap:
+                    await asyncio.sleep(0.01)
+                active_workers += 1
+                input_tokens = len(tokenizer.encode(text))
+                await req_lim.acquire()
+                await tok_lim.acquire(input_tokens)
+                error_logs.setdefault(ident, [])
+                start = time.time()
+                base_timeout = nonlocal_timeout
+                multiplier = 1.5 ** (max_retries - attempts_left)
+                call_timeout = None if math.isinf(base_timeout) else base_timeout * multiplier
+                if call_timeout is not None and dynamic_timeout and not math.isinf(max_timeout_val):
+                    call_timeout = min(call_timeout, max_timeout_val)
+                task = asyncio.create_task(
+                    get_embedding(
+                        text,
+                        model=model,
+                        timeout=call_timeout,
+                        use_dummy=use_dummy,
+                        return_raw=True,
+                        **get_embedding_kwargs,
+                    )
                 )
-                embeddings[identifier] = emb
-            except Exception as e:  # pragma: no cover - log but continue
-                logger.error(f"[get_all_embeddings] {identifier} failed: {e}")
-            processed += 1
-            if processed % save_every_x == 0:
-                with open(save_path, "wb") as f:
-                    pickle.dump(embeddings, f)
-            pbar.update(1)
-            queue.task_done()
+                inflight[ident] = (
+                    start,
+                    task,
+                    call_timeout if call_timeout is not None else float("inf"),
+                )
+                try:
+                    emb, t, raw = await task
+                except asyncio.CancelledError:
+                    inflight.pop(ident, None)
+                    raise asyncio.TimeoutError(f"API call timed out after {call_timeout} s")
+                inflight.pop(ident, None)
+                success_times.append(t)
+                await adjust_timeout()
+                usage = getattr(getattr(raw, "usage", {}), "total_tokens", None)
+                if isinstance(usage, (int, float)):
+                    usage_samples.append(int(usage))
+                else:
+                    usage_samples.append(input_tokens)
+                if len(usage_samples) > token_sample_size:
+                    usage_samples.pop(0)
+                if len(usage_samples) >= token_sample_size:
+                    avg_tokens = statistics.mean(usage_samples)
+                    tokens_per_call = avg_tokens
+                    new_cap = min(
+                        n_parallels,
+                        int(allowed_req_pm),
+                        int(max(1, allowed_tok_pm // max(1, tokens_per_call))),
+                    )
+                    if new_cap < 1:
+                        new_cap = 1
+                    if new_cap != concurrency_cap:
+                        logger.info(
+                            f"[token-based adaptation] Updating parallel workers from {concurrency_cap} to {new_cap} based on observed token usage."
+                        )
+                    concurrency_cap = new_cap
+                embeddings[ident] = emb
+                processed += 1
+                if processed % save_every_x == 0:
+                    with open(save_path, "wb") as f:
+                        pickle.dump(embeddings, f)
+                pbar.update(1)
+            except asyncio.TimeoutError as e:
+                error_logs[ident].append(str(e))
+                logger.warning(f"Timeout error for {ident}: {e}")
+                if attempts_left - 1 > 0:
+                    backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
+                    await asyncio.sleep(backoff)
+                    queue.put_nowait((text, ident, attempts_left - 1))
+                else:
+                    logger.error(f"[get_all_embeddings] {ident} failed: {e}")
+            except RateLimitError as e:
+                error_logs[ident].append(str(e))
+                logger.warning(f"Rate limit error for {ident}: {e}")
+                cooldown_until = time.time() + global_cooldown
+                if attempts_left - 1 > 0:
+                    backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
+                    await asyncio.sleep(backoff)
+                    queue.put_nowait((text, ident, attempts_left - 1))
+                else:
+                    logger.error(f"[get_all_embeddings] {ident} failed: {e}")
+            except (
+                APIError,
+                BadRequestError,
+                AuthenticationError,
+                InvalidRequestError,
+            ) as e:
+                error_logs[ident].append(str(e))
+                logger.warning(f"API error for {ident}: {e}")
+            except Exception as e:
+                error_logs[ident].append(str(e))
+                logger.error(f"Unexpected error for {ident}: {e}")
+                raise
+            finally:
+                active_workers -= 1
+                queue.task_done()
 
     workers = [
         asyncio.create_task(worker())
@@ -1780,7 +1982,7 @@ async def get_all_responses(
     inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     call_count = 0
-    samples_for_timeout = max(1, min(len(todo_pairs), int(0.95 * n_parallels)))
+    samples_for_timeout = max(1, int(0.95 * min(len(todo_pairs), n_parallels)))
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in todo_pairs:
         queue.put_nowait((item[0], item[1], max_retries))
