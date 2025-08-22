@@ -35,7 +35,7 @@ class MergeConfig:
     use_embeddings: bool = True
     short_list_len: int = 20
     long_list_len: int = 500
-    max_attempts: int = 1
+    max_attempts: int = 5
     short_list_multiplier: float = 0.5
 
 
