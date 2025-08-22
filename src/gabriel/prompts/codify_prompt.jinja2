@@ -1,6 +1,6 @@
 {% import "snippets.jinja2" as snip %}
 {% if entry_circle is defined %}
-{{ snip.pair_entries(modality, entry_square, entry_circle) }}
+{{ snip.pair_entries(modality, entry_square, entry_circle, circle_first=circle_first|default(false)) }}
 {% else %}
 {{ snip.single_entry(modality, text) }}
 {% endif %}

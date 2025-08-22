@@ -18,7 +18,6 @@ from ..utils import (
     safest_json,
     load_image_inputs,
     load_audio_inputs,
-    swap_circle_square,
 )
 
 
@@ -164,9 +163,6 @@ class Classify:
         if self.cfg.differentiate:
             circles = df_proc[circle_column_name].tolist()  # type: ignore[index]
             squares = df_proc[square_column_name].tolist()  # type: ignore[index]
-            base_template = self.template.text
-            tmpl_square = PromptTemplate(base_template)
-            tmpl_circle = PromptTemplate(swap_circle_square(base_template))
             for row, (circ, sq) in enumerate(zip(circles, squares)):
                 clean = " ".join(str(circ).split()) + "|" + " ".join(str(sq).split())
                 sha8 = hashlib.sha1(clean.encode()).hexdigest()[:8]
@@ -189,9 +185,8 @@ class Classify:
                 base_ids.append(sha8)
             for batch_idx, batch_labels in enumerate(label_batches):
                 for ident in base_ids:
-                    tmpl = tmpl_circle if id_to_circle_first[ident] else tmpl_square
                     prompts.append(
-                        tmpl.render(
+                        self.template.render(
                             entry_circle=prompt_circles[ident],
                             entry_square=prompt_squares[ident],
                             attributes=batch_labels,
@@ -199,6 +194,7 @@ class Classify:
                             additional_guidelines=self.cfg.additional_guidelines,
                             differentiate=True,
                             modality=self.cfg.modality,
+                            circle_first=id_to_circle_first[ident],
                         )
                     )
                     ids.append(f"{ident}_batch{batch_idx}")

@@ -1,5 +1,5 @@
 {% import "snippets.jinja2" as snip %}
-{{ snip.pair_entries(modality, entry_square, entry_circle) }}
+{{ snip.pair_entries(modality, entry_square, entry_circle, circle_first=circle_first|default(false)) }}
 
 Essential: do not confuse or conflate the two entries.
 Fully separate entry square from entry circle in your mind.
