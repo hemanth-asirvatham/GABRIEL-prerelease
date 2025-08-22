@@ -9,6 +9,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, DefaultDict, Dict, List, Optional
+import json
 
 import pandas as pd
 
@@ -280,6 +281,31 @@ class Classify:
 
         base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
+        attr_path = os.path.join(self.cfg.save_dir, f"{base_name}_attrs.json")
+
+        if reset_files and os.path.exists(attr_path):
+            try:
+                os.remove(attr_path)
+            except Exception:
+                pass
+        if os.path.exists(attr_path):
+            try:
+                with open(attr_path) as f:
+                    saved_labels = json.load(f)
+                if saved_labels != self.cfg.labels:
+                    print(
+                        "[Classify] Loading existing labels from save directory. If you want to use different labels, set reset_files=True or use a different save_dir."
+                    )
+                    print(saved_labels)
+                    self.cfg.labels = saved_labels
+            except Exception:
+                pass
+        else:
+            try:
+                with open(attr_path, "w") as f:
+                    json.dump(self.cfg.labels, f, indent=2)
+            except Exception:
+                pass
 
         kwargs.setdefault("use_web_search", self.cfg.modality == "web")
 
