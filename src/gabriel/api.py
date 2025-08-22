@@ -579,7 +579,6 @@ async def merge(
         n_parallels=n_parallels,
         n_runs=n_runs,
         use_dummy=use_dummy,
-        max_timeout=max_timeout,
         additional_instructions=additional_instructions,
         use_embeddings=use_embeddings,
         short_list_len=short_list_len,
