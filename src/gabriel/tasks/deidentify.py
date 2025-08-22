@@ -35,7 +35,7 @@ class Deidentifier:
 
     def __init__(self, cfg: DeidentifyConfig, template: Optional[PromptTemplate] = None) -> None:
         self.cfg = cfg
-        self.template = template or PromptTemplate.from_package("faceless_prompt.jinja2")
+        self.template = template or PromptTemplate.from_package("deidentification_prompt.jinja2")
         os.makedirs(self.cfg.save_dir, exist_ok=True)
 
     @staticmethod
