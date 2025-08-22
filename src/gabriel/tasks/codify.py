@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 from pathlib import Path
@@ -14,8 +16,6 @@ from ..utils import (
     strict_find,
     safe_json,
 )
-
-from __future__ import annotations
 
 from ..core.prompt_template import PromptTemplate
 from ..utils import safest_json, load_image_inputs, load_audio_inputs
