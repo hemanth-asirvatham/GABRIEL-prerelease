@@ -58,7 +58,12 @@ import pandas as pd
 # to adjust these imports accordingly.
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils.openai_utils import get_all_responses
-from gabriel.utils import safest_json, load_image_inputs, load_audio_inputs
+from gabriel.utils import (
+    safest_json,
+    load_image_inputs,
+    load_audio_inputs,
+    swap_circle_square,
+)
 
 
 @dataclass
@@ -70,7 +75,7 @@ class RankConfig:
     Bradley–Terry model and pairing heuristics are fixed at sensible
     values and should not generally need to be changed.  See the
     surrounding documentation for more details.
-    
+
     Parameters
     ----------
     attributes:
@@ -118,6 +123,7 @@ class RankConfig:
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "rankings"
     additional_instructions: str = ""
+    circle_first: Optional[bool] = None
     modality: str = "text"
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
@@ -135,7 +141,9 @@ class Rank:
     after the final round.
     """
 
-    def __init__(self, cfg: RankConfig, template: Optional[PromptTemplate] = None) -> None:
+    def __init__(
+        self, cfg: RankConfig, template: Optional[PromptTemplate] = None
+    ) -> None:
         """Instantiate a ranking engine.
 
         Parameters
@@ -151,7 +159,9 @@ class Rank:
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
         self.cfg = cfg
-        self.template = template or PromptTemplate.from_package("rankings_prompt.jinja2")
+        self.template = template or PromptTemplate.from_package(
+            "rankings_prompt.jinja2"
+        )
         # random state; a seed is intentionally omitted from the public
         # configuration to discourage brittle behaviour.  If
         # reproducibility is required, modify this line to pass a
@@ -388,7 +398,9 @@ class Rank:
         # if all rankings are of length 2, delegate to BT
         if all(len(r) == 2 for r in rankings):
             outcomes = [(r[0], r[1]) for r in rankings]
-            return self._fit_bt(item_ids, outcomes, pseudo, max_iter, tol, return_info=False)
+            return self._fit_bt(
+                item_ids, outcomes, pseudo, max_iter, tol, return_info=False
+            )
         n = len(item_ids)
         idx = {item: i for i, item in enumerate(item_ids)}
         w_i = np.zeros(n, dtype=float)
@@ -425,7 +437,9 @@ class Rank:
     # ------------------------------------------------------------------
     # Pairing strategies
     # ------------------------------------------------------------------
-    def _pairs_random(self, item_ids: List[str], texts_by_id: Dict[str, str], mpr: int) -> List[Tuple[Tuple[str, str], Tuple[str, str]]]:
+    def _pairs_random(
+        self, item_ids: List[str], texts_by_id: Dict[str, str], mpr: int
+    ) -> List[Tuple[Tuple[str, str], Tuple[str, str]]]:
         """Return a set of random, unique pairs for the given items."""
         pairs_set: set[Tuple[str, str]] = set()
         for a in item_ids:
@@ -490,17 +504,23 @@ class Rank:
             return []
         max_pairs = max(1, self._MAX_CANDIDATE_PAIRS_PER_ROUND)
         desired_neighbors = max_pairs // max(1, n)
-        candidate_neighbors = max(mpr, min(self._CANDIDATE_NEIGHBORS, desired_neighbors))
+        candidate_neighbors = max(
+            mpr, min(self._CANDIDATE_NEIGHBORS, desired_neighbors)
+        )
+
         def logistic_clip(x: float) -> float:
             if x > 50:
                 return 1.0
             if x < -50:
                 return 0.0
             return 1.0 / (1.0 + np.exp(-x))
+
         ids_sorted = sorted(item_ids, key=lambda i: current_ratings[i])
         idx_of = {i_id: k for k, i_id in enumerate(ids_sorted)}
         num_high_se = max(1, int(self._HIGH_SE_FRAC * n))
-        high_se_ids = sorted(item_ids, key=lambda i: se_agg.get(i, 1.0), reverse=True)[:num_high_se]
+        high_se_ids = sorted(item_ids, key=lambda i: se_agg.get(i, 1.0), reverse=True)[
+            :num_high_se
+        ]
         candidate_pairs_set: set[Tuple[str, str]] = set()
         for i_id in item_ids:
             pos = idx_of[i_id]
@@ -600,7 +620,9 @@ class Rank:
             se_full = {i: 1.0 for i in item_ids}
         else:
             se_full = se_agg
-        return self._pairs_info_gain(item_ids, texts_by_id, current_ratings, se_full, mpr)
+        return self._pairs_info_gain(
+            item_ids, texts_by_id, current_ratings, se_full, mpr
+        )
 
     # ------------------------------------------------------------------
     # Main ranking loop
@@ -656,10 +678,14 @@ class Rank:
             existing_rounds: List[int] = []
             try:
                 for fname in os.listdir(self.cfg.save_dir):
-                    if fname.startswith(f"{base_name}_round") and fname.endswith(".csv"):
+                    if fname.startswith(f"{base_name}_round") and fname.endswith(
+                        ".csv"
+                    ):
                         # Extract the integer after "round"
                         try:
-                            idx_str = fname[len(base_name) + 6 : -4]  # len("_round") == 6
+                            idx_str = fname[
+                                len(base_name) + 6 : -4
+                            ]  # len("_round") == 6
                             rnd_idx = int(idx_str)
                             existing_rounds.append(rnd_idx)
                         except Exception:
@@ -670,7 +696,9 @@ class Rank:
                 last_completed = max(existing_rounds)
                 # If all rounds have been processed, return the final
                 # results immediately (if the checkpoint exists)
-                if last_completed >= self.cfg.n_rounds - 1 and os.path.exists(final_path):
+                if last_completed >= self.cfg.n_rounds - 1 and os.path.exists(
+                    final_path
+                ):
                     return pd.read_csv(final_path)
                 # Otherwise resume from the next round
                 start_round = last_completed + 1
@@ -680,8 +708,10 @@ class Rank:
         # copy and prepare the input DataFrame
         df_proc = df.reset_index(drop=True).copy()
         # assign a stable identifier per row using an sha1 hash
-        df_proc["_id"] = df_proc[column_name].astype(str).map(
-            lambda x: hashlib.sha1(x.encode()).hexdigest()[:8]
+        df_proc["_id"] = (
+            df_proc[column_name]
+            .astype(str)
+            .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
         )
         # extract contents and build lookup
         if self.cfg.modality in {"image", "audio"}:
@@ -709,16 +739,24 @@ class Rank:
         else:
             attr_keys = list(self.cfg.attributes)
         # initialise ratings for each item/attribute
-        ratings: Dict[str, Dict[str, float]] = {i: {a: 0.0 for a in attr_keys} for i in item_ids}
+        ratings: Dict[str, Dict[str, float]] = {
+            i: {a: 0.0 for a in attr_keys} for i in item_ids
+        }
         # maintain a history of pairwise outcomes for each attribute
         history_pairs: Dict[str, List[Tuple[str, str]]] = {a: [] for a in attr_keys}
         # store per‑attribute standard errors across items
-        se_store: Dict[str, Dict[str, float]] = {a: {i: np.nan for i in item_ids} for a in attr_keys}
+        se_store: Dict[str, Dict[str, float]] = {
+            a: {i: np.nan for i in item_ids} for a in attr_keys
+        }
         # Define attribute batches once to reuse across replay and new rounds
         attr_batches: List[List[str]] = [
             attr_keys[i : i + self.cfg.n_attributes_per_run]
             for i in range(0, len(attr_keys), self.cfg.n_attributes_per_run)
         ]
+
+        base_template = self.template.text
+        tmpl_square = PromptTemplate(base_template)
+        tmpl_circle = PromptTemplate(swap_circle_square(base_template))
 
         # Helper function to write the current results to the final CSV.  This
         # builds the output DataFrame from the current ``df_proc`` and
@@ -753,7 +791,9 @@ class Rank:
                     df_proc[f"{attr}_z"] = df_proc["_id"].map(z_map)
             # Reorder columns: original user columns first (excluding the internal ``_id``),
             # then for each attribute the score column, followed by the standard error and z‑score.
-            original_cols = [c for c in df.columns]  # preserve the order provided by the user
+            original_cols = [
+                c for c in df.columns
+            ]  # preserve the order provided by the user
             new_cols: List[str] = []
             for attr in attr_keys:
                 new_cols.append(attr)
@@ -773,15 +813,20 @@ class Rank:
         # round we write a checkpoint to ``final_path``.
         if start_round > 0:
             for replay_rnd in range(start_round):
-                round_path = os.path.join(self.cfg.save_dir, f"{base_name}_round{replay_rnd}.csv")
+                round_path = os.path.join(
+                    self.cfg.save_dir, f"{base_name}_round{replay_rnd}.csv"
+                )
                 if not os.path.exists(round_path):
                     break
                 try:
                     # Load existing responses for this round
                     df_round = pd.read_csv(round_path)
-                    df_round["Response"] = df_round["Response"].apply(lambda x: None if pd.isna(x) else x)
+                    df_round["Response"] = df_round["Response"].apply(
+                        lambda x: None if pd.isna(x) else x
+                    )
                 except Exception:
                     continue
+
                 # Parse each response to build history_pairs
                 async def _coerce_dict_replay(raw: Any) -> Dict[str, Any]:
                     obj = await safest_json(raw)
@@ -796,9 +841,13 @@ class Rank:
                         if isinstance(inner, dict):
                             return inner
                     return {}
+
                 if {"Batch", "IdA", "IdB"}.issubset(df_round.columns):
                     for batch_idx_raw, id_a, id_b, resp_raw in zip(
-                        df_round["Batch"], df_round["IdA"], df_round["IdB"], df_round["Response"]
+                        df_round["Batch"],
+                        df_round["IdA"],
+                        df_round["IdB"],
+                        df_round["Response"],
                     ):
                         batch_idx = int(batch_idx_raw)
                         batch = attr_batches[batch_idx]
@@ -828,7 +877,9 @@ class Rank:
                             else:
                                 continue
                 else:
-                    for ident, resp_raw in zip(df_round["Identifier"], df_round["Response"]):
+                    for ident, resp_raw in zip(
+                        df_round["Identifier"], df_round["Response"]
+                    ):
                         parts = str(ident).split("|")
                         if len(parts) != 5:
                             continue
@@ -908,7 +959,9 @@ class Rank:
         # Now proceed with new rounds starting from ``start_round``
         for rnd in range(start_round, self.cfg.n_rounds):
             # aggregate current ratings across attributes for pairing
-            current_agg = {i: float(np.mean(list(ratings[i].values()))) for i in item_ids}
+            current_agg = {
+                i: float(np.mean(list(ratings[i].values()))) for i in item_ids
+            }
             se_agg_local = self._last_se_agg
             # generate pairs; on the first new round there may be no se_agg
             pairs = self._generate_pairs(
@@ -924,6 +977,7 @@ class Rank:
             pair_images: Dict[str, List[str]] = {}
             pair_audio: Dict[str, List[Dict[str, str]]] = {}
             meta_map: Dict[str, Tuple[int, int, str, str]] = {}
+            id_to_circle_first: Dict[str, bool] = {}
             for batch_idx, batch in enumerate(attr_batches):
                 attr_def_map = (
                     {a: self.cfg.attributes[a] for a in batch}
@@ -933,12 +987,20 @@ class Rank:
                 for pair_idx, ((id_a, t_a), (id_b, t_b)) in enumerate(pairs):
                     raw_ident = f"{rnd}|{batch_idx}|{pair_idx}|{id_a}|{id_b}"
                     sha8 = hashlib.sha1(raw_ident.encode()).hexdigest()[:8]
+                    circle_first_flag = (
+                        self.cfg.circle_first
+                        if self.cfg.circle_first is not None
+                        else self.rng.random() < 0.5
+                    )
+                    id_to_circle_first[sha8] = circle_first_flag
+                    tmpl = tmpl_circle if circle_first_flag else tmpl_square
                     prompts.append(
-                        self.template.render(
+                        tmpl.render(
                             entry_circle=t_a,
                             entry_square=t_b,
                             attributes=attr_def_map,
-                            additional_instructions=self.cfg.additional_instructions or "",
+                            additional_instructions=self.cfg.additional_instructions
+                            or "",
                             modality=self.cfg.modality,
                         )
                     )
@@ -948,20 +1010,32 @@ class Rank:
                         imgs = []
                         ia = images_by_id.get(id_a, [])
                         ib = images_by_id.get(id_b, [])
-                        if ia:
-                            imgs.extend(ia)
-                        if ib:
-                            imgs.extend(ib)
+                        if circle_first_flag:
+                            if ia:
+                                imgs.extend(ia)
+                            if ib:
+                                imgs.extend(ib)
+                        else:
+                            if ib:
+                                imgs.extend(ib)
+                            if ia:
+                                imgs.extend(ia)
                         if imgs:
                             pair_images[sha8] = imgs
                     if audio_by_id:
                         auds = []
                         aa = audio_by_id.get(id_a, [])
                         ab = audio_by_id.get(id_b, [])
-                        if aa:
-                            auds.extend(aa)
-                        if ab:
-                            auds.extend(ab)
+                        if circle_first_flag:
+                            if aa:
+                                auds.extend(aa)
+                            if ab:
+                                auds.extend(ab)
+                        else:
+                            if ab:
+                                auds.extend(ab)
+                            if aa:
+                                auds.extend(aa)
                         if auds:
                             pair_audio[sha8] = auds
             # obtain responses from the language model for this round
@@ -984,11 +1058,20 @@ class Rank:
                 **kwargs,
             )
             # attach metadata columns and overwrite the round CSV
-            resp_df["Batch"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[0])
-            resp_df["Pair"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[1])
-            resp_df["IdA"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[2])
-            resp_df["IdB"] = resp_df.Identifier.map(lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[3])
+            resp_df["Batch"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[0]
+            )
+            resp_df["Pair"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[1]
+            )
+            resp_df["IdA"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[2]
+            )
+            resp_df["IdB"] = resp_df.Identifier.map(
+                lambda x: meta_map.get(str(x), (np.nan, np.nan, "", ""))[3]
+            )
             resp_df.to_csv(round_path, index=False)
+
             # parse each response
             # reuse the _coerce_dict function defined in the original implementation
             async def _coerce_dict(raw: Any) -> Dict[str, Any]:
@@ -1004,6 +1087,7 @@ class Rank:
                     if isinstance(inner, dict):
                         return inner
                 return {}
+
             for ident, resp in zip(resp_df.Identifier, resp_df.Response):
                 meta = meta_map.get(str(ident))
                 if not meta:

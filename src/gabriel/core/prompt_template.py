@@ -1,10 +1,12 @@
 """Prompt template utilities."""
+
 from dataclasses import dataclass
 from importlib import resources
-from jinja2 import Environment, Template
+from jinja2 import Environment, Template, PackageLoader
 from typing import Dict
 
 from ..utils.jinja import shuffled, shuffled_dict
+
 
 @dataclass
 class PromptTemplate:
@@ -21,7 +23,7 @@ class PromptTemplate:
                 params["attributes"] = {a: d for a, d in zip(attrs, descs)}
             else:
                 params["attributes"] = {a: a for a in attrs}
-        env = Environment()
+        env = Environment(loader=PackageLoader("gabriel", "prompts"))
         env.filters["shuffled_dict"] = shuffled_dict
         env.filters["shuffled"] = shuffled
         template = env.from_string(self.text)

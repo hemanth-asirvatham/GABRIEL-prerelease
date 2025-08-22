@@ -1,24 +1,5 @@
-{% if modality == "text" %}
-BEGIN TEXT ENTRY
-{{ text }}
-END TEXT ENTRY
-Read the *entire* text carefully from start to finish. Do not skim—comprehend all details, including information buried deep in the content.
-{% elif modality == "image" %}
-Carefully inspect all visual elements of the image. Capture any textual or numeric information present, as well as visual details that could convey data relevant to the attributes.
-{% elif modality == "audio" %}
-Listen to the audio fully. Extract specific facts, names, dates, and other information from both speech and any other relevant audio content.
-{% elif modality == "entity" %}
-Entity: {{ text }}
-Use your prodigious internal knowledge on the item/entity "{{ text }}".
-Consider all relevant factual details (e.g. year of birth, location, inventor, price, etc.) that fit the requested attributes.
-Use your considerable knowledge to extract the needed information as precisely as possible.
-{% elif modality == "web" %}
-Entity: {{ text }}
-Comprehensively explore the web for all relevant information on the item/entity "{{ text }}".
-Ensure you collect a highly truthful, accurate, comprehensive, and representative picture of "{{ text }}" from the web.
-Focus on collecting information needed for the attributes, sourcing accurate, factual details about "{{ text }}".
-Use all the knowledge and information at your disposal to extract the needed information as precisely as possible.
-{% endif %}
+{% import "snippets.jinja2" as snip %}
+{{ snip.single_entry(modality, text) }}
 
 Your task: for each attribute below, extract the specific information requested (e.g. year of invention, price, death year, product launch date, etc.).
 Provide each value as a string.
