@@ -11,25 +11,25 @@ END LONG LIST
 For each short list term, find a suitable match in the long list that is as close as possible in meaning/substance to the short list term.
 Think of this as an intelligent fuzzy matching task - it might be as obvious as a different spelling/formatting of the same term (e.g. "Mary Monroe" and "Marilyn Monroe"; "John Kennedy" and "JFK"; "cook" and "Cook County, IL").
 But they might also be facially distinct but meaningfully equivalent (e.g. "heart rhythm doctor" and "927 - Cardiac Electrophysiology"; "Soviet folktales" and "Russian Folklore"; "minneapolis" and "Hennepin County").
-If no suitable match, do not include that short list term in your output.
+If no suitable match, use "no certain match".
 Only output short list/long list term pairs that are genuine matches.
-If multiple long list terms are good matches for a given short list term, output only the single best match.
-A single long list term can be used for multiple short list terms separately, if you are confident that is the best match for each (e.g. both "olmsted" and "hennepin" map to "minnesota").
+Output only the single best match or "no certain match".
+A single long list term can be used for multiple short list terms separately, if you are confident that is the best match for each (e.g. "minnesota" for both "olmsted" and "hennepin").
 Abbreviations/acronyms: ensure match is logical expansion.
-No forced matches-especially if term is short or acronym, only match if certain.
-Don't include short terms in output unless very high confidence in match-no great match means do not match.
-No weak/poor matches, but aim to match every single short list term that has a high confidence match.
+Especially if term is short or acronym, only match if certain.
+Use "no certain match" unless very high confidence in match-no great match means "no certain match", nothing forced.
+No weak/poor matches, but aim to match every short list term that has a great match.
 
 Output JSON only, in following format:
 {
-    "<insert short list term here>": "<insert matching long list term here>",
+    "<insert short list term here>": "<insert single best matching long list term or "no certain match" here>",
     "<short list term>": "...",
     ...
 }
 
 Again, the short list terms you are finding matches for are: {{ short_list.keys() | shuffled }}
-Assess EVERY short list term thoroughly; include all high confidence matches in your output.
-Don't include any short list terms with no match/low confidence, but be exhaustive in your search before deciding there is no match.
+Include EVERY short list term in output; no drops.
+Use "no certain match" for any short list terms with no match/low confidence, but exhaustively search before deciding there is no match.
 Term names from both lists must be taken verbatim, with absolutely no modification.
 Same case, same spelling, same punctuation, same formatting.
 It is imperative your keys are verbatim from the short list specifically, while the values are verbatim from the long list.
