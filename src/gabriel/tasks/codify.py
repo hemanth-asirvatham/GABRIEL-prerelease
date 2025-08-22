@@ -7,7 +7,6 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from ..utils import (
-    Teleprompter,
     get_all_responses,
     normalize_text_aggressive,
     letters_only,
