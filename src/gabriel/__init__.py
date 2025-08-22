@@ -16,7 +16,6 @@ from .api import (
     deduplicate,
     merge,
     whatever,
-    custom_prompt,
     view_coded_passages,
 )
 
@@ -38,7 +37,6 @@ __all__ = list(_tasks.__all__) + [
     "deduplicate",
     "merge",
     "whatever",
-    "custom_prompt",
     "view_coded_passages",
 ]
 
