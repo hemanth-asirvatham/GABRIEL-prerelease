@@ -1276,9 +1276,34 @@ async def get_all_responses(
             cols.insert(7, "Reasoning Summary")
         df = pd.DataFrame(columns=cols)
         done = set()
+    # Helper to calculate and report final run cost
+    def _report_cost() -> None:
+        nonlocal df
+        pricing = _lookup_model_pricing(model)
+        required_cols = {"Input Tokens", "Output Tokens"}
+        if not pricing or not required_cols.issubset(df.columns):
+            return
+        inp = pd.to_numeric(df["Input Tokens"], errors="coerce").fillna(0)
+        out = pd.to_numeric(df["Output Tokens"], errors="coerce").fillna(0)
+        if "Reasoning Tokens" in df:
+            reason = pd.to_numeric(df["Reasoning Tokens"], errors="coerce").fillna(0)
+        else:
+            reason = pd.Series([0] * len(df))
+        df["Cost"] = (inp / 1_000_000) * pricing["input"] + ((out + reason) / 1_000_000) * pricing["output"]
+        total_cost = df["Cost"].sum()
+        if len(df) > 0:
+            avg_row = total_cost / len(df)
+            avg_1000 = avg_row * 1000
+        else:
+            avg_row = 0.0
+            avg_1000 = 0.0
+        logger.info(
+            f"Total cost: ${total_cost:.4f}; average per row: ${avg_row:.4f}; average per 1000 rows: ${avg_1000:.4f}"
+        )
     # Filter prompts/identifiers based on what is already completed
     todo_pairs = [(p, i) for p, i in zip(prompts, identifiers) if i not in done]
     if not todo_pairs:
+        _report_cost()
         return df
     status.num_tasks_started = len(todo_pairs)
     status.num_tasks_in_progress = len(todo_pairs)
@@ -1834,6 +1859,7 @@ async def get_all_responses(
                 await asyncio.sleep(batch_poll_interval)
         # Append and return
         _append_results(completed_rows)
+        _report_cost()
         return df
     # Non‑batch path
     # Initialise limiters using the per‑minute budgets derived above.  These
@@ -2217,4 +2243,5 @@ async def get_all_responses(
         logger.warning(f"{status.num_api_errors} API errors encountered.")
     if status.num_other_errors > 0:
         logger.warning(f"{status.num_other_errors} unexpected errors encountered.")
+    _report_cost()
     return df
