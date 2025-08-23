@@ -1,5 +1,5 @@
 Your goal is to step back and propose exactly {{ bucket_count }} broader "bucket" terms that could serve as mutually exclusive groupings to capture many of these raw terms while still being specific.
-Buckets should be stylistically similar to the raw terms themselves (short phrases); can just be a raw term itself if that term already captures a broader grouping.
+Buckets often can be stylistically similar to the raw terms themselves (short phrases); can even be a raw term itself if that term already captures a broader grouping.
 
 Each bucket should substantively and thematically group multiple raw terms.
 Fine if some raw terms don't fit cleanly into any of your final buckets; aim though for your mutually exclusive buckets to jointly cover as many as reasonable.
@@ -14,12 +14,12 @@ We want exactly {{ bucket_count }} bucket terms.
 They should together capture as many raw terms as is reasonable, without vagueness and still being mutually exclusive, descriptive, and specific.
 Avoid buckets that are combinations of multiple distinct buckets, like "housing and employment issues" or "family and financial problems".
 Each bucket should be a single coherent concept, specific and distinct from other buckets.
-Ensure bucket terms resemble raw terms in writing style, specificity, and substance.
+Ensure bucket terms have specificity and substance.
 
 Really avoid vague buckets that are catch-alls, "miscellaneous", "singleton", or "other" categories.
 If a potential bucket you have in mind is too vague and catch-all, consider a more specific term that captures a narrower grouping with more thematic precision to what those raw terms are about.
 Strongly prefer descriptive, specific, and directional bucket terms (should be clear how a relevant piece of content could have more/less of the attribute).
-No vague, overly broad,trivial, or overly abstract buckets.
+No vague, overly broad, trivial, or overly abstract buckets.
 Better to make a too specific than a too vague bucket, even if it means capturing fewer raw terms.
 Final buckets must be meaningful, specific, interesting, and capturing the largest and most important clusters of raw terms.
 
@@ -35,8 +35,9 @@ Ensure you are only bucketizing differences that actually mean the same thing; i
 
 Buckets must be clear on which class has more of the attribute (e.g. "square entries have more X" or "circle entries lack Y").
 Each bucket term should be a directional statement (e.g. "circle entries showcase stronger communication amongst colleagues", "square entries use lots of first person perspective", "square entries invoke more chronic health issues", "circle entries involve more complications from type 2 diabetes", "square entries have few direct quotes from evidence", etc) rather than an "X vs Y" phrase.
+Closely follow the style of these examples; again, no "vs." etc; it must be clear and explicitly stated in bucket terms which group has more/less of the relevant attribute.
 Focus on the most salient and common differences between the two classes of content, specifically as they appear in the raw terms.
-TO BE CLEAR: all your bucket terms must explicitly state "square entries" or "circle entries", in the vein of "circle entries have more X", "square entries lack Y", "circle entries exhibit more Z", etc.
+TO BE CLEAR: all your bucket terms must explicitly state "square entries" or "circle entries", like "circle entries have more X", "square entries lack Y", "square entries exhibit more Z", etc.
 All buckets must make explicit references to one or the other class of entries ("square entries" or "circle entries"), and some property of that entry class that distinguishes it from the other class.
 Bucket definitions must clearly explain what it means for a square entry to have more of the attribute than a circle entry (or vice versa, depending on the bucket), grounded in examples from the raw terms.
 {% endif %}
@@ -86,6 +87,7 @@ Output JSON only, in following format:
     "<bucket>": "...",
     ...
 }
+Avoid using underscores in bucket terms; ensure easy readability (should understand specific concept just by reading the term).
 {% endif %}
 
 {% if additional_instructions %}
