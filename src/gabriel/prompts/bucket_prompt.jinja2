@@ -50,7 +50,7 @@ BEGIN BUCKET CANDIDATES
 END BUCKET CANDIDATES
 
 From these candidates only, choose the buckets (verbatim as they appear in the candidate keys) that best group the raw terms with the desired specificity, substance, and mutual exclusivity.
-    {% if selected_buckets and selected_buckets|length > 0 %}
+{% if selected_buckets %}
 The following bucket terms have **already been selected**; you should **not** select any similar/overlapping buckets from the candidate list:
 
 BEGIN ALREADY FINALIZED BUCKETS

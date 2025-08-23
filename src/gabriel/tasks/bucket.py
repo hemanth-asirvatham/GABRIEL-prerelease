@@ -151,7 +151,6 @@ class Bucket:
         def _vote_prompts(opts: List[str], selected: List[str], tag: str):
             pr: List[str] = []
             idn: List[str] = []
-            sel_map = {b: candidate_defs.get(b, "") for b in selected}
             for rep in range(self.cfg.repeat_voting):
                 random.shuffle(opts)
                 chunks = [
@@ -167,6 +166,9 @@ class Bucket:
                         if self.cfg.raw_term_definitions
                         else sample_list
                     )
+                    selected_map = {
+                        b: candidate_defs.get(b, "") for b in selected
+                    }
                     pr.append(
                         self.template.render(
                             terms=sample_terms,
@@ -176,7 +178,7 @@ class Bucket:
                             or "",
                             voting=True,
                             bucket_candidates=ch,
-                            selected_buckets=sel_map,
+                            selected_buckets=selected_map if selected_map else None,
                         )
                     )
                     idn.append(f"vote|{tag}|{rep}|{ci}")
