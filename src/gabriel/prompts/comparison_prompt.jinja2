@@ -18,7 +18,7 @@ Shortened example output:
     "square uses historic evidence and anecdotes": "Square highlights historical evidence and anecdotes in its argument (citing 'D', 'E'), whereas circle invokes no details from history.",
     ...
 }
-
+Stick closely to this "square focuses more on...", "circle advocates for...", "square uses ..." general style in your term names.
 {% else %}
 Your task is to list concise, mutually exclusive terms or short phrases that best explain how entry "circle" is similar to entry "square".
 These terms should be specific and reflect clear similarities observable between these particular entries.
@@ -37,11 +37,11 @@ Don't be vague or generic. Be precise and parsimonious.
 Each term must have a brief justification, directly quoting/using evidence from the entries where relevant.
 No terms, one term, three, six, many terms may apply-don't skip any applicable terms but output zero/few if that is the correct choice.
 Avoid trivial and pedantic terms; only substantive, meaningful terms-zero/fewer terms better than pointless trivialities.
-No underscores/hyphens in your terms-just natural, parsimonious language.
+ABSOLUTELY no underscores/hyphens in your term names-just natural, parsimonious language, like the examples.
 
 Output JSON only, mapping each term to a 1-3 sentence justification:
 {
-    "<insert term here>": "<insert direct quotes/evidence and reasoning as justification (1-3 evidence dense sentences)>",
+    "<insert term name here>": "<insert direct quotes/evidence and reasoning as justification (1-3 evidence dense sentences)>",
     "<term>": "...",
     ...
 }
