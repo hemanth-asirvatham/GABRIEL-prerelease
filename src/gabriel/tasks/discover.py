@@ -271,14 +271,22 @@ class Discover:
                 circ_true = classify_result[circ_col].fillna(False).sum()
                 sq_true = classify_result[sq_col].fillna(False).sum()
                 total = classify_result[[circ_col, sq_col]].notna().any(axis=1).sum()
-                diff = ((circ_true - sq_true) / total * 100) if total else None
+                circ_pct = (circ_true / total * 100) if total else None
+                sq_pct = (sq_true / total * 100) if total else None
+                net_pct = (
+                    (circ_pct - sq_pct)
+                    if circ_pct is not None and sq_pct is not None
+                    else None
+                )
                 summary_records.append({
                     "label": lab,
                     "circle_true": circ_true,
                     "square_true": sq_true,
                     "total": total,
-                "difference_pct": diff,
-            })
+                    "circle_pct": circ_pct,
+                    "square_pct": sq_pct,
+                    "net_pct": net_pct,
+                })
             summary_df = pd.DataFrame(summary_records)
         else:
             clf_cfg = ClassifyConfig(
