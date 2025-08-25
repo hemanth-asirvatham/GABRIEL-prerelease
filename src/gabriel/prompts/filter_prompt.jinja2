@@ -9,7 +9,7 @@ BEGIN ENTITY LIST
 END ENTITY LIST
 Carefully review every single entity; skip none.
 Do not skim: consider every entity with equal attention, including those buried in middle of list.
-Essential you output all entities that meet the condition; double check that you do not miss any.
+Essential you output all entities that meet the condition; triple check that you do not miss any.
 Do not include any entities that don't meet the condition in output.
 
 Output in following JSON format:
@@ -17,6 +17,15 @@ Output in following JSON format:
     "entities meeting condition": ["<insert entity verbatim here", "<entity>", ...]
 }
 
-In output list, entity names must be taken verbatim from entity list.
-Same spelling, same capitalization, same formatting exactly as in the list.
+In output list, entity names must be taken verbatim from entity list with absolutely no modification.
+Same case, same spelling, same punctuation, same formatting.
 Only include entities from the provided list, and only those that meet the condition.
+Your output list must purely be every single entity from the entity list that meets the condition; nothing overlooked, nothing included that doesn't meet condition.
+{% if additional_instructions %}
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate yourself).
+If they conflict with the other instructions, these user instructions take precedence.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
