@@ -1144,7 +1144,7 @@ async def get_all_responses(
     # details on how the concurrency cap is calculated.
     n_parallels: int = 750,
     max_retries: int = 3,
-    timeout_factor: float = 2.25,
+    timeout_factor: float = 2.00,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
