@@ -643,10 +643,51 @@ def _build_params(
     reasoning_summary: Optional[str] = None,
     **extra: Any,
 ) -> Dict[str, Any]:
-    """Build the parameter dict for ``client.responses.create``.
+    """Compose the keyword arguments for an OpenAI Responses API call.
 
-    The ``max_output_tokens`` key is only included when a non‑None value is
-    provided; otherwise, the API will use its own maximum.
+    The function gathers together the many optional features supported by the
+    Responses endpoint – such as tool use, web search, JSON formatting and
+    reasoning controls – and emits a plain ``dict`` that mirrors the expected
+    JSON payload.  ``None`` values are omitted so the underlying SDK can apply
+    its own defaults.  This helper keeps the main :func:`get_response` function
+    relatively small and easy to read.
+
+    Parameters
+    ----------
+    model:
+        Identifier of the model to query (e.g. ``"gpt-5-mini"``).
+    input_data:
+        A list representing the conversation so far.  Each element is a mapping
+        with ``role`` and ``content`` keys in the format required by the API.
+    max_output_tokens:
+        Soft cap on the number of tokens the model may generate.  When ``None``
+        the parameter is omitted and the model's server-side default applies.
+    system_instruction:
+        The system prompt used for non ``o``/``gpt-5`` models.  Included here so
+        callers can pre-render it alongside the messages.
+    temperature:
+        Sampling temperature controlling randomness for models that honour it.
+    tools, tool_choice:
+        Optional tool specifications following the Responses API schema.
+    web_search:
+        When ``True`` a built-in web search tool is appended to the tool list.
+    search_context_size:
+        Size of the search context when ``web_search`` is enabled.
+    json_mode:
+        If ``True`` the model is asked to produce structured JSON output.
+    expected_schema:
+        Optional JSON schema supplied when ``json_mode`` is requested.
+    reasoning_effort, reasoning_summary:
+        Additional settings for ``o``/``gpt-5`` models controlling hidden
+        reasoning tokens and optional summaries.
+    **extra:
+        Any additional key-value pairs to forward directly to the API.
+
+    Returns
+    -------
+    dict
+        Dictionary ready to be expanded into
+        :meth:`openai.AsyncOpenAI.responses.create`.
     """
     params: Dict[str, Any] = {
         "model": model,
@@ -717,13 +758,70 @@ async def get_response(
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
     **kwargs: Any,
-): 
-    """Minimal async call to OpenAI's /responses endpoint or dummy response.
+):
+    """Request one or more model completions from the OpenAI API.
 
-    The caller may specify either ``max_output_tokens`` or the deprecated
-    ``max_tokens`` argument.  If both are provided, ``max_output_tokens``
-    takes precedence.  When both are ``None``, the model’s default output
-    limit is used.
+    This coroutine is the main entry point for sending a single prompt to an
+    OpenAI model.  It supports text-only prompts as well as prompts that include
+    images or audio.  When ``use_dummy`` is ``True`` no network requests are
+    made; instead a predictable placeholder response is returned, which is
+    useful for tests.
+
+    Internally the function prepares a parameter dictionary via
+    :func:`_build_params` and dispatches the request using the asynchronous
+    OpenAI SDK.  Audio inputs are routed through the chat-completions API,
+    whereas all other requests use the newer Responses API.  Multiple
+    completions can be retrieved in parallel by setting ``n`` greater than one.
+
+    Parameters
+    ----------
+    prompt:
+        The user question or instruction to send to the model.
+    model:
+        Name of the model to query.
+    n:
+        Number of completions to request.  Each completion is retrieved in
+        parallel.
+    max_output_tokens / max_tokens:
+        Optional cap on the length of each completion in tokens.  The
+        ``max_tokens`` alias is retained for backwards compatibility, but
+        ``max_output_tokens`` takes precedence when both are supplied.
+    timeout:
+        Maximum time in seconds to wait for the API to respond.  ``None``
+        disables client-side timeouts.
+    temperature:
+        Randomness control for non ``gpt-5`` models.
+    json_mode, expected_schema:
+        When ``json_mode`` is ``True`` the model is instructed to output JSON.
+        ``expected_schema`` may provide a JSON schema to validate against.
+    tools, tool_choice:
+        Optional tool specifications to pass through to the API.
+    web_search, search_context_size:
+        Enable and configure the built-in web-search tool.
+    reasoning_effort, reasoning_summary:
+        Additional reasoning controls for ``o`` and ``gpt-5`` models.
+    use_dummy:
+        If ``True`` return deterministic dummy responses instead of calling the
+        external API.
+    verbose:
+        When set, progress information is printed via the module logger.
+    images, audio:
+        Lists of base64-encoded media to include alongside the text prompt.
+    return_raw:
+        If ``True`` the raw SDK response objects are returned alongside the
+        extracted text and timing information.
+    logging_level:
+        Optional override for the module's log level.
+    **kwargs:
+        Any additional parameters understood by the OpenAI SDK are forwarded
+        transparently.
+
+    Returns
+    -------
+    tuple
+        ``([text, ...], duration)`` when ``return_raw`` is ``False``.  If
+        ``return_raw`` is ``True`` the third element contains the raw response
+        objects from the SDK.
     """
     if web_search and json_mode:
         logger.warning(
@@ -915,7 +1013,39 @@ async def get_embedding(
     logging_level: Optional[Union[str, int]] = None,
     **kwargs: Any,
 ) -> Tuple[List[float], float]:
-    """Minimal async call to OpenAI's embedding endpoint or dummy response."""
+    """Retrieve a numeric embedding vector for ``text``.
+
+    The OpenAI embedding endpoint converts a piece of text into a list of
+    floating‑point numbers that capture semantic meaning.  This helper wraps
+    that API in a small asynchronous function and returns both the embedding and
+    the time taken to obtain it.  When ``use_dummy`` is ``True`` a synthetic
+    embedding is produced instead of contacting the network – handy for unit
+    tests or offline experimentation.
+
+    Parameters
+    ----------
+    text:
+        The string to embed.
+    model:
+        Which embedding model to use.  Defaults to ``"text-embedding-3-small"``.
+    timeout:
+        Optional request timeout in seconds.  ``None`` waits indefinitely.
+    use_dummy:
+        Return a short deterministic vector instead of calling the API.
+    return_raw:
+        When ``True`` the raw SDK response object is also returned.
+    logging_level:
+        Optional log level override for this call.
+    **kwargs:
+        Additional parameters forwarded to
+        :meth:`openai.AsyncOpenAI.embeddings.create`.
+
+    Returns
+    -------
+    tuple
+        ``(embedding, duration)`` or ``(embedding, duration, raw)`` when
+        ``return_raw`` is ``True``.
+    """
 
     if use_dummy:
         dummy = [float(len(text))]
@@ -970,7 +1100,52 @@ async def get_all_embeddings(
     global_cooldown: int = 15,
     **get_embedding_kwargs: Any,
 ) -> Dict[str, List[float]]:
-    """Retrieve embeddings for a list of texts with robust concurrency handling."""
+    """Compute embeddings for many pieces of text and persist the results.
+
+    The function accepts a list of input strings and queries the OpenAI
+    embedding API concurrently.  Progress is periodically written to
+    ``save_path`` so long‑running jobs can be resumed.  The routine adapts the
+    number of parallel workers based on observed successes and handles common
+    failure modes such as timeouts or rate‑limit errors by retrying with an
+    exponential backoff.
+
+    Parameters
+    ----------
+    texts:
+        Iterable of strings to embed.
+    identifiers:
+        Optional identifiers corresponding to ``texts``; defaults to using the
+        text itself.  These keys are used when saving and resuming work.
+    model:
+        Embedding model name.
+    save_path:
+        File path of a pickle used to store intermediate and final results.
+    reset_file:
+        When ``True`` any existing ``save_path`` is ignored and overwritten.
+    n_parallels:
+        Upper bound on the number of concurrent API calls.
+    timeout:
+        Per‑request timeout in seconds.
+    save_every_x:
+        Frequency (in processed texts) at which the pickle file is updated.
+    use_dummy:
+        Generate fake embeddings instead of calling the API.
+    verbose:
+        If ``True`` a progress bar is displayed.
+    logging_level:
+        Logging verbosity for this helper.
+    max_retries:
+        Number of times to retry a failed request before giving up.
+    global_cooldown:
+        Seconds to pause new work after encountering a rate‑limit error.
+    **get_embedding_kwargs:
+        Additional keyword arguments passed to :func:`get_embedding`.
+
+    Returns
+    -------
+    dict
+        Mapping from identifier to embedding vector.
+    """
 
     if not use_dummy:
         _require_api_key()
@@ -1129,7 +1304,8 @@ async def get_all_responses(
     expected_schema: Optional[Dict[str, Any]] = None,
     tools: Optional[List[dict]] = None,
     tool_choice: Optional[dict] = None,
-    use_web_search: bool = False,
+    web_search: Optional[bool] = None,
+    use_web_search: Optional[bool] = None,
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
@@ -1165,28 +1341,44 @@ async def get_all_responses(
     logging_level: Union[str, int] = "warning",
     **get_response_kwargs: Any,
 ) -> pd.DataFrame:
-    """Retrieve responses for a list of prompts, with optional batch support.
+    """Retrieve model responses for a collection of prompts.
 
-    This function handles rate limiting, optional batch submission, dynamic
-    timeout adjustment and printing of helpful usage summaries.  When
-    ``dynamic_timeout`` is enabled, the timeout starts as unlimited.  Once
-    responses have been received for 90% of ``n_parallels`` workers, the
-    90th percentile of successful response durations is multiplied by
-    ``timeout_factor`` and, if ``max_timeout`` is provided, capped by that value
-    to derive a timeout that is applied to all in‑flight and subsequent requests.
-    The timeout is increased if slower responses are later observed, and any
+    For each prompt the function contacts the OpenAI API and stores the returned
+    text, token counts and timing information in ``save_path``.  It can either
+    send requests directly using an asynchronous worker pool or, when
+    ``use_batch`` is ``True``, upload the prompts to the OpenAI Batch API and
+    periodically poll for completion.  In both modes the helper automatically
+    obeys rate limits, retries transient failures with exponential backoff and
+    writes partial results to disk so interrupted runs can be resumed.
+
+    A dynamic timeout mechanism keeps long‑running jobs efficient: the function
+    initially allows unlimited time for each request, then observes how long
+    successful responses take and sets a timeout based on the 90th percentile of
+    observed durations.  Subsequent calls use this timeout (capped by
+    ``max_timeout``) and it is increased if later responses are slower.  Any
     request exceeding the current limit is cancelled and retried.
 
-    The function remains backwards compatible with the original version,
-    except that the parameter ``max_tokens`` has been renamed to
-    ``max_output_tokens``.  When both are provided,
-    ``max_output_tokens`` takes precedence.
+    The function remains backwards compatible with the original version, except
+    that the parameter ``max_tokens`` has been renamed to ``max_output_tokens``.
+    When both are provided, ``max_output_tokens`` takes precedence.  The former
+    ``use_web_search`` flag is still accepted but ``web_search`` should be used
+    going forward.
     """
     if not use_dummy:
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
-    if get_response_kwargs.get("web_search", use_web_search) and get_response_kwargs.get(
+    # ``use_web_search`` was the original parameter name; ``web_search`` is the
+    # preferred modern spelling.  If both are supplied we favour ``web_search``
+    # but emit a warning for awareness.
+    if web_search is None:
+        web_search = bool(use_web_search)
+    elif use_web_search is not None and use_web_search != web_search:
+        logger.warning(
+            "`use_web_search` is deprecated; please use `web_search` instead."
+        )
+
+    if get_response_kwargs.get("web_search", web_search) and get_response_kwargs.get(
         "json_mode", json_mode
     ):
         logger.warning(
@@ -1203,7 +1395,7 @@ async def get_all_responses(
     if identifiers is None:
         identifiers = prompts
     # Pull default values into kwargs for get_response
-    get_response_kwargs.setdefault("web_search", use_web_search)
+    get_response_kwargs.setdefault("web_search", web_search)
     get_response_kwargs.setdefault("search_context_size", search_context_size)
     get_response_kwargs.setdefault("tools", tools)
     get_response_kwargs.setdefault("tool_choice", tool_choice)
