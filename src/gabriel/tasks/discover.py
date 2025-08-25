@@ -220,7 +220,7 @@ class Discover:
                 "modality": self.cfg.modality,
                 "reasoning_effort": self.cfg.reasoning_effort,
                 "reasoning_summary": self.cfg.reasoning_summary,
-                "n_attributes_per_run": len(labels),
+                "n_attributes_per_run": 8,
                 "differentiate": True,
                 "additional_instructions": self.cfg.additional_instructions or "",
             }
@@ -231,60 +231,56 @@ class Discover:
                     return "square" if word.lower() == "circle" else "circle"
                 return re.sub(r"(?i)circle|square", repl, text)
 
-            circ_cfg = ClassifyConfig(
-                labels=labels,
-                save_dir=os.path.join(self.cfg.save_dir, "classify_circle"),
+            combined_labels: Dict[str, str] = {}
+            rename_map: Dict[str, str] = {}
+            for lab, desc in labels.items():
+                actual_key = lab
+                swapped_lab = swap_cs(lab)
+                if swapped_lab == lab:
+                    swapped_lab = f"{lab} (inverted)"
+                combined_labels[actual_key] = desc
+                combined_labels[swapped_lab] = swap_cs(desc)
+                rename_map[actual_key] = f"{lab}_actual"
+                rename_map[swapped_lab] = f"{lab}_inverted"
+
+            clf_cfg = ClassifyConfig(
+                labels=combined_labels,
+                save_dir=os.path.join(self.cfg.save_dir, "classify"),
                 **base_cfg,  # type: ignore[arg-type]
             )
 
-            swapped_labels = {swap_cs(k): swap_cs(v) for k, v in labels.items()}
-            sq_cfg = ClassifyConfig(
-                labels=swapped_labels,
-                save_dir=os.path.join(self.cfg.save_dir, "classify_square"),
-                **base_cfg,  # type: ignore[arg-type]
-            )
+            clf = Classify(clf_cfg)
 
-            circ_clf = Classify(circ_cfg)
-            sq_clf = Classify(sq_cfg)
-
-            circ_df = await circ_clf.run(
+            combined_df = await clf.run(
                 df,
                 circle_column_name=circle_column_name,  # type: ignore[arg-type]
                 square_column_name=square_column_name,  # type: ignore[arg-type]
                 reset_files=reset_files,
             )
-            circ_df = circ_df.rename(columns={lab: f"{lab}_circle" for lab in labels})
 
-            sq_df = await sq_clf.run(
-                df,
-                circle_column_name=circle_column_name,  # type: ignore[arg-type]
-                square_column_name=square_column_name,  # type: ignore[arg-type]
-                reset_files=reset_files,
-            )
-            sq_df = sq_df.rename(columns={swap_cs(lab): f"{lab}_square" for lab in labels})
-            sq_cols = [f"{lab}_square" for lab in labels]
-            classify_result = circ_df.join(sq_df[sq_cols])
+            classify_result = combined_df.rename(columns=rename_map)
+
             summary_records: List[Dict[str, Any]] = []
             for lab in labels:
-                circ_col = f"{lab}_circle"
-                sq_col = f"{lab}_square"
-                circ_true = classify_result[circ_col].fillna(False).sum()
-                sq_true = classify_result[sq_col].fillna(False).sum()
-                total = classify_result[[circ_col, sq_col]].notna().any(axis=1).sum()
-                circ_pct = (circ_true / total * 100) if total else None
-                sq_pct = (sq_true / total * 100) if total else None
+                actual_col = f"{lab}_actual"
+                inverted_col = f"{lab}_inverted"
+                actual_true = classify_result[actual_col].fillna(False).sum()
+                inverted_true = classify_result[inverted_col].fillna(False).sum()
+                total = classify_result[[actual_col, inverted_col]].notna().any(axis=1).sum()
+                actual_pct = (actual_true / total * 100) if total else None
+                inverted_pct = (inverted_true / total * 100) if total else None
                 net_pct = (
-                    (circ_pct - sq_pct)
-                    if circ_pct is not None and sq_pct is not None
+                    (actual_pct - inverted_pct)
+                    if actual_pct is not None and inverted_pct is not None
                     else None
                 )
                 summary_records.append({
                     "label": lab,
-                    "circle_true": circ_true,
-                    "square_true": sq_true,
+                    "actual_true": actual_true,
+                    "inverted_true": inverted_true,
                     "total": total,
-                    "circle_pct": circ_pct,
-                    "square_pct": sq_pct,
+                    "actual_pct": actual_pct,
+                    "inverted_pct": inverted_pct,
                     "net_pct": net_pct,
                 })
             summary_df = pd.DataFrame(summary_records)
@@ -301,7 +297,7 @@ class Discover:
                 modality=self.cfg.modality,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
-                n_attributes_per_run=len(labels),
+                n_attributes_per_run=8,
             )
             clf = Classify(clf_cfg)
             classify_result = await clf.run(

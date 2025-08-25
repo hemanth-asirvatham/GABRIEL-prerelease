@@ -270,7 +270,7 @@ def test_api_wrappers(tmp_path):
     assert "deidentified_text" in deidentified.columns
 
     custom = asyncio.run(
-        gabriel.custom_prompt(
+        gabriel.whatever(
             prompts=["hello"],
             identifiers=["1"],
             save_dir=str(tmp_path / "cust"),
