@@ -30,7 +30,8 @@ Output JSON only, in following format:
 
 Again, the short list terms you are finding matches for are: {{ short_list.keys() | shuffled }}
 Include EVERY short list term in output; no drops.
-Use "no certain match" for any short list terms with no match/low confidence, but exhaustively search before deciding there is no match.
+Use "no certain match" for any short list terms with no match/low confidence: DO NOT MATCH UNLESS EXTREMELY CONFIDENT IT IS CORRECT.
+Wrong matches are far worse than no match.
 Term names from both lists must be taken verbatim, with absolutely no modification.
 Same case, same spelling, same punctuation, same formatting.
 It is imperative your keys are verbatim from the short list specifically, while the values are verbatim from the long list.
