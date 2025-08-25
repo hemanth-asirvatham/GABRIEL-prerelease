@@ -95,6 +95,11 @@ class Discover:
                 "Provide either column_name or both circle_column_name and square_column_name"
             )
 
+        if single:
+            self.cfg.differentiate = False
+        elif pair:
+            self.cfg.differentiate = True
+
         compare_df: Optional[pd.DataFrame] = None
         codify_df: Optional[pd.DataFrame] = None
 
