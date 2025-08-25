@@ -1144,7 +1144,7 @@ async def get_all_responses(
     # details on how the concurrency cap is calculated.
     n_parallels: int = 750,
     max_retries: int = 3,
-    timeout_factor: float = 1.75,
+    timeout_factor: float = 2.25,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
@@ -1170,8 +1170,8 @@ async def get_all_responses(
     This function handles rate limiting, optional batch submission, dynamic
     timeout adjustment and printing of helpful usage summaries.  When
     ``dynamic_timeout`` is enabled, the timeout starts as unlimited.  Once
-    responses have been received for 95% of ``n_parallels`` workers, the
-    95th percentile of successful response durations is multiplied by
+    responses have been received for 90% of ``n_parallels`` workers, the
+    90th percentile of successful response durations is multiplied by
     ``timeout_factor`` and, if ``max_timeout`` is provided, capped by that value
     to derive a timeout that is applied to all in‑flight and subsequent requests.
     The timeout is increased if slower responses are later observed, and any
@@ -1298,7 +1298,7 @@ async def get_all_responses(
             avg_row = 0.0
             avg_1000 = 0.0
         msg = (
-            f"Total cost: ${total_cost:.4f}; average per row: ${avg_row:.4f}; average per 1000 rows: ${avg_1000:.4f}"
+            f"Actual total cost: ${total_cost:.4f}; average per row: ${avg_row:.4f}; average per 1000 rows: ${avg_1000:.4f}"
         )
         print(msg)
         logger.info(msg)
@@ -1880,7 +1880,7 @@ async def get_all_responses(
     inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     call_count = 0
-    samples_for_timeout = max(1, int(0.95 * min(len(todo_pairs), n_parallels)))
+    samples_for_timeout = max(1, int(0.90 * min(len(todo_pairs), n_parallels)))
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in todo_pairs:
         queue.put_nowait((item[0], item[1], max_retries))
@@ -1932,11 +1932,11 @@ async def get_all_responses(
         if len(success_times) < samples_for_timeout:
             return
         try:
-            p95 = float(np.percentile(success_times, 95))
-            new_timeout = min(max_timeout_val, timeout_factor * p95)
+            p90 = float(np.percentile(success_times, 90))
+            new_timeout = min(max_timeout_val, timeout_factor * p90)
             if math.isinf(nonlocal_timeout) or new_timeout > nonlocal_timeout:
                 logger.debug(
-                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 95th percentile latency."
+                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 90th percentile latency."
                 )
                 nonlocal_timeout = new_timeout
             if not math.isinf(nonlocal_timeout):
