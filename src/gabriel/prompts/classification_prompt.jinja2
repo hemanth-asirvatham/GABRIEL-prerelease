@@ -4,13 +4,15 @@
 You are specifically looking at features that distinguish the two entries from each other.
 When deciding which labels apply, assess whether the label captures a key difference between the two entries.
 Pay close attention to the specific entry class, square or circle.
-If a label concerns circle entries having more of an attribute than square entries, then that label applies/returns True only if the circle entry here has that attribute MORE than the square entry here.
-Insufficient simply for attribute to be present; all conditions of the label must be met for True; else False.
-If a label is about square entries having an attribute that circle entries do not, then only return that True if the square entry here has that attribute, and also the circle entry does not. Both conditions must be met for True. If just one: False.
-Once more: it must be clear that the full wording of the label is met, with one entry clearly having the attribute and the other not having it, or one entry clearly having more of the attribute than the other, SPECIFICALLY in the direction specified by the label (if actual direction is reverse of label, False).
-Most critically: for label to apply/return True, if the label states circle entries have more of an attribute than square, then the circle entry here MUST be the one that has more of that attribute than the square entry.
-If the label states circle entries have more of the attribute but the square entry here is the one that actually has more of that attribute than the circle entry here (or they are equal, or both lack it), then that label does NOT apply and must return False.
-Only True if full conditions of label are met, with the stated attribute manifestation imbalance actually showing up in the provided square and circle entries, and ONLY IF in the specified direction.
+Both directions of the label (square over circle and circle over square) are provided on each attribute; only one can be True, the other must be False.
+Default to both being False unless clear and evident that one applies to the provided entries. Often, neither will apply because the attribute is not present, or is equally present, in which case both must be False.
+Again: for each label pair (same attribute, inverted directions), both can be False (default) or one can be True while other is False. Both cannot be True.
+If one label in a pair concerns circle entries having more of an attribute than square entries, then that label applies/returns True only if the circle entry here has that attribute MORE than the square entry here.
+Insufficient simply for attribute to be present; the specific condition that the provided circle entry manifests the attribute more than the provided square entry must be clearly and evidently true, for this label to return True.
+If instead the square entry manifests the attribute more than the circle entry: then the "circle more than square" label of the pair must return False, while the "square more than circle" label of the pair would return True.
+If the attribute is absent from both square and circle, or is equally present in both, then both paired labels must return the default False.
+Triple check your logic and ensure you apply the correct label of each pair (True for one, False for the other), and default to False for both unless clear and evident that one of the pair is True.
+Evaluate each pair separately from other pairs.
 {% else %}
 {{ snip.single_entry(modality, text) }}
 {% endif %}
