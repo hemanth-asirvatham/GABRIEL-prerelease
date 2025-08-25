@@ -30,8 +30,8 @@ class BucketConfig:
     differentiate: bool = False
     n_terms_per_prompt: int = 250
     repeat_bucketing: int = 5
-    repeat_voting: int = 20
-    next_round_frac: float = 0.5
+    repeat_voting: int = 25
+    next_round_frac: float = 0.25
     top_k_per_round: int = 1
     raw_term_definitions: bool = True
     reasoning_effort: Optional[str] = None
