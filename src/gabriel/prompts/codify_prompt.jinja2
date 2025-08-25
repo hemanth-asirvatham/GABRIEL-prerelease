@@ -5,7 +5,8 @@
 {{ snip.single_entry(modality, text) }}
 {% endif %}
 {% if modality != "text" %}
-If it is not text, you should not output verbatim excerpts. Instead, describe the relevant part of the {{ modality }} being coded.
+Since these inputs are not text, you should not output verbatim excerpts.
+Instead, describe the relevant parts of the entity being coded, in your own words.
 {% endif %}
 
 Your task is to act as a passage coder, as is done in the social sciences.
@@ -40,7 +41,7 @@ Be sure that the beginning and ending excerpts are completely verbatim, same exa
 Output a JSON in the following format:
 
 {
-    "<insert category 1 name here>":
+    "<insert category name here>":
         [
             {
                 "beginning excerpt": "<insert the first 8 words of the snippet/subsection here verbatim (or the entire snippet/subsection if it is less than 20 words)>",
@@ -52,11 +53,11 @@ Output a JSON in the following format:
             },
             ...
         ]
-    "<insert category 2 name here>",
+    "<category name>",
         [
             {
-                "beginning excerpt": "<insert the first 8 words of the snippet/subsection here verbatim (or the entire snippet/subsection if it is less than 20 words)>",
-                "ending excerpt": "<insert the last 8 words of the snippet/subsection here verbatim (or leave blank if the snippet/subsection is less than 20 words)>",
+                "beginning excerpt": "...",
+                "ending excerpt": "...",
             },
             ...
         ],
@@ -65,10 +66,9 @@ Output a JSON in the following format:
 
 {% if categories %}
 Again: the categories you are marking are: {{ categories.keys() | shuffled }}
-
 Ensure you input these category names verbatim into the JSON.
 Exact spelling/capitalization/underscoring/any other formatting of the category names must be preserved.
-Carefully consider the entire text for each and every category; do not skip any (though it is possible that some categories are not present in the text, in which case you should have the category name in the JSON but an empty list of snippets/subsections).
+Carefully consider the entire text for each and every category; do not skip any (though it is possible that some categories are not present in the text, in which case that category name must still be in the JSON but with an empty list of snippets/subsections).
 {% endif %}
 It is possible and often the case that text will overlap between categories, in which case you should mark the text for each applicable category separately. The same area of text can be marked for multiple categories.
 Often in this case, it is not the exact same snippet/subsection that is being marked for each category, but rather a slightly different snippet/subsection that perhaps starts or ends at a different word, or is a different length.
