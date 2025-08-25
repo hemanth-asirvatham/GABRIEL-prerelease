@@ -1,0 +1,22 @@
+Consider the following condition:
+BEGIN CONDITION
+{{ condition }}
+END CONDITION
+Your task is to evaluate every entity in the list below on whether it meets the condition.
+You will return only those that do.
+BEGIN ENTITY LIST
+{{ entities }}
+END ENTITY LIST
+Carefully review every single entity; skip none.
+Do not skim: consider every entity with equal attention, including those buried in middle of list.
+Essential you output all entities that meet the condition; double check that you do not miss any.
+Do not include any entities that don't meet the condition in output.
+
+Output in following JSON format:
+{
+    "entities meeting condition": ["<insert entity verbatim here", "<entity>", ...]
+}
+
+In output list, entity names must be taken verbatim from entity list.
+Same spelling, same capitalization, same formatting exactly as in the list.
+Only include entities from the provided list, and only those that meet the condition.
