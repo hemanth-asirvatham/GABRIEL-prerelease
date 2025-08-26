@@ -24,7 +24,7 @@ class DeduplicateConfig:
     file_name: str = "deduplicate_responses.csv"
     model: str = "gpt-5-mini"
     n_parallels: int = 750
-    n_runs: int = 1
+    n_runs: int = 3
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None
@@ -62,17 +62,32 @@ class Deduplicate:
         return uniques, groups, orig_to_rep
 
     # ------------------------------------------------------------------
-    async def run(
+    @staticmethod
+    def _print_stats(before: pd.Series, after: pd.Series, *, run_idx: int, total_runs: int) -> None:
+        total = before.notna().sum()
+        diff = (before.fillna("<NA>") != after.fillna("<NA>")).sum()
+        percent = (diff / total * 100) if total else 0.0
+        unique_mapped = after.dropna().nunique()
+        avg_per_map = (total / unique_mapped) if unique_mapped else 0.0
+        print(
+            f"[Deduplicate] Run {run_idx + 1}/{total_runs}: {diff} deduplications "
+            f"({percent:.2f}% of {total})."
+        )
+        print(
+            f"[Deduplicate] Unique mapped terms: {unique_mapped}; "
+            f"avg terms per mapping: {avg_per_map:.2f}."
+        )
+
+    # ------------------------------------------------------------------
+    async def _run_once(
         self,
-        df: pd.DataFrame,
+        df_proc: pd.DataFrame,
         *,
         on: str,
-        reset_files: bool = False,
+        output_col: str,
+        reset_files: bool,
         **kwargs: Any,
-    ) -> pd.DataFrame:
-        """Deduplicate a column using LLM assistance."""
-
-        df_proc = df.reset_index(drop=True).copy()
+    ) -> None:
         uniques, groups, orig_to_rep = self._deduplicate(df_proc[on])
 
         use_embeddings = self.cfg.use_embeddings and len(uniques) >= self.cfg.group_size
@@ -172,5 +187,40 @@ class Deduplicate:
             else:
                 rep = orig_to_rep.get(str(val), str(val))
                 mapped_vals.append(mappings.get(rep, rep))
-        df_proc[f"mapped_{on}"] = mapped_vals
+        df_proc[output_col] = mapped_vals
+
+    # ------------------------------------------------------------------
+
+    async def run(
+        self,
+        df: pd.DataFrame,
+        *,
+        on: str,
+        reset_files: bool = False,
+        nruns: Optional[int] = None,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        """Deduplicate a column using LLM assistance."""
+
+        df_proc = df.reset_index(drop=True).copy()
+        n_runs = nruns if nruns is not None else self.cfg.n_runs
+        current_col = on
+        for i in range(n_runs):
+            if n_runs == 1:
+                output_col = f"mapped_{on}"
+            elif i == n_runs - 1:
+                output_col = f"mapped_{on}_final"
+            else:
+                output_col = f"mapped_{on}_run{i + 1}"
+            await self._run_once(
+                df_proc,
+                on=current_col,
+                output_col=output_col,
+                reset_files=reset_files if i == 0 else False,
+                **kwargs,
+            )
+            self._print_stats(df_proc[current_col], df_proc[output_col], run_idx=i, total_runs=n_runs)
+            current_col = output_col
+        if n_runs > 1:
+            df_proc[f"mapped_{on}"] = df_proc[current_col]
         return df_proc
