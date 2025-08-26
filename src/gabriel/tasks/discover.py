@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from .codify import Codify
+from .codify import Codify, CodifyConfig
 from .compare import Compare, CompareConfig
 from .bucket import Bucket, BucketConfig
 from .classify import Classify, ClassifyConfig
@@ -105,22 +105,24 @@ class Discover:
 
         # ── 1. candidate discovery ─────────────────────────────────────
         if single:
-            coder = Codify()
-            codify_df = await coder.codify(
-                df,
-                column_name,  # type: ignore[arg-type]
-                categories=None,
-                additional_instructions=self.cfg.additional_instructions or "",
+            coder_cfg = CodifyConfig(
+                save_dir=os.path.join(self.cfg.save_dir, "codify"),
+                model=self.cfg.model,
+                n_parallels=self.cfg.n_parallels,
                 max_words_per_call=self.cfg.max_words_per_call,
                 max_categories_per_call=self.cfg.max_categories_per_call,
-                n_parallels=self.cfg.n_parallels,
-                model=self.cfg.model,
-                save_dir=os.path.join(self.cfg.save_dir, "codify"),
-                reset_files=reset_files,
                 debug_print=False,
                 use_dummy=self.cfg.use_dummy,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
+            )
+            coder = Codify(coder_cfg)
+            codify_df = await coder.run(
+                df,
+                column_name,  # type: ignore[arg-type]
+                categories=None,
+                additional_instructions=self.cfg.additional_instructions or "",
+                reset_files=reset_files,
             )
             term_defs: Dict[str, str] = {}
             if "coded_passages" in codify_df:

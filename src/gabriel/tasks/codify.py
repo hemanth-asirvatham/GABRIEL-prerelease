@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -21,13 +22,32 @@ from ..core.prompt_template import PromptTemplate
 from ..utils import safest_json, load_image_inputs, load_audio_inputs
 
 
+@dataclass
+class CodifyConfig:
+    """Configuration for :class:`Codify`."""
+
+    save_dir: str
+    file_name: str = "coding_results.csv"
+    model: str = "gpt-5-mini"
+    n_parallels: int = 750
+    max_words_per_call: int = 1000
+    max_categories_per_call: int = 8
+    debug_print: bool = False
+    use_dummy: bool = False
+    reasoning_effort: Optional[str] = None
+    reasoning_summary: Optional[str] = None
+
 
 class Codify:
     """Pipeline for coding passages of text according to specified categories."""
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: CodifyConfig, template: Optional[PromptTemplate] = None) -> None:
+        expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
+        expanded.mkdir(parents=True, exist_ok=True)
+        cfg.save_dir = str(expanded)
+        self.cfg = cfg
         self.hit_rate_stats = {}  # Track hit rates across all texts
-        self.template = PromptTemplate.from_package("codify_prompt.jinja2")
+        self.template = template or PromptTemplate.from_package("codify_prompt.jinja2")
 
     @staticmethod
     def view(
@@ -492,24 +512,15 @@ class Codify:
         if total_begin_failures + total_end_failures == 0 and total_found < total_excerpts:
             print("⚠️  WARNING: No failures recorded but some excerpts are missing - accounting error detected!")
 
-    async def codify(
+    async def run(
         self,
         df: pd.DataFrame,
         column_name: str,
         *,
         categories: Optional[Dict[str, str]] = None,
         additional_instructions: str = "",
-        max_words_per_call: int = 1000,
-        max_categories_per_call: int = 8,
-        n_parallels: int = 750,
-        model: str = "gpt-5-mini",
-        save_dir: str,
-        file_name: str = "coding_results.csv",
         reset_files: bool = False,
-        debug_print: bool = False,
-        use_dummy: bool = False,
-        reasoning_effort: Optional[str] = None,
-        reasoning_summary: Optional[str] = None,
+        **kwargs: Any,
     ) -> pd.DataFrame:
         """
         Process all texts in the dataframe, coding passages according to categories.
@@ -521,23 +532,12 @@ class Codify:
             additional_instructions: Additional instructions for the prompt. When
                 ``categories`` is ``None``, this must describe the broad topic for
                 dynamic category discovery.
-            max_words_per_call: Maximum words per API call (default 1000)
-            max_categories_per_call: Maximum categories per API call (default 8)
-            n_parallels: Number of parallel API calls
-            model: Model to use for coding
-            save_dir: Directory for saving results
-            file_name: Name of the CSV file for raw model responses
             reset_files: Whether to reset existing files
-            debug_print: Whether to print debug information
-            use_dummy: Whether to use dummy responses for testing
 
         Returns:
             Enhanced dataframe with columns for each category (if categories provided)
             or with 'coded_passages' column containing full category dict (if dynamic)
         """
-        expanded = Path(os.path.expandvars(os.path.expanduser(save_dir)))
-        expanded.mkdir(parents=True, exist_ok=True)
-        save_dir = str(expanded)
 
         df_proc = df.reset_index(drop=True).copy()
 
@@ -563,8 +563,8 @@ class Codify:
             # Split categories into batches of max_categories_per_call
             category_keys = list(categories.keys())
             category_batches = [
-                category_keys[i : i + max_categories_per_call] 
-                for i in range(0, len(category_keys), max_categories_per_call)
+                category_keys[i : i + self.cfg.max_categories_per_call]
+                for i in range(0, len(category_keys), self.cfg.max_categories_per_call)
             ]
         
         # Build prompts for all text chunks and category batches
@@ -577,7 +577,7 @@ class Codify:
         chunk_map = {}
         for text_idx, row in df_proc.iterrows():
             text = str(row[column_name])
-            chunks = self.chunk_by_words(text, max_words_per_call)
+            chunks = self.chunk_by_words(text, self.cfg.max_words_per_call)
 
             chunk_indices = []
             for chunk in chunks:
@@ -609,7 +609,7 @@ class Codify:
 
             text_index_to_chunks[text_idx] = chunk_indices
         
-        if debug_print and prompts:
+        if self.cfg.debug_print and prompts:
             print(f"\n[DEBUG] First prompt:\n{prompts[0][:500]}...\n")
             print(f"[DEBUG] Total chunks to process: {len(prompts)}")
         
@@ -619,17 +619,18 @@ class Codify:
         batch_df = await get_all_responses(
             prompts=prompts,
             identifiers=identifiers,
-            n_parallels=n_parallels,
-            save_path=os.path.join(save_dir, file_name),
+            n_parallels=self.cfg.n_parallels,
+            save_path=os.path.join(self.cfg.save_dir, self.cfg.file_name),
             reset_files=reset_files,
-            use_dummy=use_dummy,
+            use_dummy=self.cfg.use_dummy,
             json_mode=True,
             expected_schema=expected_schema,
-            model=model,
+            model=self.cfg.model,
             max_timeout=300,  # This will be forwarded to get_response via **kwargs
             print_example_prompt=True,
-            reasoning_effort=reasoning_effort,
-            reasoning_summary=reasoning_summary,
+            reasoning_effort=self.cfg.reasoning_effort,
+            reasoning_summary=self.cfg.reasoning_summary,
+            **kwargs,
         )
         
         # Group results by original text index and batch
@@ -639,7 +640,7 @@ class Codify:
             parts = ident.split("_")
             text_idx = int(parts[1])
             
-            if debug_print:
+            if self.cfg.debug_print:
                 print(f"[DEBUG] {ident}: resp type={type(resp)}")
                 if isinstance(resp, list):
                     print(f"[DEBUG] resp is list with {len(resp)} elements")
@@ -657,7 +658,7 @@ class Codify:
             # Parse the JSON string
             parsed = self.parse_json(main) or {}
             
-            if debug_print:
+            if self.cfg.debug_print:
                 if not parsed:
                     print(f"[DEBUG] Failed to parse response for {ident}")
                 else:
@@ -695,15 +696,23 @@ class Codify:
                 # Convert to actual snippets
                 final_coded_passages = {}
                 for category in all_categories.keys():
-                    snippets = self.consolidate_snippets(original_text, chunk_results, category, debug_print=debug_print, chunk_map=chunk_map)
+                    snippets = self.consolidate_snippets(
+                        original_text,
+                        chunk_results,
+                        category,
+                        debug_print=self.cfg.debug_print,
+                        chunk_map=chunk_map,
+                    )
                     if snippets:  # Only include categories that have snippets
                         final_coded_passages[category] = snippets
                 
                 df_proc.at[text_idx, "coded_passages"] = final_coded_passages
                 
-                if debug_print:
+                if self.cfg.debug_print:
                     total_snippets = sum(len(snippets) for snippets in final_coded_passages.values())
-                    print(f"[DEBUG] Text {text_idx}: {len(final_coded_passages)} categories, {total_snippets} total snippets")
+                    print(
+                        f"[DEBUG] Text {text_idx}: {len(final_coded_passages)} categories, {total_snippets} total snippets"
+                    )
         else:
             # Static mode: create column for each predefined category
             for category in categories.keys():
@@ -721,17 +730,25 @@ class Codify:
                 
                 # For each category, consolidate snippets from all chunks and batches
                 for category in categories.keys():
-                    snippets = self.consolidate_snippets(original_text, chunk_results, category, debug_print=debug_print, chunk_map=chunk_map)
+                    snippets = self.consolidate_snippets(
+                        original_text,
+                        chunk_results,
+                        category,
+                        debug_print=self.cfg.debug_print,
+                        chunk_map=chunk_map,
+                    )
                     df_proc.at[text_idx, category] = snippets
-                    
-                    if debug_print:
-                        print(f"[DEBUG] Text {text_idx}, Category '{category}': {len(snippets)} snippets found")
+
+                    if self.cfg.debug_print:
+                        print(
+                            f"[DEBUG] Text {text_idx}, Category '{category}': {len(snippets)} snippets found"
+                        )
         
         # Save final results
-        df_proc.to_csv(os.path.join(save_dir, "coded_passages.csv"), index=False)
-        
-        if debug_print:
-            print(f"\n[DEBUG] Processing complete. Results saved to: {save_dir}")
+        df_proc.to_csv(os.path.join(self.cfg.save_dir, "coded_passages.csv"), index=False)
+
+        if self.cfg.debug_print:
+            print(f"\n[DEBUG] Processing complete. Results saved to: {self.cfg.save_dir}")
             if dynamic_mode:
                 all_categories = set()
                 for coded_passages in df_proc["coded_passages"]:
