@@ -99,7 +99,12 @@ def _parse_json(txt: Any) -> Union[dict, list]:
 
 
 def safe_json(txt: Any) -> Union[dict, list]:
-    """Best-effort JSON parser returning ``{}`` on failure."""
+    """Best-effort JSON parser returning ``{}`` on failure.
+
+    This helper runs synchronously and never uses the LLM; it simply applies a
+    number of heuristics locally to coerce ``txt`` into a JSON object or list.
+    """
+
     try:
         return _parse_json(txt)
     except Exception:
@@ -107,7 +112,13 @@ def safe_json(txt: Any) -> Union[dict, list]:
 
 
 async def safest_json(txt: Any, *, model: Optional[str] = None) -> Union[dict, list]:
-    """Async wrapper around :func:`safe_json` with optional LLM fixup."""
+    """Parse JSON and optionally invoke an LLM to repair malformed input.
+
+    When local parsing fails, this function can ask a model to reformat the
+    given text into valid JSON.  Use it when ``safe_json`` is insufficient and
+    a best-effort LLM fix is desired.
+    """
+
     try:
         return _parse_json(txt)
     except Exception:

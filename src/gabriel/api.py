@@ -511,7 +511,7 @@ async def deduplicate(
     additional_instructions: Optional[str] = None,
     model: str = "gpt-5-mini",
     n_parallels: int = 750,
-    n_runs: int = 1,
+    n_runs: int = 3,
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "deduplicate_responses.csv",
