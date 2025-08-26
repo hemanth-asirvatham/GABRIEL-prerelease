@@ -4,7 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -49,10 +49,13 @@ class Deidentifier:
     async def run(
         self,
         df: pd.DataFrame,
-        text_column: str,
+        column_name: str,
+        *,
         grouping_column: Optional[str] = None,
+        reset_files: bool = False,
+        **kwargs: Any,
     ) -> pd.DataFrame:
-        """Deidentify all texts in ``df[text_column]``.
+        """Deidentify all texts in ``df[column_name]``.
 
         A ``grouping_column`` can be provided to ensure that the mapping is built
         across multiple rows belonging to the same group.
@@ -73,7 +76,7 @@ class Deidentifier:
         for gid in group_ids:
             segs: List[str] = []
             texts = (
-                df_proc.loc[df_proc["group_id"] == gid, text_column]
+                df_proc.loc[df_proc["group_id"] == gid, column_name]
                 .fillna("")
                 .astype(str)
                 .tolist()
@@ -115,6 +118,8 @@ class Deidentifier:
                 json_mode=True,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
+                reset_files=reset_files,
+                **kwargs,
             )
             for ident, resp in zip(batch_df["Identifier"], batch_df["Response"]):
                 gid = ident.split("_seg_")[0]
@@ -129,7 +134,7 @@ class Deidentifier:
             gid = row["group_id"]
             mapping = group_to_map.get(gid, {})
             mappings_col.append(mapping)
-            text = str(row[text_column])
+            text = str(row[column_name])
             deid_text = text
             pairs: List[tuple[str, str]] = []
             for entry in mapping.values():

@@ -203,7 +203,7 @@ def test_deidentifier_dummy(tmp_path):
     cfg = DeidentifyConfig(save_dir=str(tmp_path), file_name="deid.csv", use_dummy=True)
     task = Deidentifier(cfg)
     data = pd.DataFrame({"text": ["John went to Paris."]})
-    df = asyncio.run(task.run(data, text_column="text"))
+    df = asyncio.run(task.run(data, column_name="text"))
     assert "deidentified_text" in df.columns
 
 

@@ -13,6 +13,7 @@ from .tasks import (
     Deidentifier,
     DeidentifyConfig,
     Codify,
+    CodifyConfig,
     Extract,
     ExtractConfig,
     Paraphrase,
@@ -177,6 +178,7 @@ async def deidentify(
     additional_guidelines: str = "",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    reset_files: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
@@ -195,7 +197,12 @@ async def deidentify(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Deidentifier(cfg).run(df, column_name, grouping_column=grouping_column)
+    return await Deidentifier(cfg).run(
+        df,
+        column_name,
+        grouping_column=grouping_column,
+        reset_files=reset_files,
+    )
 
 
 async def rank(
@@ -255,7 +262,7 @@ async def codify(
     column_name: str,
     *,
     save_dir: str,
-    categories: Optional[dict[str, str]] = None,
+    categories: Optional[Dict[str, str]] = None,
     additional_instructions: str = "",
     model: str = "gpt-5-mini",
     n_parallels: int = 750,
@@ -267,27 +274,30 @@ async def codify(
     use_dummy: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
-    coder = Codify()
-    return await coder.codify(
+    cfg = CodifyConfig(
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        max_words_per_call=max_words_per_call,
+        max_categories_per_call=max_categories_per_call,
+        debug_print=debug_print,
+        use_dummy=use_dummy,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        **cfg_kwargs,
+    )
+    return await Codify(cfg).run(
         df,
         column_name,
         categories=categories,
-        max_words_per_call=max_words_per_call,
-        max_categories_per_call=max_categories_per_call,
         additional_instructions=additional_instructions,
-        n_parallels=n_parallels,
-        model=model,
-        reasoning_effort=reasoning_effort,
-        reasoning_summary=reasoning_summary,
-        save_dir=save_dir,
-        file_name=file_name,
         reset_files=reset_files,
-        debug_print=debug_print,
-        use_dummy=use_dummy,
     )
 
 
