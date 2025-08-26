@@ -615,7 +615,7 @@ async def filter(
     n_runs: int = 1,
     threshold: float = 0.5,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5-mini",
+    model: str = "gpt-5-nano",
     n_parallels: int = 750,
     reset_files: bool = False,
     use_dummy: bool = False,
