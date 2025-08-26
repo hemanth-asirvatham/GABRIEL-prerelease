@@ -50,6 +50,17 @@ def test_get_response_audio_dummy():
     assert responses and responses[0].startswith("DUMMY")
 
 
+def test_custom_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    openai_utils._clients_async.clear()
+    client = openai_utils._get_client("https://example.com/v1")
+    assert str(client.base_url) == "https://example.com/v1/"
+    openai_utils._clients_async.clear()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.org/v1")
+    client2 = openai_utils._get_client()
+    assert str(client2.base_url) == "https://example.org/v1/"
+
+
 def test_get_embedding_dummy():
     emb, _ = asyncio.run(openai_utils.get_embedding("hi", use_dummy=True))
     assert isinstance(emb, list) and emb and isinstance(emb[0], float)

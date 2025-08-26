@@ -15,10 +15,14 @@ class LLMClient(ABC):
 class OpenAIClient(LLMClient):
     """Concrete LLM client leveraging :func:`get_response`."""
 
-    def __init__(self, api_key: Optional[str] = None) -> None:
+    def __init__(
+        self, api_key: Optional[str] = None, base_url: Optional[str] = None
+    ) -> None:
         # ``get_response`` manages a shared client; API key via env or arg
         if api_key:
             os.environ.setdefault("OPENAI_API_KEY", api_key)
+        if base_url:
+            os.environ.setdefault("OPENAI_BASE_URL", base_url)
 
     async def acall(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
         prompt = "\n".join(m.get("content", "") for m in messages)
