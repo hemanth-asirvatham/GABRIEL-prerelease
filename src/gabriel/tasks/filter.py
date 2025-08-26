@@ -77,7 +77,7 @@ class Filter:
                 prompts.append(
                     self.template.render(
                         condition=self.cfg.condition,
-                        entities="\n".join(chunk),
+                        entities=chunk,
                         additional_instructions=self.cfg.additional_instructions,
                     )
                 )
