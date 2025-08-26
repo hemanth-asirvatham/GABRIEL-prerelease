@@ -14,6 +14,7 @@ _lazy_imports = {
     "Rank": ".rank",
     "RankConfig": ".rank",
     "Codify": ".codify",
+    "CodifyConfig": ".codify",
     "Paraphrase": ".paraphrase",
     "ParaphraseConfig": ".paraphrase",
     "Extract": ".extract",
