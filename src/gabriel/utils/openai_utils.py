@@ -74,13 +74,21 @@ except Exception:
 
 # Bring in specific error classes for granular handling
 try:
-    from openai import RateLimitError, APIError, BadRequestError, AuthenticationError, InvalidRequestError  # type: ignore
+    from openai import (
+        APIConnectionError,
+        APIError,
+        AuthenticationError,
+        BadRequestError,
+        InvalidRequestError,
+        RateLimitError,
+    )  # type: ignore
 except Exception:
-    RateLimitError = Exception  # type: ignore
+    APIConnectionError = Exception  # type: ignore
     APIError = Exception  # type: ignore
-    BadRequestError = Exception  # type: ignore
     AuthenticationError = Exception  # type: ignore
+    BadRequestError = Exception  # type: ignore
     InvalidRequestError = Exception  # type: ignore
+    RateLimitError = Exception  # type: ignore
 
 from gabriel.utils.parsing import safe_json
 
@@ -1358,6 +1366,12 @@ async def get_all_responses(
     ``max_timeout``) and it is increased if later responses are slower.  Any
     request exceeding the current limit is cancelled and retried.
 
+    The worker pool responds promptly to user cancellation (e.g. pressing
+    stop/``Ctrl+C``) by signalling all workers to halt before any new API
+    requests are issued.  Transient network disruptions such as lost
+    connections are retried with exponential backoff so long‑running jobs can
+    resume automatically once connectivity returns.
+
     The function remains backwards compatible with the original version, except
     that the parameter ``max_tokens`` has been renamed to ``max_output_tokens``.
     When both are provided, ``max_output_tokens`` takes precedence.  The former
@@ -2080,6 +2094,10 @@ async def get_all_responses(
     processed = 0
     pbar = tqdm(total=len(todo_pairs), desc="Processing prompts", leave=True)
     cooldown_until = 0.0
+    stop_event = asyncio.Event()
+    # Counters used for the gentle concurrency adaptation below
+    rate_limit_errors_since_adjust = 0
+    successes_since_adjust = 0
     active_workers = 0
     concurrency_cap = n_parallels
     usage_samples: List[Tuple[int, int, int]] = []
@@ -2148,12 +2166,40 @@ async def get_all_responses(
     async def rebuild_limiters() -> None:
         return None
 
+    def maybe_adjust_concurrency() -> None:
+        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust
+        decrease_threshold = 20
+        increase_threshold = 200
+        if rate_limit_errors_since_adjust >= decrease_threshold:
+            new_cap = max(1, int(math.floor(concurrency_cap * 0.75)))
+            if new_cap != concurrency_cap:
+                logger.warning(
+                    f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
+                )
+            concurrency_cap = new_cap
+            rate_limit_errors_since_adjust = 0
+            successes_since_adjust = 0
+        elif rate_limit_errors_since_adjust == 0 and successes_since_adjust >= increase_threshold:
+            new_cap = min(n_parallels, int(math.ceil(concurrency_cap * 1.25)))
+            if new_cap != concurrency_cap:
+                logger.warning(
+                    f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
+                )
+            concurrency_cap = new_cap
+            successes_since_adjust = 0
+            rate_limit_errors_since_adjust = 0
+
     async def worker() -> None:
-        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens
+        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event
         while True:
+            if stop_event.is_set():
+                break
             try:
                 prompt, ident, attempts_left = await queue.get()
             except asyncio.CancelledError:
+                break
+            if stop_event.is_set():
+                queue.task_done()
                 break
             try:
                 now = time.time()
@@ -2272,6 +2318,9 @@ async def get_all_responses(
                     status.num_tasks_in_progress -= 1
                     pbar.update(1)
                     error_logs.pop(ident, None)
+                    successes_since_adjust += 1
+                    rate_limit_errors_since_adjust = 0
+                    maybe_adjust_concurrency()
                     if processed % save_every_x_responses == 0:
                         await flush()
             except asyncio.CancelledError:
@@ -2321,7 +2370,42 @@ async def get_all_responses(
                 cooldown_until = status.time_of_last_rate_limit_error + global_cooldown
                 logger.warning(f"Rate limit error for {ident}: {e}")
                 error_logs[ident].append(str(e))
+                rate_limit_errors_since_adjust += 1
+                successes_since_adjust = 0
+                maybe_adjust_concurrency()
                 if attempts_left - 1 > 0:
+                    backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
+                    await asyncio.sleep(backoff)
+                    queue.put_nowait((prompt, ident, attempts_left - 1))
+                else:
+                    row = {
+                        "Identifier": ident,
+                        "Response": None,
+                        "Time Taken": None,
+                        "Input Tokens": input_tokens,
+                        "Reasoning Tokens": None,
+                        "Output Tokens": None,
+                        "Reasoning Effort": get_response_kwargs.get(
+                            "reasoning_effort", reasoning_effort
+                        ),
+                        "Successful": False,
+                        "Error Log": error_logs.get(ident, []),
+                    }
+                    if reasoning_summary is not None:
+                        row["Reasoning Summary"] = None
+                    results.append(row)
+                    processed += 1
+                    status.num_tasks_failed += 1
+                    status.num_tasks_in_progress -= 1
+                    pbar.update(1)
+                    error_logs.pop(ident, None)
+                    await flush()
+            except APIConnectionError as e:
+                inflight.pop(ident, None)
+                status.num_api_errors += 1
+                logger.warning(f"Connection error for {ident}: {e}")
+                error_logs[ident].append(str(e))
+                if attempts_left - 1 > 0 and not stop_event.is_set():
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
                     await asyncio.sleep(backoff)
                     queue.put_nowait((prompt, ident, attempts_left - 1))
@@ -2404,9 +2488,11 @@ async def get_all_responses(
     try:
         await queue.join()
     except (asyncio.CancelledError, KeyboardInterrupt):
+        stop_event.set()
         logger.info("Cancellation requested, shutting down workers...")
         raise
     finally:
+        stop_event.set()
         for w in workers:
             w.cancel()
         watcher.cancel()
