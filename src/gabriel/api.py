@@ -27,6 +27,8 @@ from .tasks import (
     BucketConfig,
     Discover,
     DiscoverConfig,
+    Filter,
+    FilterConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -597,6 +599,53 @@ async def merge(
         left_on=left_on,
         right_on=right_on,
         how=how,
+        reset_files=reset_files,
+    )
+
+
+async def filter(
+    df: pd.DataFrame,
+    column_name: str,
+    *,
+    condition: str,
+    save_dir: str,
+    entities_per_call: int = 150,
+    shuffle: bool = True,
+    random_seed: int = 42,
+    n_runs: int = 1,
+    threshold: float = 0.5,
+    additional_instructions: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 750,
+    reset_files: bool = False,
+    use_dummy: bool = False,
+    file_name: str = "filter_responses.csv",
+    max_timeout: Optional[float] = None,
+    **cfg_kwargs,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Filter`."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = FilterConfig(
+        condition=condition,
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        entities_per_call=entities_per_call,
+        shuffle=shuffle,
+        random_seed=random_seed,
+        n_runs=n_runs,
+        threshold=threshold,
+        additional_instructions=additional_instructions or "",
+        use_dummy=use_dummy,
+        max_timeout=max_timeout,
+        **cfg_kwargs,
+    )
+    return await Filter(cfg).run(
+        df,
+        column_name,
         reset_files=reset_files,
     )
 

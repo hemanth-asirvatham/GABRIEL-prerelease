@@ -15,6 +15,7 @@ from .api import (
     discover,
     deduplicate,
     merge,
+    filter,
     whatever,
     view_coded_passages,
 )
@@ -37,6 +38,7 @@ __all__ = list(_tasks.__all__) + [
     "discover",
     "deduplicate",
     "merge",
+    "filter",
     "whatever",
     "view_coded_passages",
     "load_files",
