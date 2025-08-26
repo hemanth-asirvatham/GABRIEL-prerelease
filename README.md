@@ -23,6 +23,8 @@ print(ratings)
 ```
 
 Each task returns a `pandas.DataFrame` and saves raw responses to disk.  Set `use_dummy=False` and provide your OpenAI credentials via the `OPENAI_API_KEY` environment variable to perform real API calls.
+If your OpenAI-compatible service uses a different endpoint, set `OPENAI_BASE_URL`
+or pass a `base_url` argument to override the default API URL.
 
 ### Image and audio inputs
 

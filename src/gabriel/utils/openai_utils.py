@@ -92,8 +92,28 @@ except Exception:
 
 from gabriel.utils.parsing import safe_json
 
-# single connection pool per process, created lazily
-client_async: Optional[openai.AsyncOpenAI] = None
+# single connection pool per process, keyed by base URL and created lazily
+_clients_async: Dict[Optional[str], openai.AsyncOpenAI] = {}
+
+
+def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
+    """Return a cached ``AsyncOpenAI`` client for ``base_url``.
+
+    When ``base_url`` is ``None`` the default OpenAI endpoint is used.  A client
+    is created on first use and reused for subsequent calls with the same base
+    URL to benefit from connection pooling.
+    """
+
+    url = base_url or os.getenv("OPENAI_BASE_URL")
+    key: Optional[str] = url
+    client = _clients_async.get(key)
+    if client is None:
+        kwargs: Dict[str, Any] = {}
+        if url:
+            kwargs["base_url"] = url
+        client = openai.AsyncOpenAI(**kwargs)
+        _clients_async[key] = client
+    return client
 
 # Default safety cutoff when token capacity is low
 DEFAULT_MAX_OUTPUT_TOKENS = 2500
@@ -299,7 +319,9 @@ def _require_api_key() -> str:
     return api_key
 
 
-def _get_rate_limit_headers(model: str = "gpt-5-mini") -> Optional[Dict[str, str]]:
+def _get_rate_limit_headers(
+    model: str = "gpt-5-mini", base_url: Optional[str] = None
+) -> Optional[Dict[str, str]]:
     """Retrieve rate‑limit headers via a cheap API request.
 
     The OpenAI platform does not yet expose a dedicated endpoint for
@@ -321,6 +343,8 @@ def _get_rate_limit_headers(model: str = "gpt-5-mini") -> Optional[Dict[str, str
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
+    base = base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    base = base.rstrip("/")
     # Define two candidate endpoints: the Responses API and the Chat
     # completions API.  In mid‑2025 the Responses API often omits rate‑limit
     # headers【360365694688557†L209-L243】, but OpenAI may add them in the future.  We try
@@ -331,7 +355,7 @@ def _get_rate_limit_headers(model: str = "gpt-5-mini") -> Optional[Dict[str, str
     # Responses API payload (first attempt)
     candidates.append(
         (
-            "https://api.openai.com/v1/responses",
+            f"{base}/responses",
             {
                 "model": model,
                 "input": [
@@ -345,7 +369,7 @@ def _get_rate_limit_headers(model: str = "gpt-5-mini") -> Optional[Dict[str, str
     # Chat completions API payload (fallback)
     candidates.append(
         (
-            "https://api.openai.com/v1/chat/completions",
+            f"{base}/chat/completions",
             {
                 "model": model,
                 "messages": [
@@ -411,6 +435,7 @@ def _print_usage_overview(
     *,
     verbose: bool = True,
     rate_headers: Optional[Dict[str, str]] = None,
+    base_url: Optional[str] = None,
 ) -> None:
     """Print a summary of usage limits, cost estimate and tier information.
 
@@ -423,9 +448,9 @@ def _print_usage_overview(
     print("\n===== OpenAI API usage summary =====")
     print(f"Number of prompts: {len(prompts)}")
     print(f"Total input words: {sum(len(str(p).split()) for p in prompts):,}")
-    # Fetch fresh headers if not supplied.  Pass the model so the helper
-    # knows which endpoint to probe when performing the dummy call.
-    rl = rate_headers or _get_rate_limit_headers(model)
+    # Fetch fresh headers if not supplied.  Pass the model and base_url so the
+    # helper knows which endpoint to probe when performing the dummy call.
+    rl = rate_headers or _get_rate_limit_headers(model, base_url=base_url)
     # Determine whether the headers include any meaningful limit values.  Some
     # endpoints (or API tiers) may omit rate‑limit headers, or return zero
     # values, which should be treated as unknown.
@@ -608,7 +633,10 @@ def _print_usage_overview(
 
 
 def _decide_default_max_output_tokens(
-    user_specified: Optional[int], rate_headers: Optional[Dict[str, str]] = None
+    user_specified: Optional[int],
+    rate_headers: Optional[Dict[str, str]] = None,
+    *,
+    base_url: Optional[str] = None,
 ) -> Optional[int]:
     """Decide a default ``max_output_tokens`` based on current token budget.
 
@@ -623,7 +651,7 @@ def _decide_default_max_output_tokens(
     # When rate headers are not supplied, fall back to fetching them using
     # the default model.  Passing a model ensures the helper uses the
     # minimal chat call rather than the unsupported ``/v1/models`` endpoint.
-    rl = rate_headers or _get_rate_limit_headers()
+    rl = rate_headers or _get_rate_limit_headers(base_url=base_url)
     if rl and rl.get("remaining_tokens"):
         try:
             rem = int(float(rl["remaining_tokens"]))
@@ -760,6 +788,7 @@ async def get_response(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     use_dummy: bool = False,
+    base_url: Optional[str] = None,
     verbose: bool = True,
     images: Optional[List[str]] = None,
     audio: Optional[List[Dict[str, str]]] = None,
@@ -811,6 +840,10 @@ async def get_response(
     use_dummy:
         If ``True`` return deterministic dummy responses instead of calling the
         external API.
+    base_url:
+        Optional custom OpenAI-compatible endpoint. If omitted, the default
+        ``api.openai.com/v1`` or ``OPENAI_BASE_URL`` environment variable is
+        used.
     verbose:
         When set, progress information is printed via the module logger.
     images, audio:
@@ -845,7 +878,8 @@ async def get_response(
     if logging_level is not None:
         set_log_level(logging_level)
     _require_api_key()
-    global client_async
+    base_url = base_url or os.getenv("OPENAI_BASE_URL")
+    client_async = _get_client(base_url)
     # Derive the effective cutoff
     cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
     # Build system message only for non‑o series
@@ -880,8 +914,6 @@ async def get_response(
             params_chat["tool_choice"] = tool_choice
         if cutoff is not None:
             params_chat["max_completion_tokens"] = cutoff
-        if client_async is None:
-            client_async = openai.AsyncOpenAI()
         start = time.time()
         tasks = [
             asyncio.create_task(
@@ -963,8 +995,6 @@ async def get_response(
             reasoning_summary=reasoning_summary,
             **kwargs,
         )
-        if client_async is None:
-            client_async = openai.AsyncOpenAI()
         start = time.time()
         # Create parallel tasks for `n` completions
         tasks = [
@@ -1017,6 +1047,7 @@ async def get_embedding(
     model: str = "text-embedding-3-small",
     timeout: Optional[float] = None,
     use_dummy: bool = False,
+    base_url: Optional[str] = None,
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
     **kwargs: Any,
@@ -1040,6 +1071,8 @@ async def get_embedding(
         Optional request timeout in seconds.  ``None`` waits indefinitely.
     use_dummy:
         Return a short deterministic vector instead of calling the API.
+    base_url:
+        Optional custom endpoint for the OpenAI-compatible API.
     return_raw:
         When ``True`` the raw SDK response object is also returned.
     logging_level:
@@ -1063,9 +1096,8 @@ async def get_embedding(
         set_log_level(logging_level)
     _require_api_key()
 
-    global client_async
-    if client_async is None:
-        client_async = openai.AsyncOpenAI()
+    base_url = base_url or os.getenv("OPENAI_BASE_URL")
+    client_async = _get_client(base_url)
 
     start = time.time()
     try:
@@ -1102,6 +1134,7 @@ async def get_all_embeddings(
     timeout: float = 30.0,
     save_every_x: int = 5000,
     use_dummy: bool = False,
+    base_url: Optional[str] = None,
     verbose: bool = True,
     logging_level: Union[str, int] = "warning",
     max_retries: int = 3,
@@ -1138,6 +1171,8 @@ async def get_all_embeddings(
         Frequency (in processed texts) at which the pickle file is updated.
     use_dummy:
         Generate fake embeddings instead of calling the API.
+    base_url:
+        Optional custom OpenAI-compatible endpoint used for requests.
     verbose:
         If ``True`` a progress bar is displayed.
     logging_level:
@@ -1159,6 +1194,7 @@ async def get_all_embeddings(
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
+    base_url = base_url or os.getenv("OPENAI_BASE_URL")
 
     if identifiers is None:
         identifiers = texts
@@ -1179,6 +1215,7 @@ async def get_all_embeddings(
         return embeddings
 
     tokenizer = _get_tokenizer(model)
+    get_embedding_kwargs.setdefault("base_url", base_url)
     error_logs: Dict[str, List[str]] = defaultdict(list)
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in items:
@@ -1318,6 +1355,7 @@ async def get_all_responses(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     use_dummy: bool = False,
+    base_url: Optional[str] = None,
     print_example_prompt: bool = True,
     save_path: str = "responses.csv",
     reset_files: bool = False,
@@ -1358,6 +1396,8 @@ async def get_all_responses(
     periodically poll for completion.  In both modes the helper automatically
     obeys rate limits, retries transient failures with exponential backoff and
     writes partial results to disk so interrupted runs can be resumed.
+    The API base URL can be overridden per call via ``base_url`` or globally
+    with the ``OPENAI_BASE_URL`` environment variable.
 
     A dynamic timeout mechanism keeps long‑running jobs efficient: the function
     initially allows unlimited time for each request, then observes how long
@@ -1377,11 +1417,12 @@ async def get_all_responses(
     When both are provided, ``max_output_tokens`` takes precedence.  The former
     ``use_web_search`` flag is still accepted but ``web_search`` should be used
     going forward.
-    """
+"""
     if not use_dummy:
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
+    base_url = base_url or os.getenv("OPENAI_BASE_URL")
     # ``use_web_search`` was the original parameter name; ``web_search`` is the
     # preferred modern spelling.  If both are supplied we favour ``web_search``
     # but emit a warning for awareness.
@@ -1420,14 +1461,15 @@ async def get_all_responses(
     get_response_kwargs.setdefault("reasoning_summary", reasoning_summary)
     # Pass the chosen model through to get_response by default
     get_response_kwargs.setdefault("model", model)
+    get_response_kwargs.setdefault("base_url", base_url)
     # Decide default cutoff once per job using cached rate headers
     # Fetch rate headers once to avoid multiple API calls
     # Retrieve rate‑limit headers for the chosen model.  Passing the model
     # ensures the helper performs a dummy call with the correct model
     # rather than probing the unsupported ``/v1/models`` endpoint.
-    rate_headers = _get_rate_limit_headers(model)
+    rate_headers = _get_rate_limit_headers(model, base_url=base_url)
     user_cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
-    cutoff = _decide_default_max_output_tokens(user_cutoff, rate_headers)
+    cutoff = _decide_default_max_output_tokens(user_cutoff, rate_headers, base_url=base_url)
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
@@ -1543,6 +1585,7 @@ async def get_all_responses(
             n_parallels=n_parallels,
             verbose=verbose,
             rate_headers=rate_headers,
+            base_url=base_url,
         )
         example_prompt, _ = todo_pairs[0]
         logger.warning(f"Example prompt: {example_prompt}")
@@ -1668,7 +1711,7 @@ async def get_all_responses(
             combined["Error Log"] = combined["Error Log"].apply(_de)
             df = combined
 
-        client = openai.AsyncOpenAI()
+        client = _get_client(base_url)
         # Load existing state
         if os.path.exists(state_path) and not reset_files:
             with open(state_path, "r") as f:
