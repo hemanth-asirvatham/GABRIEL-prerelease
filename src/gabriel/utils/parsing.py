@@ -4,7 +4,7 @@ import ast
 import json
 import os
 import re
-from typing import Any, Union, Optional, List
+from typing import Any, Optional, Union, List
 
 import pandas as pd
 
@@ -111,20 +111,34 @@ def safe_json(txt: Any) -> Union[dict, list]:
         return {}
 
 
-async def safest_json(txt: Any, *, model: Optional[str] = None) -> Union[dict, list]:
-    """Parse JSON and optionally invoke an LLM to repair malformed input.
+async def safest_json(
+    txt: Any,
+    *,
+    model: Optional[str] = None,
+    use_llm_fallback: bool = False,
+    llm_timeout: Optional[float] = 60.0,
+) -> Union[dict, list, Any]:
+    """Parse JSON with an optional LLM-based repair step.
 
-    When local parsing fails, this function can ask a model to reformat the
-    given text into valid JSON.  Use it when ``safe_json`` is insufficient and
-    a best-effort LLM fix is desired.
+    The function first attempts to parse ``txt`` locally using ``_parse_json``.
+    When ``use_llm_fallback`` is ``False`` (the default) any parsing failure
+    results in ``None``.  When ``use_llm_fallback`` is ``True`` an extra
+    call is made to :func:`gabriel.utils.openai_utils.get_response` to request
+    that the model reformat the text as valid JSON.  A timeout can be provided
+    to prevent the repair step from hanging indefinitely.
     """
 
     try:
         return _parse_json(txt)
     except Exception:
+        if not use_llm_fallback:
+            return None
+
         if model is None:
             model = JSON_LLM_MODEL
+
         from gabriel.utils.openai_utils import get_response
+
         use_dummy = model == "dummy"
         fixed, _ = await get_response(
             prompt=(
@@ -134,13 +148,14 @@ async def safest_json(txt: Any, *, model: Optional[str] = None) -> Union[dict, l
             model=model,
             json_mode=True,
             use_dummy=use_dummy,
+            timeout=llm_timeout,
         )
         if fixed:
             try:
                 return _parse_json(fixed[0])
             except Exception:
-                return {}
-        return {}
+                return None
+        return None
 
 
 async def clean_json_df(

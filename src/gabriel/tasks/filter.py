@@ -30,6 +30,8 @@ class FilterConfig:
     additional_instructions: str = ""
     use_dummy: bool = False
     max_timeout: Optional[float] = None
+    fix_json_with_llm: bool = False
+    json_fix_timeout: Optional[float] = 60.0
 
 
 class Filter:
@@ -113,7 +115,12 @@ class Filter:
                 run_idx = int(parts[1])
             except ValueError:
                 continue
-            parsed = await safest_json(raw)
+            parsed = await safest_json(
+                raw,
+                model=self.cfg.model if self.cfg.fix_json_with_llm else None,
+                use_llm_fallback=self.cfg.fix_json_with_llm,
+                llm_timeout=self.cfg.json_fix_timeout,
+            )
             ent_list: Optional[List[str]] = None
             if isinstance(parsed, dict):
                 val = parsed.get("entities meeting condition") or parsed.get(

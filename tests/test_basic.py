@@ -72,6 +72,11 @@ def test_safest_json_codeblock_list():
     assert parsed == {"speech": True, "music": False}
 
 
+def test_safest_json_invalid_without_fallback():
+    parsed = asyncio.run(safest_json("not json"))
+    assert parsed is None
+
+
 def test_gpt5_temperature_warning(caplog):
     """Ensure gpt-5 models ignore temperature and log a warning."""
     with caplog.at_level("WARNING"):
