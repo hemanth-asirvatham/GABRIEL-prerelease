@@ -50,6 +50,7 @@ async def rate(
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
@@ -69,7 +70,7 @@ async def rate(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Rate(cfg).run(
+    return await Rate(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,
@@ -92,6 +93,7 @@ async def extract(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     types: Optional[dict[str, any]] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Extract`."""
@@ -111,7 +113,7 @@ async def extract(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Extract(cfg).run(
+    return await Extract(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,
@@ -135,6 +137,7 @@ async def classify(
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
@@ -155,7 +158,7 @@ async def classify(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Classify(cfg).run(
+    return await Classify(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,
@@ -177,6 +180,7 @@ async def deidentify(
     additional_guidelines: str = "",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
@@ -195,7 +199,9 @@ async def deidentify(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Deidentifier(cfg).run(df, column_name, grouping_column=grouping_column)
+    return await Deidentifier(cfg, template_path=template_path).run(
+        df, column_name, grouping_column=grouping_column
+    )
 
 
 async def rank(
@@ -219,6 +225,7 @@ async def rank(
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -243,7 +250,7 @@ async def rank(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Rank(cfg).run(
+    return await Rank(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,
@@ -267,11 +274,12 @@ async def codify(
     use_dummy: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
-    coder = Codify()
+    coder = Codify(template_path=template_path)
     return await coder.codify(
         df,
         column_name,
@@ -312,6 +320,7 @@ async def paraphrase(
     n_initial_candidates: int = 1,
     n_validation_candidates: int = 5,
     use_modified_source: bool = False,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Paraphrase`."""
@@ -336,7 +345,7 @@ async def paraphrase(
         use_modified_source=use_modified_source,
         **cfg_kwargs,
     )
-    return await Paraphrase(cfg).run(
+    return await Paraphrase(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,
@@ -360,6 +369,7 @@ async def compare(
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Compare`."""
@@ -380,7 +390,7 @@ async def compare(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Compare(cfg).run(
+    return await Compare(cfg, template_path=template_path).run(
         df,
         circle_column_name,
         square_column_name,
@@ -403,6 +413,7 @@ async def bucket(
     differentiate: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Bucket`."""
@@ -422,7 +433,7 @@ async def bucket(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Bucket(cfg).run(
+    return await Bucket(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,
@@ -518,6 +529,7 @@ async def deduplicate(
     use_embeddings: bool = True,
     group_size: int = 500,
     max_timeout: Optional[float] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Deduplicate`."""
@@ -537,7 +549,7 @@ async def deduplicate(
         group_size=group_size,
         **cfg_kwargs,
     )
-    return await Deduplicate(cfg).run(
+    return await Deduplicate(cfg, template_path=template_path).run(
         df,
         on=on,
         reset_files=reset_files,
@@ -568,6 +580,7 @@ async def merge(
     auto_match_threshold: float = 0.75,
     use_best_auto_match: bool = False,
     candidate_scan_chunks: int = 5,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Merge`."""
@@ -592,7 +605,7 @@ async def merge(
         candidate_scan_chunks=candidate_scan_chunks,
         **cfg_kwargs,
     )
-    return await Merge(cfg).run(
+    return await Merge(cfg, template_path=template_path).run(
         df_left,
         df_right,
         on=on,
@@ -621,6 +634,7 @@ async def filter(
     use_dummy: bool = False,
     file_name: str = "filter_responses.csv",
     max_timeout: Optional[float] = None,
+    template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Filter`."""
@@ -643,7 +657,7 @@ async def filter(
         max_timeout=max_timeout,
         **cfg_kwargs,
     )
-    return await Filter(cfg).run(
+    return await Filter(cfg, template_path=template_path).run(
         df,
         column_name,
         reset_files=reset_files,

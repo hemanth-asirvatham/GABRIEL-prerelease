@@ -25,9 +25,32 @@ from ..utils import safest_json, load_image_inputs, load_audio_inputs
 class Codify:
     """Pipeline for coding passages of text according to specified categories."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        template: Optional[PromptTemplate] = None,
+        template_path: Optional[str] = None,
+    ) -> None:
+        """Create a new :class:`Codify` instance.
+
+        Parameters
+        ----------
+        template:
+            Optional preconstructed :class:`PromptTemplate`.
+        template_path:
+            Path to a custom Jinja2 template on disk.  The template is
+            validated to ensure it exposes the same variables as the
+            built-in ``codify_prompt.jinja2`` template.
+        """
+
+        if template is not None and template_path is not None:
+            raise ValueError("Provide either template or template_path, not both")
+        if template_path is not None:
+            template = PromptTemplate.from_file(
+                template_path, reference_filename="codify_prompt.jinja2"
+            )
+        self.template = template or PromptTemplate.from_package("codify_prompt.jinja2")
         self.hit_rate_stats = {}  # Track hit rates across all texts
-        self.template = PromptTemplate.from_package("codify_prompt.jinja2")
 
     @staticmethod
     def view(

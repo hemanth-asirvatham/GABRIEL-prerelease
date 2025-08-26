@@ -142,7 +142,10 @@ class Rank:
     """
 
     def __init__(
-        self, cfg: RankConfig, template: Optional[PromptTemplate] = None
+        self,
+        cfg: RankConfig,
+        template: Optional[PromptTemplate] = None,
+        template_path: Optional[str] = None,
     ) -> None:
         """Instantiate a ranking engine.
 
@@ -154,11 +157,21 @@ class Rank:
             Optional :class:`gabriel.core.prompt_template.PromptTemplate` to
             render the comparison prompts.  If not supplied, the built‑in
             ``rankings_prompt.jinja2`` template is used.
+        template_path:
+            Path to a custom prompt template on disk. The template is
+            validated to ensure it expects the same variables as the
+            built‑in template.
         """
         expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
         self.cfg = cfg
+        if template is not None and template_path is not None:
+            raise ValueError("Provide either template or template_path, not both")
+        if template_path is not None:
+            template = PromptTemplate.from_file(
+                template_path, reference_filename="rankings_prompt.jinja2"
+            )
         self.template = template or PromptTemplate.from_package(
             "rankings_prompt.jinja2"
         )
