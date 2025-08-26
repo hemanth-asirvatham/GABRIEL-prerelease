@@ -33,6 +33,8 @@ _lazy_imports = {
     "BucketConfig": ".bucket",
     "Discover": ".discover",
     "DiscoverConfig": ".discover",
+    "Filter": ".filter",
+    "FilterConfig": ".filter",
 }
 
 __all__ = list(_lazy_imports.keys())
