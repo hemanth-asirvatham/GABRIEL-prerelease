@@ -32,6 +32,8 @@ So if raw terms you are grouping mention "circle" entries having an attribute or
 Crucial: you must distinguish between the the two classes of content. "square exhibits more X than circle" and "circle exhibits more X than square" do NOT mean the same thing and don't belong in the same bucket.
 But "square exhibits more X" and "circle lacks X" DO mean the same thing and DO belong in the same bucket.
 Ensure you are only bucketizing differences that actually mean the same thing; it is possible to even have both directions of the same attribute as two different buckets, if both versions are prevalent in the raw terms.
+It is essential you mentally separate "square more X than circle" and "circle more X than square" instances regarding the same attribute X.
+Consider each set by itself, and decide separately if each by itself merits a bucket.
 
 Buckets must be clear on which class has more of the attribute (e.g. "square entries have more X than circle entries" or "circle entries lack Y relative to square entries").
 Each bucket term should be a directional statement (e.g. "circle entries showcase stronger communication amongst colleagues than square entries", "square entries use lots of first person perspective while circle entries do not", "square entries invoke more chronic health issues circle entries", "circle entries involve more complications from type 2 diabetes than square entries", "square entries have few direct quotes from evidence relative to circle entries", etc) rather than an "X vs Y" phrase.
@@ -65,6 +67,7 @@ Choose the {{ bucket_count - (selected_buckets|length) }} additional buckets fro
 It is like being GM of an NBA team: you already have some players on the roster, and you need to pick new ones that fit well with the existing ones and make a great team overall.
 These already finalized buckets are your existing players; now focus on identifying the best complementary pieces to add to the team to get the best overall coverage with the final set of buckets.
 It is essential you avoid voting for terms that overlap with the already selected buckets.
+DON'T vote for any bucket that is conceptually already covered by the already selected buckets.
 Build a full, mutually exclusive set of buckets that together capture the biggest themes present in the raw terms, amongst the totality of all existing and new buckets you are voting for.
 
 Again, the already selected buckets are: {{ selected_buckets.keys() }}
