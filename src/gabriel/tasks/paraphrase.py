@@ -88,11 +88,22 @@ class ParaphraseConfig:
 class Paraphrase:
     """Paraphrase text columns in a DataFrame."""
 
-    def __init__(self, cfg: ParaphraseConfig, template: Optional[PromptTemplate] = None) -> None:
+    def __init__(
+        self,
+        cfg: ParaphraseConfig,
+        template: Optional[PromptTemplate] = None,
+        template_path: Optional[str] = None,
+    ) -> None:
         self.cfg = cfg
         expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
+        if template is not None and template_path is not None:
+            raise ValueError("Provide either template or template_path, not both")
+        if template_path is not None:
+            template = PromptTemplate.from_file(
+                template_path, reference_filename="paraphrase_prompt.jinja2"
+            )
         # Load the paraphrasing prompt from package data if a custom
         # template is not provided.
         self.template = template or PromptTemplate.from_package("paraphrase_prompt.jinja2")

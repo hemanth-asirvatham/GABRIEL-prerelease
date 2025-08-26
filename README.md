@@ -76,7 +76,13 @@ print(responses[0])
 ```
 
 Images are provided as base64 strings, while audio items are dictionaries with `data` and `format`. Helper functions `encode_image` and `encode_audio` are available for local files.
+### Custom prompt templates
 
+All task classes and the high-level API functions accept a `template_path`
+argument. Supply the path to a Jinja2 file that declares the same variables
+as the built-in template for that task and it will be used instead. Variable
+sets are validated before use and a helpful error is raised if a template is
+missing or introduces unexpected parameters.
 
 ## Tasks
 

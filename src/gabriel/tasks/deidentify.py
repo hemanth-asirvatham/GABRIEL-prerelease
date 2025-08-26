@@ -33,8 +33,19 @@ class DeidentifyConfig:
 class Deidentifier:
     """Iterative de-identification of sensitive entities in text."""
 
-    def __init__(self, cfg: DeidentifyConfig, template: Optional[PromptTemplate] = None) -> None:
+    def __init__(
+        self,
+        cfg: DeidentifyConfig,
+        template: Optional[PromptTemplate] = None,
+        template_path: Optional[str] = None,
+    ) -> None:
         self.cfg = cfg
+        if template is not None and template_path is not None:
+            raise ValueError("Provide either template or template_path, not both")
+        if template_path is not None:
+            template = PromptTemplate.from_file(
+                template_path, reference_filename="deidentification_prompt.jinja2"
+            )
         self.template = template or PromptTemplate.from_package("deidentification_prompt.jinja2")
         os.makedirs(self.cfg.save_dir, exist_ok=True)
 

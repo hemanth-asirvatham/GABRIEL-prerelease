@@ -41,11 +41,22 @@ class BucketConfig:
 class Bucket:
     """Group raw terms into a smaller set of mutually exclusive buckets."""
 
-    def __init__(self, cfg: BucketConfig, template: Optional[PromptTemplate] = None) -> None:
+    def __init__(
+        self,
+        cfg: BucketConfig,
+        template: Optional[PromptTemplate] = None,
+        template_path: Optional[str] = None,
+    ) -> None:
         expanded = Path(os.path.expandvars(os.path.expanduser(cfg.save_dir)))
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
         self.cfg = cfg
+        if template is not None and template_path is not None:
+            raise ValueError("Provide either template or template_path, not both")
+        if template_path is not None:
+            template = PromptTemplate.from_file(
+                template_path, reference_filename="bucket_prompt.jinja2"
+            )
         self.template = template or PromptTemplate.from_package("bucket_prompt.jinja2")
 
     async def _parse(self, raw: Any) -> Dict[str, str]:
