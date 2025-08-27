@@ -271,9 +271,18 @@ class Rate:
             }
             for ident_batch, raw in zip(df_resp.Identifier, df_resp.Response):
                 main = raw[0] if isinstance(raw, list) and raw else raw
-                base_ident, batch_part = ident_batch.rsplit("_batch", 1)
-                batch_idx = int(batch_part)
-                attrs = list(attr_batches[batch_idx].keys())
+                try:
+                    base_ident, batch_part = ident_batch.rsplit("_batch", 1)
+                    batch_idx = int(batch_part)
+                    attrs = list(attr_batches[batch_idx].keys())
+                except (ValueError, IndexError):
+                    if debug:
+                        print(f"[Rate] Skipping malformed identifier {ident_batch}")
+                    continue
+                if base_ident not in id_to_ratings:
+                    if debug:
+                        print(f"[Rate] Skipping unknown identifier {base_ident}")
+                    continue
                 parsed = await self._parse(main, attrs)
                 for attr in attrs:
                     id_to_ratings[base_ident][attr] = parsed.get(attr)
