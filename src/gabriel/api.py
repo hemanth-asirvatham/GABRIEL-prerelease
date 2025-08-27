@@ -278,7 +278,12 @@ async def codify(
     use_dummy: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
-
+    template_path: Optional[str] = None,
+    **cfg_kwargs,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
     cfg = CodifyConfig(
         save_dir=save_dir,
         file_name=file_name,
@@ -292,7 +297,7 @@ async def codify(
         reasoning_summary=reasoning_summary,
         **cfg_kwargs,
     )
-    return await Codify(cfg).run(
+    return await Codify(cfg, template_path=template_path).run(
         df,
         column_name,
         categories=categories,
