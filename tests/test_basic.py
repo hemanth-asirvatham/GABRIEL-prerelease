@@ -1,11 +1,12 @@
 import asyncio
 import pandas as pd
+import numpy as np
 
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils import openai_utils, safest_json
 from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
-from gabriel.tasks.classify import Classify, ClassifyConfig
+from gabriel.tasks.classify import Classify, ClassifyConfig, _collect_predictions
 from gabriel.tasks.extract import Extract, ExtractConfig
 import gabriel
 
@@ -234,6 +235,11 @@ def test_classification_multirun(tmp_path):
     assert res.predicted_classes.iloc[0] == []
     disagg = pd.read_csv(tmp_path / "classify_responses_full_disaggregated.csv", index_col=[0, 1])
     assert set(disagg.index.names) == {"text", "run"}
+
+
+def test_collect_predictions_np_bool():
+    row = pd.Series({"speech": np.bool_(True), "beeps": np.bool_(False), "space": None})
+    assert _collect_predictions(row) == ["speech"]
 
 
 def test_classify_parse_dict(tmp_path):

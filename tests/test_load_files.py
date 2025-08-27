@@ -46,3 +46,30 @@ def test_load_files_csv_direct(tmp_path):
     df = load_files(str(csv_path), save_name="copy.csv", reset_files=True)
     assert (df == df_in).all().all()
     assert os.path.exists(tmp_path / "copy.csv")
+
+
+def test_load_files_modality_paths(tmp_path):
+    base = tmp_path / "media"
+    base.mkdir()
+    (base / "a.png").write_bytes(b"img")
+    (base / "b.wav").write_bytes(b"aud")
+
+    df_img = load_files(
+        str(base),
+        extensions=["png"],
+        save_name="imgs.csv",
+        reset_files=True,
+        modality="image",
+    )
+    assert "image_path" in df_img.columns and "content" not in df_img.columns
+    assert df_img["name"].tolist() == ["a.png"]
+
+    df_aud = load_files(
+        str(base),
+        extensions=["wav"],
+        save_name="aud.csv",
+        reset_files=True,
+        modality="audio",
+    )
+    assert "audio_path" in df_aud.columns and "content" not in df_aud.columns
+    assert df_aud["name"].tolist() == ["b.wav"]
