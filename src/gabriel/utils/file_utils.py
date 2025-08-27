@@ -17,6 +17,7 @@ def load_files(
     tag_dict: Optional[dict[str, Any]] = None,
     save_name: str = "gabriel_aggregated_content.csv",
     reset_files: bool = False,
+    modality: str = "text",
 ) -> pd.DataFrame:
     """Aggregate text files from a folder into a single CSV.
 
@@ -38,13 +39,22 @@ def load_files(
         When ``False`` (default), an existing file at the save location causes a
         :class:`FileExistsError`. Set to ``True`` to overwrite the file.
 
+    modality:
+        One of ``"text"``, ``"image"``, or ``"audio"``. Non‑text modalities
+        collect file paths rather than file contents.
+
     Returns
     -------
     DataFrame
-        The aggregated contents of the processed files.
+        The aggregated contents or file paths of the processed files.
     """
 
     folder_path = os.path.expanduser(os.path.expandvars(folder_path))
+    modality = modality.lower()
+    if modality not in {"text", "image", "audio"}:
+        raise ValueError("modality must be 'text', 'image', or 'audio'")
+
+    path_key = "path" if modality == "text" else f"{modality}_path"
     if os.path.isfile(folder_path):
         base_dir = os.path.dirname(folder_path)
     else:
@@ -62,7 +72,7 @@ def load_files(
 
     if os.path.isfile(folder_path):
         ext = os.path.splitext(folder_path)[1].lower()
-        if ext in {".csv", ".xlsx", ".xls"}:
+        if modality == "text" and ext in {".csv", ".xlsx", ".xls"}:
             logger.info("Input path is a %s file; saving it directly.", ext)
             if ext == ".csv":
                 df = pd.read_csv(folder_path)
@@ -81,14 +91,15 @@ def load_files(
                     if key.lower() in lower_name:
                         tag = val
                         break
-            with open(folder_path, "r", encoding="utf-8", errors="ignore") as fh:
-                content = fh.read()
-            rows.append({
+            row = {
                 "name": name,
-                "path": folder_path,
-                "content": content,
+                path_key: folder_path,
                 "tag": tag,
-            })
+            }
+            if modality == "text":
+                with open(folder_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    row["content"] = fh.read()
+            rows.append(row)
     else:
         for root, _, files in os.walk(folder_path):
             for fname in files:
@@ -110,14 +121,14 @@ def load_files(
                         if key.lower() in lower_name:
                             tag = val
                             break
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
-                    content = fh.read()
                 row: dict[str, Any] = {
                     "name": name,
-                    "path": file_path,
-                    "content": content,
+                    path_key: file_path,
                     "tag": tag,
                 }
+                if modality == "text":
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
+                        row["content"] = fh.read()
                 for i, layer in enumerate(layers, start=1):
                     row[f"layer_{i}"] = layer
                 rows.append(row)
@@ -128,12 +139,15 @@ def load_files(
         if col not in df.columns:
             df[col] = None
 
-    cols = ["name", "path"] + [f"layer_{i}" for i in range(1, max_layers + 1)]
+    cols = ["name", path_key] + [f"layer_{i}" for i in range(1, max_layers + 1)]
     if tag_dict:
         cols.append("tag")
     else:
         df.drop(columns=["tag"], inplace=True, errors="ignore")
-    cols.append("content")
+    if modality == "text":
+        cols.append("content")
+    else:
+        df.drop(columns=["content"], inplace=True, errors="ignore")
     if not df.empty:
         df = df[cols]
     df.to_csv(save_path, index=False)

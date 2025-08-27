@@ -20,6 +20,23 @@ from ..utils import (
 )
 
 
+def _collect_predictions(row: pd.Series) -> List[str]:
+    """Return labels whose values evaluate to ``True``.
+
+    Parameters
+    ----------
+    row:
+        A series containing only label columns.
+
+    Returns
+    -------
+    list of str
+        Labels for which the value is truthy.
+    """
+
+    return [lab for lab, val in row.items() if bool(val)]
+
+
 # ────────────────────────────
 # Configuration dataclass
 # ────────────────────────────
@@ -480,16 +497,13 @@ class Classify:
 
         label_cols = list(self.cfg.labels.keys())
 
-        def _collect_preds(row: pd.Series) -> List[str]:
-            return [lab for lab in label_cols if row.get(lab) is True]
-
         if not self.cfg.differentiate and column_name in result.columns:
             cols = result.columns.tolist()
             cols.remove(column_name)
             cols.insert(0, column_name)
             result = result[cols]
 
-        result.insert(1, "predicted_classes", result[label_cols].apply(_collect_preds, axis=1))
+        result.insert(1, "predicted_classes", result[label_cols].apply(_collect_predictions, axis=1))
 
         result_to_save = result.copy()
         result_to_save["predicted_classes"] = result_to_save["predicted_classes"].apply(json.dumps)
