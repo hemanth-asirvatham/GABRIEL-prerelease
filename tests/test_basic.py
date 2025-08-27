@@ -213,6 +213,8 @@ def test_classification_dummy(tmp_path):
     df = pd.DataFrame({"txt": ["a", "b"]})
     res = asyncio.run(task.run(df, column_name="txt"))
     assert "yes" in res.columns
+    assert "predicted_classes" in res.columns
+    assert res.predicted_classes.tolist() == [[], []]
 
 
 def test_extraction_dummy(tmp_path):
@@ -229,6 +231,7 @@ def test_classification_multirun(tmp_path):
     df = pd.DataFrame({"txt": ["a"]})
     res = asyncio.run(task.run(df, column_name="txt"))
     assert "yes" in res.columns
+    assert res.predicted_classes.iloc[0] == []
     disagg = pd.read_csv(tmp_path / "classify_responses_full_disaggregated.csv", index_col=[0, 1])
     assert set(disagg.index.names) == {"text", "run"}
 
