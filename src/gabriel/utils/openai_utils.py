@@ -902,11 +902,14 @@ async def get_response(
         for a in audio:
             contents.append({"type": "input_audio", "input_audio": a})
         messages = [{"role": "user", "content": contents}]
+        # ``chat.completions`` currently infers the response modality from
+        # the request content.  Supplying an explicit ``modalities`` field
+        # leads to ``Unknown parameter`` errors on newer models (e.g. gpt‑5),
+        # so we omit it here and default to text output.
         params_chat: Dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
-            "modalities": ["text"],
         }
         if tools is not None:
             params_chat["tools"] = tools

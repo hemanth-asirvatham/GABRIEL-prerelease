@@ -8,6 +8,7 @@ from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig, _collect_predictions
 from gabriel.tasks.extract import Extract, ExtractConfig
+from gabriel.tasks.rank import Rank, RankConfig
 import gabriel
 
 
@@ -168,6 +169,38 @@ def test_ratings_multirun(tmp_path):
     assert set(disagg.index.names) == {"id", "run"}
 
 
+def test_ratings_ignore_stale_ids(tmp_path):
+    """Ensure stale identifiers in existing files are ignored."""
+    cfg = RateConfig(
+        attributes={"helpfulness": ""},
+        save_dir=str(tmp_path),
+        file_name="ratings.csv",
+        use_dummy=True,
+    )
+    # Pre-create a raw responses file with an unrelated identifier
+    raw_path = tmp_path / "ratings_raw_responses.csv"
+    stale = pd.DataFrame(
+        [
+            {
+                "Identifier": "stale_batch0",
+                "Response": openai_utils._ser(["{\"helpfulness\": 1}"]),
+                "Time Taken": 0.1,
+                "Input Tokens": 1,
+                "Reasoning Tokens": 0,
+                "Output Tokens": 1,
+                "Reasoning Effort": None,
+                "Successful": True,
+                "Error Log": openai_utils._ser(None),
+            }
+        ]
+    )
+    stale.to_csv(raw_path, index=False)
+    task = Rate(cfg)
+    data = pd.DataFrame({"text": ["hello"]})
+    df = asyncio.run(task.run(data, column_name="text"))
+    assert "helpfulness" in df.columns
+
+
 def test_ratings_audio_dummy(tmp_path):
     cfg = RateConfig(
         attributes={"clarity": ""},
@@ -198,6 +231,31 @@ def test_ratings_image_dummy(tmp_path):
     data = pd.DataFrame({"image": [str(img_path)]})
     df = asyncio.run(task.run(data, column_name="image"))
     assert "clarity" in df.columns
+
+
+def test_rank_audio_dummy(tmp_path):
+    cfg = RankConfig(
+        attributes={"clear": "", "inspiring": ""},
+        save_dir=str(tmp_path),
+        file_name="rankings.csv",
+        use_dummy=True,
+        modality="audio",
+        n_rounds=1,
+        matches_per_round=1,
+        n_parallels=5,
+    )
+    task = Rank(cfg)
+    # Provide pre-encoded audio so no actual files are needed
+    data = pd.DataFrame(
+        {
+            "audio": [
+                [{"data": "abcd", "format": "mp3"}],
+                [{"data": "efgh", "format": "mp3"}],
+            ]
+        }
+    )
+    df = asyncio.run(task.run(data, column_name="audio"))
+    assert "clear" in df.columns and "inspiring" in df.columns
 
 
 def test_deidentifier_dummy(tmp_path):
