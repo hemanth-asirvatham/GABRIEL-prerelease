@@ -94,12 +94,12 @@ class Deduplicate:
         self,
         df_proc: pd.DataFrame,
         *,
-        on: str,
+        column_name: str,
         output_col: str,
         reset_files: bool,
         **kwargs: Any,
     ) -> None:
-        uniques, groups, orig_to_rep = self._deduplicate(df_proc[on])
+        uniques, groups, orig_to_rep = self._deduplicate(df_proc[column_name])
 
         use_embeddings = self.cfg.use_embeddings and len(uniques) >= self.cfg.group_size
 
@@ -192,7 +192,7 @@ class Deduplicate:
             mappings.setdefault(rep, rep)
 
         mapped_vals: List[Optional[str]] = []
-        for val in df_proc[on]:
+        for val in df_proc[column_name]:
             if pd.isna(val):
                 mapped_vals.append(val)
             else:
@@ -206,7 +206,7 @@ class Deduplicate:
         self,
         df: pd.DataFrame,
         *,
-        on: str,
+        column_name: str,
         reset_files: bool = False,
         nruns: Optional[int] = None,
         **kwargs: Any,
@@ -215,23 +215,28 @@ class Deduplicate:
 
         df_proc = df.reset_index(drop=True).copy()
         n_runs = nruns if nruns is not None else self.cfg.n_runs
-        current_col = on
+        current_col = column_name
         for i in range(n_runs):
             if n_runs == 1:
-                output_col = f"mapped_{on}"
+                output_col = f"mapped_{column_name}"
             elif i == n_runs - 1:
-                output_col = f"mapped_{on}_final"
+                output_col = f"mapped_{column_name}_final"
             else:
-                output_col = f"mapped_{on}_run{i + 1}"
+                output_col = f"mapped_{column_name}_run{i + 1}"
             await self._run_once(
                 df_proc,
-                on=current_col,
+                column_name=current_col,
                 output_col=output_col,
                 reset_files=reset_files if i == 0 else False,
                 **kwargs,
             )
-            self._print_stats(df_proc[current_col], df_proc[output_col], run_idx=i, total_runs=n_runs)
+            self._print_stats(
+                df_proc[current_col],
+                df_proc[output_col],
+                run_idx=i,
+                total_runs=n_runs,
+            )
             current_col = output_col
         if n_runs > 1:
-            df_proc[f"mapped_{on}"] = df_proc[current_col]
+            df_proc[f"mapped_{column_name}"] = df_proc[current_col]
         return df_proc

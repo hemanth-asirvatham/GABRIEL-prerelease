@@ -523,7 +523,7 @@ async def discover(
 
 async def deduplicate(
     df: pd.DataFrame,
-    on: str,
+    column_name: str,
     *,
     save_dir: str,
     additional_instructions: Optional[str] = None,
@@ -558,7 +558,7 @@ async def deduplicate(
     )
     return await Deduplicate(cfg, template_path=template_path).run(
         df,
-        on=on,
+        column_name=column_name,
         reset_files=reset_files,
     )
 

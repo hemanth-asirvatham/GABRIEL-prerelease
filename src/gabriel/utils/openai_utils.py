@@ -1133,7 +1133,7 @@ async def get_all_embeddings(
     model: str = "text-embedding-3-small",
     save_path: str = "embeddings.pkl",
     reset_file: bool = False,
-    n_parallels: int = 200,
+    n_parallels: int = 150,
     timeout: float = 30.0,
     save_every_x: int = 5000,
     use_dummy: bool = False,
@@ -1231,11 +1231,39 @@ async def get_all_embeddings(
     concurrency_cap = max(1, min(n_parallels, queue.qsize()))
     print(f"[init] Starting with {concurrency_cap} parallel workers")
     logger.info(f"[init] Starting with {concurrency_cap} parallel workers")
-    success_streak = 0
-    success_threshold = 20
+    rate_limit_errors_since_adjust = 0
+    successes_since_adjust = 0
+
+    def maybe_adjust_concurrency() -> None:
+        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust
+        decrease_threshold = 20
+        increase_threshold = 200
+        if rate_limit_errors_since_adjust >= decrease_threshold:
+            new_cap = max(1, int(math.floor(concurrency_cap * 0.75)))
+            if new_cap != concurrency_cap:
+                msg = (
+                    f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
+                )
+                print(msg)
+                logger.warning(msg)
+            concurrency_cap = new_cap
+            rate_limit_errors_since_adjust = 0
+            successes_since_adjust = 0
+        elif rate_limit_errors_since_adjust == 0 and successes_since_adjust >= increase_threshold:
+            new_cap = min(n_parallels, int(math.ceil(concurrency_cap * 1.25)))
+            if new_cap != concurrency_cap:
+                msg = (
+                    f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
+                )
+                print(msg)
+                logger.warning(msg)
+            concurrency_cap = new_cap
+            successes_since_adjust = 0
+            rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
-        nonlocal processed, cooldown_until, active_workers, concurrency_cap, success_streak
+        nonlocal processed, cooldown_until, active_workers, concurrency_cap
+        nonlocal rate_limit_errors_since_adjust, successes_since_adjust
         while True:
             try:
                 text, ident, attempts_left = await queue.get()
@@ -1260,23 +1288,16 @@ async def get_all_embeddings(
                     )
                 )
                 emb, _ = await task
-                success_streak += 1
-                if success_streak >= success_threshold and concurrency_cap < n_parallels:
-                    new_cap = min(n_parallels, concurrency_cap + 1)
-                    if new_cap != concurrency_cap:
-                        msg = f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} based on successful calls."
-                        print(msg)
-                        logger.info(msg)
-                    concurrency_cap = new_cap
-                    success_streak = 0
                 embeddings[ident] = emb
                 processed += 1
+                successes_since_adjust += 1
+                rate_limit_errors_since_adjust = 0
+                maybe_adjust_concurrency()
                 if processed % save_every_x == 0:
                     with open(save_path, "wb") as f:
                         pickle.dump(embeddings, f)
                 pbar.update(1)
             except asyncio.TimeoutError as e:
-                success_streak = 0
                 error_logs[ident].append(str(e))
                 logger.warning(f"Timeout error for {ident}: {e}")
                 if attempts_left - 1 > 0:
@@ -1286,16 +1307,12 @@ async def get_all_embeddings(
                 else:
                     logger.error(f"[get_all_embeddings] {ident} failed: {e}")
             except RateLimitError as e:
-                success_streak = 0
                 error_logs[ident].append(str(e))
                 logger.warning(f"Rate limit error for {ident}: {e}")
                 cooldown_until = time.time() + global_cooldown
-                new_cap = max(1, concurrency_cap - 1)
-                if new_cap != concurrency_cap:
-                    msg = f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to rate limits."
-                    print(msg)
-                    logger.info(msg)
-                    concurrency_cap = new_cap
+                rate_limit_errors_since_adjust += 1
+                successes_since_adjust = 0
+                maybe_adjust_concurrency()
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
                     await asyncio.sleep(backoff)
@@ -1308,11 +1325,9 @@ async def get_all_embeddings(
                 AuthenticationError,
                 InvalidRequestError,
             ) as e:
-                success_streak = 0
                 error_logs[ident].append(str(e))
                 logger.warning(f"API error for {ident}: {e}")
             except Exception as e:
-                success_streak = 0
                 error_logs[ident].append(str(e))
                 logger.error(f"Unexpected error for {ident}: {e}")
                 raise
@@ -1324,14 +1339,18 @@ async def get_all_embeddings(
         asyncio.create_task(worker())
         for _ in range(max(1, min(n_parallels, queue.qsize())))
     ]
-    await queue.join()
-    for w in workers:
-        w.cancel()
-    await asyncio.gather(*workers, return_exceptions=True)
-    pbar.close()
-
-    with open(save_path, "wb") as f:
-        pickle.dump(embeddings, f)
+    try:
+        await queue.join()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        logger.info("Cancellation requested, shutting down workers...")
+        raise
+    finally:
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        pbar.close()
+        with open(save_path, "wb") as f:
+            pickle.dump(embeddings, f)
 
     return embeddings
 
