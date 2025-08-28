@@ -97,6 +97,7 @@ class Deduplicate:
         column_name: str,
         output_col: str,
         reset_files: bool,
+        run_idx: int,
         **kwargs: Any,
     ) -> None:
         uniques, groups, orig_to_rep = self._deduplicate(df_proc[column_name])
@@ -109,7 +110,7 @@ class Deduplicate:
                 texts=uniques,
                 identifiers=uniques,
                 save_path=os.path.join(self.cfg.save_dir, "deduplicate_embeddings.pkl"),
-                reset_file=reset_files,
+                reset_file=reset_files and run_idx == 0,
                 use_dummy=self.cfg.use_dummy,
                 verbose=False,
             )
@@ -146,7 +147,12 @@ class Deduplicate:
             )
             identifiers.append(f"deduplicate_{idx:05d}")
 
-        save_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
+        base, ext = os.path.splitext(self.cfg.file_name)
+        if self.cfg.n_runs > 1:
+            response_file = f"{base}_run{run_idx + 1}{ext}"
+        else:
+            response_file = self.cfg.file_name
+        save_path = os.path.join(self.cfg.save_dir, response_file)
         if prompts:
             resp_df = await get_all_responses(
                 prompts=prompts,
@@ -231,7 +237,8 @@ class Deduplicate:
                 df_proc,
                 column_name=current_col,
                 output_col=output_col,
-                reset_files=reset_files if i == 0 else False,
+                reset_files=reset_files,
+                run_idx=i,
                 **kwargs,
             )
             self._print_stats(
