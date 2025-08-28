@@ -135,7 +135,7 @@ class Deduplicate:
             prompts.append(
                 self.template.render(
                     group_id=f"deduplicate_{idx:05d}",
-                    items=item_text,
+                    raw_terms=item_text,
                     additional_instructions=self.cfg.additional_instructions or "",
                 )
             )
