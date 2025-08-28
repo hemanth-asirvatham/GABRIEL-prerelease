@@ -131,11 +131,10 @@ class Deduplicate:
         prompts: List[str] = []
         identifiers: List[str] = []
         for idx, items in enumerate(batches):
-            item_text = "\n".join(items)
             prompts.append(
                 self.template.render(
                     group_id=f"deduplicate_{idx:05d}",
-                    raw_terms=item_text,
+                    raw_terms=items,
                     additional_instructions=self.cfg.additional_instructions or "",
                 )
             )
