@@ -8,7 +8,7 @@ async def _run_dedup(tmp_path, n_runs=1):
     cfg = DeduplicateConfig(save_dir=str(tmp_path), use_dummy=True, use_embeddings=False, n_runs=n_runs)
     task = Deduplicate(cfg)
     df = pd.DataFrame({"term": ["apple", "Apple", "banana", "BANANA", "pear"]})
-    return await task.run(df, on="term")
+    return await task.run(df, column_name="term")
 
 
 def test_deduplicate_dummy(tmp_path):
