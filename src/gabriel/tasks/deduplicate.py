@@ -117,13 +117,19 @@ class Deduplicate:
                 arr = np.array([emb[u] for u in uniques], dtype=float)
                 k = max(1, int(np.ceil(len(uniques) / self.cfg.group_size)))
                 _, labels = kmeans2(arr, k, minit="points")
-                for cluster_id in range(k):
-                    members = [uniques[i] for i, lbl in enumerate(labels) if lbl == cluster_id]
-                    if not members:
-                        continue
-                    for j in range(0, len(members), self.cfg.group_size):
-                        batches.append(members[j : j + self.cfg.group_size])
-        else:
+                clusters: List[List[str]] = [[] for _ in range(k)]
+                for term, lbl in zip(uniques, labels):
+                    clusters[int(lbl)].append(term)
+                current: List[str] = []
+                for cluster in clusters:
+                    for term in cluster:
+                        current.append(term)
+                        if len(current) >= self.cfg.group_size:
+                            batches.append(current)
+                            current = []
+                if current:
+                    batches.append(current)
+        if not batches:
             sorted_uniques = sorted(uniques, key=lambda x: x.lower())
             for i in range(0, len(sorted_uniques), self.cfg.group_size):
                 batches.append(sorted_uniques[i : i + self.cfg.group_size])
@@ -164,28 +170,27 @@ class Deduplicate:
 
         mappings: Dict[str, str] = {}
         for items, res in zip(batches, parsed):
-            # The model may return a JSON string or wrap the list in quotes.
             if isinstance(res, str):
                 res = safe_json(res)
-            if isinstance(res, list):
-                norm_list: List[Dict[str, str]] = []
+            if isinstance(res, dict):
+                for rep, vals in res.items():
+                    if isinstance(vals, list):
+                        for val in vals:
+                            if isinstance(val, str) and val in items:
+                                mappings[val] = rep
+            elif isinstance(res, list):
                 for row in res:
+                    if isinstance(row, str):
+                        row = safe_json(row)
                     if isinstance(row, dict):
-                        norm_list.append(row)
-                    elif isinstance(row, str):
-                        inner = safe_json(row)
-                        if isinstance(inner, dict):
-                            norm_list.append(inner)
-                res_iter = norm_list
-            elif isinstance(res, dict):
-                res_iter = [res]
-            else:
-                res_iter = []
-            for row in res_iter:
-                inp = row.get("input")
-                mapped = row.get("mapped")
-                if isinstance(inp, str) and isinstance(mapped, str) and inp in items:
-                    mappings[inp] = mapped
+                        inp = row.get("input")
+                        mapped = row.get("mapped")
+                        if (
+                            isinstance(inp, str)
+                            and isinstance(mapped, str)
+                            and inp in items
+                        ):
+                            mappings[inp] = mapped
 
         for rep in uniques:
             mappings.setdefault(rep, rep)

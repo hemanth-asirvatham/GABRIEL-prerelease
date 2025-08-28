@@ -52,3 +52,17 @@ def test_prompt_contains_terms_with_embeddings(monkeypatch, tmp_path):
     assert "END RAW TERMS" in prompt
     body = prompt.split("BEGIN RAW TERMS", 1)[1].split("END RAW TERMS", 1)[0].strip()
     assert body != ""
+
+
+def test_mapping_dict_parsed(monkeypatch, tmp_path):
+    async def fake_get_all_responses(*, prompts, identifiers, **kwargs):
+        mapping = '{"red apples": ["red apples", "red apple"]}'
+        return pd.DataFrame({"Identifier": identifiers, "Response": [mapping]})
+
+    monkeypatch.setattr(deduplicate, "get_all_responses", fake_get_all_responses)
+
+    cfg = DeduplicateConfig(save_dir=str(tmp_path), use_dummy=True, use_embeddings=False, n_runs=1)
+    task = Deduplicate(cfg)
+    df = pd.DataFrame({"term": ["red apple", "red apples", "banana"]})
+    result = asyncio.run(task.run(df, column_name="term"))
+    assert result["mapped_term"].tolist() == ["red apples", "red apples", "banana"]
