@@ -26,6 +26,25 @@ def test_deduplicate_multiple_runs(tmp_path):
     assert result["mapped_term"].tolist() == ["apple", "apple", "banana", "banana", "pear"]
 
 
+def test_response_files_unique(tmp_path, monkeypatch):
+    captured_paths = []
+
+    async def fake_get_all_responses(*, save_path, **kwargs):
+        captured_paths.append(save_path)
+        return pd.DataFrame({"Identifier": [], "Response": []})
+
+    monkeypatch.setattr(deduplicate, "get_all_responses", fake_get_all_responses)
+
+    cfg = DeduplicateConfig(save_dir=str(tmp_path), use_dummy=True, use_embeddings=False, n_runs=2)
+    task = Deduplicate(cfg)
+    df = pd.DataFrame({"term": ["apple", "Apple"]})
+    asyncio.run(task.run(df, column_name="term"))
+
+    expected1 = tmp_path / "deduplicate_responses_run1.csv"
+    expected2 = tmp_path / "deduplicate_responses_run2.csv"
+    assert captured_paths == [str(expected1), str(expected2)]
+
+
 def test_prompt_contains_terms_with_embeddings(monkeypatch, tmp_path):
     captured = {}
 

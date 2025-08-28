@@ -1208,6 +1208,9 @@ async def get_all_embeddings(
         try:
             with open(save_path, "rb") as f:
                 embeddings = pickle.load(f)
+            print(
+                f"[get_all_embeddings] Loaded {len(embeddings)} existing embeddings from {save_path}"
+            )
         except Exception:
             embeddings = {}
 
@@ -1223,6 +1226,9 @@ async def get_all_embeddings(
         (i, t) for i, t in zip(identifiers, texts) if i not in embeddings
     ]
     if not items:
+        print(
+            f"[get_all_embeddings] Using cached embeddings from {save_path}; no new texts to process"
+        )
         return embeddings
 
     tokenizer = _get_tokenizer(model)
