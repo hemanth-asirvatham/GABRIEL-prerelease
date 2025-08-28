@@ -1211,6 +1211,14 @@ async def get_all_embeddings(
         except Exception:
             embeddings = {}
 
+    if len(texts) > 50_000:
+        msg = (
+            "[get_all_embeddings] Warning: more than 50k texts supplied; the"
+            " resulting embeddings file may be very large."
+        )
+        print(msg)
+        logger.warning(msg)
+
     items = [
         (i, t) for i, t in zip(identifiers, texts) if i not in embeddings
     ]
@@ -1225,7 +1233,12 @@ async def get_all_embeddings(
         queue.put_nowait((item[1], item[0], max_retries))
 
     processed = 0
-    pbar = tqdm(total=len(items), disable=not verbose, desc="Getting embeddings")
+    pbar = tqdm(
+        total=len(items),
+        disable=not verbose,
+        desc="Getting embeddings",
+        leave=True,
+    )
     cooldown_until = 0.0
     active_workers = 0
     concurrency_cap = max(1, min(n_parallels, queue.qsize()))
@@ -1306,6 +1319,11 @@ async def get_all_embeddings(
                     queue.put_nowait((text, ident, attempts_left - 1))
                 else:
                     logger.error(f"[get_all_embeddings] {ident} failed: {e}")
+                    processed += 1
+                    pbar.update(1)
+                    if processed % save_every_x == 0:
+                        with open(save_path, "wb") as f:
+                            pickle.dump(embeddings, f)
             except RateLimitError as e:
                 error_logs[ident].append(str(e))
                 logger.warning(f"Rate limit error for {ident}: {e}")
@@ -1319,6 +1337,25 @@ async def get_all_embeddings(
                     queue.put_nowait((text, ident, attempts_left - 1))
                 else:
                     logger.error(f"[get_all_embeddings] {ident} failed: {e}")
+                    processed += 1
+                    pbar.update(1)
+                    if processed % save_every_x == 0:
+                        with open(save_path, "wb") as f:
+                            pickle.dump(embeddings, f)
+            except APIConnectionError as e:
+                error_logs[ident].append(str(e))
+                logger.warning(f"Connection error for {ident}: {e}")
+                if attempts_left - 1 > 0:
+                    backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
+                    await asyncio.sleep(backoff)
+                    queue.put_nowait((text, ident, attempts_left - 1))
+                else:
+                    logger.error(f"[get_all_embeddings] {ident} failed: {e}")
+                    processed += 1
+                    pbar.update(1)
+                    if processed % save_every_x == 0:
+                        with open(save_path, "wb") as f:
+                            pickle.dump(embeddings, f)
             except (
                 APIError,
                 BadRequestError,
@@ -1327,6 +1364,11 @@ async def get_all_embeddings(
             ) as e:
                 error_logs[ident].append(str(e))
                 logger.warning(f"API error for {ident}: {e}")
+                processed += 1
+                pbar.update(1)
+                if processed % save_every_x == 0:
+                    with open(save_path, "wb") as f:
+                        pickle.dump(embeddings, f)
             except Exception as e:
                 error_logs[ident].append(str(e))
                 logger.error(f"Unexpected error for {ident}: {e}")
