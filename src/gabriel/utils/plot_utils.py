@@ -186,25 +186,25 @@ def regression_plot(
     controls = list(controls) if controls else []
     rename_map = rename_map or {}
     results: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for y in y_vars:
-        for x in x_vars:
+    for y_var in y:
+        for x_var in x:
             # Create a copy for each pair to avoid side effects
             data = df.copy()
             # Pretty names for axes and tables
-            y_disp = rename_map.get(y, y)
-            x_disp = rename_map.get(x, x)
+            y_disp = rename_map.get(y_var, y_var)
+            x_disp = rename_map.get(x_var, x_var)
             ctrl_disp = [rename_map.get(c, c) for c in controls]
             # Ensure variables are numeric; non-numeric rows dropped
             needed = [x, y] + controls
             data[needed] = data[needed].apply(pd.to_numeric, errors="coerce")
             data = data.dropna(subset=needed)
             # Optionally z‑score independent and dependent variables
-            x_use = f"{x}_z" if zscore_x else x
-            y_use = f"{y}_z" if zscore_y else y
+            x_use = f"{x_var}_z" if zscore_x else x_var
+            y_use = f"{y_var}_z" if zscore_y else y_var
             if zscore_x:
-                data[x_use] = _z(data[x])
+                data[x_use] = _z(data[x_var])
             if zscore_y:
-                data[y_use] = _z(data[y])
+                data[y_use] = _z(data[y_var])
             # Binned scatter plot
             data["_bin"] = pd.qcut(data[x_use], q=bins, duplicates="drop")
             grp = data.groupby("_bin", observed=True)
@@ -260,7 +260,7 @@ def regression_plot(
                     print(f"\n=== Model: {y_disp} ~ {x_disp} + controls ===")
                     _print_table(ctrl_res, varnames_ctrl, tablefmt=tablefmt)
             # Store results keyed by (original y, original x)
-            results[(y, x)] = {
+            results[(y_var, x_var)] = {
                 "simple": simple_res,
                 "with_controls": ctrl_res,
                 "binned_df": grp[[x_use, y_use]].mean(),
