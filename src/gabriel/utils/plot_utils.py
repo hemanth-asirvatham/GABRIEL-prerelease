@@ -369,7 +369,7 @@ def line_plot(
     linewidth=2,
     cmap_names=None,                     # list of matplotlib colormap names
     gradient_mode='value',               # 'value' or 'linear'
-    gradient_start=0.4, gradient_end=1.0,
+    gradient_start=0.4, gradient_end=0.75,
     max_lines_per_plot=5,                # auto-batch if more series
     save_path=None,                      # file or directory; batches get suffixes
     show=True,
