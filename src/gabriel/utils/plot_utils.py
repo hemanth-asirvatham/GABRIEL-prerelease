@@ -24,6 +24,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import matplotlib.cm as cm
+from matplotlib.collections import LineCollection
 from scipy.stats import sem
 
 try:
@@ -338,55 +340,172 @@ def bar_plot(
 
 
 def line_plot(
-    x: Iterable[Any],
-    ys: Iterable[Iterable[float]],
-    *,
-    labels: Optional[Iterable[str]] = None,
-    title: str = "Line Plot",
-    x_label: str = "X",
-    y_label: str = "Y",
-    colors: Optional[Iterable[str]] = None,
-    background_color: str = "#ffffff",
-    font_family: str = "monospace",
-    figsize: Tuple[float, float] = (10, 6),
-    dpi: int = 300,
-    label_font_size: int = 12,
-    title_font_size: int = 14,
-    wrap_width: int = 60,
-    legend: bool = True,
-) -> None:
-    """Plot one or more line series against a shared x‑axis.
-
-    Parameters
-    ----------
-    x : iterable
-        Values on the x‑axis.
-    ys : iterable of iterables
-        Each element is a sequence of y values corresponding to x.
-    labels : iterable of str, optional
-        Labels for each line series.  If None, lines are labelled "Series i".
-    colors : iterable of str, optional
-        Colours for each line.  Defaults to Matplotlib’s color cycle if None.
-    legend : bool, default True
-        Whether to display a legend.
+    df,
+    attributes,
+    title=None,
+    time_col='year',
+    group_col='party',
+    group_order=None,
+    colormaps=None,
+    dpi=400,
+    font_family='monospace',
+    wrap_width=100,
+    agg_func='mean',              # default to standard deviation
+    smoothing_window=None,
+    smoothing_method='rolling',
+    spline_k=3,
+    interpolation_points=None,
+    y_min=None,
+    y_max=None,
+    grid=True,
+    gradient_mode='value',
+    gradient_start=0.4,
+    gradient_end=1.0,
+    save_dir=None,
+    show=True
+):
     """
-    plt.rcParams["font.family"] = font_family
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    ax.set_facecolor(background_color)
-    fig.patch.set_facecolor(background_color)
-    if labels is None:
-        labels = [f"Series {i+1}" for i in range(len(ys))]
-    if colors is None:
-        colours = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    Plot one line per group for each attribute, aggregating values by a given function.
+
+    Supported agg_func values:
+    - 'mean' : group-by mean
+    - 'std'  : standard deviation (default)
+    - 'var'  : variance
+    - 'cv'   : coefficient of variation (std / mean)
+    - 'se'   : standard error (std / sqrt(n))
+    """
+    try:
+        from scipy.interpolate import make_interp_spline
+        _spline_available = True
+    except ImportError:
+        _spline_available = False
+        if smoothing_method == 'spline':
+            print("SciPy not available; using rolling smoothing instead.")
+            smoothing_method = 'rolling'
+
+    plt.rcParams.update({'font.family': font_family})
+
+    # Determine group order
+    if group_order is None:
+        group_values = list(df[group_col].dropna().unique())
     else:
-        colours = list(colors)
-    for i, y_vals in enumerate(ys):
-        ax.plot(x, y_vals, label=labels[i], color=colours[i % len(colours)])
-    ax.set_title(textwrap.fill(title, wrap_width), fontsize=title_font_size, fontweight="bold")
-    ax.set_xlabel(x_label, fontsize=label_font_size, fontweight="bold")
-    ax.set_ylabel(y_label, fontsize=label_font_size, fontweight="bold")
-    ax.grid(alpha=0.3)
-    if legend:
-        ax.legend()
-    plt.tight_layout()
-    plt.show()
+        group_values = list(group_order)
+
+    # Default colormaps if none provided
+    if colormaps is None:
+        colormaps = ["Reds", "Blues", "Greens", "Purples", "Oranges", "Greys"]
+
+    for attr in attributes:
+        fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
+        global_min, global_max = float('inf'), float('-inf')
+
+        for idx, group in enumerate(group_values):
+            gdf = df[df[group_col] == group]
+            # Compute desired statistic per year
+            grouped = gdf.groupby(time_col)[attr].agg(['mean', 'std', 'count']).reset_index().sort_values(time_col)
+            if agg_func == 'mean':
+                y = grouped['mean'].to_numpy()
+            elif agg_func == 'var':
+                y = (grouped['std'] ** 2).to_numpy()
+            elif agg_func == 'std':
+                y = grouped['std'].to_numpy()
+            elif agg_func == 'cv':
+                # Avoid division by zero by replacing zero means with NaN
+                y = (grouped['std'] / grouped['mean'].replace(0, np.nan)).to_numpy()
+            elif agg_func == 'se':
+                y = (grouped['std'] / np.sqrt(grouped['count'])).to_numpy()
+            else:
+                raise ValueError(f"Unsupported agg_func: {agg_func}")
+
+            x = grouped[time_col].to_numpy()
+
+            # Smooth (rolling or spline)
+            if smoothing_window and smoothing_window > 1:
+                if smoothing_method == 'rolling':
+                    y_smoothed = (
+                        pd.Series(y)
+                        .rolling(window=smoothing_window, min_periods=1, center=True)
+                        .mean()
+                        .to_numpy()
+                    )
+                    x_smoothed = x
+                elif smoothing_method == 'spline' and _spline_available and len(x) > 1:
+                    x_smoothed = np.linspace(x.min(), x.max(),
+                                             max(len(x), interpolation_points or len(x)))
+                    k = min(spline_k, len(x) - 1)
+                    spline = make_interp_spline(x, y, k=k)
+                    y_smoothed = spline(x_smoothed)
+                else:
+                    x_smoothed, y_smoothed = x, y
+            else:
+                x_smoothed, y_smoothed = x, y
+
+            # Upsample if requested
+            if interpolation_points and interpolation_points > len(x_smoothed):
+                x_interp = np.linspace(x_smoothed.min(), x_smoothed.max(), interpolation_points)
+                y_interp = np.interp(x_interp, x_smoothed, y_smoothed)
+                x_smoothed, y_smoothed = x_interp, y_interp
+
+            # Update global limits for dynamic y-axis
+            global_min = min(global_min, np.nanmin(y_smoothed))
+            global_max = max(global_max, np.nanmax(y_smoothed))
+
+            # Colour segments
+            points = np.array([x_smoothed, y_smoothed]).T.reshape(-1, 1, 2)
+            segments = np.concatenate([points[:-1], points[1:]], axis=1)
+            cmap = cm.get_cmap(colormaps[idx % len(colormaps)])
+
+            if gradient_mode == 'value':
+                norm = (y_smoothed - np.nanmin(y_smoothed)) / max(
+                    (np.nanmax(y_smoothed) - np.nanmin(y_smoothed)), 1e-9
+                )
+                seg_vals = (norm[:-1] + norm[1:]) / 2
+                seg_vals = gradient_start + seg_vals * (gradient_end - gradient_start)
+                colors = cmap(seg_vals)
+            else:
+                colors = cmap(np.linspace(gradient_start, gradient_end, len(segments)))
+
+            lc = LineCollection(segments, colors=colors, linewidth=2, label=str(group))
+            ax.add_collection(lc)
+
+        # Set axis limits
+        ymin = y_min if y_min is not None else global_min - 0.05 * (global_max - global_min)
+        ymax = y_max if y_max is not None else global_max + 0.05 * (global_max - global_min)
+        ax.set_xlim(df[time_col].min(), df[time_col].max())
+        ax.set_ylim(ymin, ymax)
+
+        # Grid and spines
+        if grid:
+            ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+        else:
+            for spine in ['top', 'right']:
+                ax.spines[spine].set_visible(False)
+
+        # Title and labels
+        if title:
+            ax.set_title(textwrap.fill(f"{title} ({attr})", width=wrap_width))
+        else:
+            ax.set_title(textwrap.fill(attr, width=wrap_width))
+
+        # Label y-axis based on agg_func
+        y_label_map = {
+            'mean': f"mean of {attr}",
+            'std': f"standard deviation of {attr}",
+            'var': f"variance of {attr}",
+            'cv': f"coefficient of variation of {attr}",
+            'se': f"standard error of {attr}",
+        }
+        ax.set_xlabel(time_col)
+        ax.set_ylabel(y_label_map.get(agg_func, f"{agg_func} of {attr}"))
+        ax.legend(loc='best')
+        plt.tight_layout()
+
+        # Save or show
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            filename = f"{attr}_{agg_func}_plot.png".replace(" ", "_")
+            plt.savefig(os.path.join(save_dir, filename), dpi=dpi)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
