@@ -195,7 +195,7 @@ def regression_plot(
             x_disp = rename_map.get(x_var, x_var)
             ctrl_disp = [rename_map.get(c, c) for c in controls]
             # Ensure variables are numeric; non-numeric rows dropped
-            needed = [x, y] + controls
+            needed = [x_var, y_var] + controls
             data[needed] = data[needed].apply(pd.to_numeric, errors="coerce")
             data = data.dropna(subset=needed)
             # Optionally z‑score independent and dependent variables
