@@ -149,8 +149,8 @@ def _print_table(res: Dict[str, Any], varnames: List[str], *, tablefmt: str = "g
 def regression_plot(
     df: pd.DataFrame,
     *,
-    x_vars: Iterable[str],
-    y_vars: Iterable[str],
+    x: Iterable[str],
+    y: Iterable[str],
     controls: Optional[Iterable[str]] = None,
     rename_map: Optional[Dict[str, str]] = None,
     zscore_x: bool = False,
@@ -371,7 +371,7 @@ def line_plot(
     linewidth=2,
     cmap_names=None,                     # list of colormap names
     gradient_mode='value',               # 'value' or 'linear'
-    gradient_start=0.4, gradient_end=1.0,
+    gradient_start=0.4, gradient_end=0.7,
     max_lines_per_plot=5,                # batch panels if too many series
     save_path=None,                      # file or dir; batches get suffix _setN
     show=True,
