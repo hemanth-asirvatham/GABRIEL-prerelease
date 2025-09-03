@@ -23,6 +23,13 @@ No vague, overly broad, trivial, or overly abstract buckets.
 Better to make a too specific than a too vague bucket, even if it means capturing fewer raw terms.
 Final buckets must be meaningful, specific, interesting, and capturing the largest and most important clusters of raw terms.
 
+Ensure mutual exclusivity-each bucket must be clearly distinct from each other bucket.
+Do not select multiple conceptually overlapping buckets.
+Rather think broadly and approach from different angles, noticing subtle hidden creative patterns that are important alongside the obvious ones.
+We want broad coverage not just variations on the same idea, both obvious choices and subtle interesting patterns that one would only spot by scouring the data as you are.
+Bucket diversity, mutual exclusivity, and creative exploration of different angles/subtle patterns are key.
+We wish to identify both obvious and novel features/patterns that are non-obvious ex ante but significant in the actual data, requiring creative thinking to notice.
+
 Final list must be exactly {{ bucket_count }} mutually exclusive, specific, and well constructed bucket terms.
 
 {% if differentiate %}
@@ -68,6 +75,8 @@ It is like being GM of an NBA team: you already have some players on the roster,
 These already finalized buckets are your existing players; now focus on identifying the best complementary pieces to add to the team to get the best overall coverage with the final set of buckets.
 It is essential you avoid voting for terms that overlap with the already selected buckets.
 DON'T vote for any bucket that is conceptually already covered by the already selected buckets.
+Strongly prefer new buckets that are orthogonal to existing buckets, explaining a distinct but important pattern in the data.
+If the obvious patterns are already covered, novelty (without triviality) is highly prized.
 Build a full, mutually exclusive set of buckets that together capture the biggest themes present in the raw terms, amongst the totality of all existing and new buckets you are voting for.
 
 Again, the already selected buckets are: {{ selected_buckets.keys() }}
