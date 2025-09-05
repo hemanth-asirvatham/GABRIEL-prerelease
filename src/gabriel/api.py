@@ -1,7 +1,7 @@
 import asyncio
 import os
 import pandas as pd
-from typing import Dict, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 from .tasks import (
     Rate,
@@ -230,6 +230,20 @@ async def rank(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     template_path: Optional[str] = None,
+    recursive: bool = False,
+    recursive_fraction: float = 1.0 / 3.0,
+    recursive_min_remaining: int = 30,
+    recursive_final_round_multiplier: int = 3,
+    recursive_cut_attr: Optional[str] = None,
+    recursive_cut_side: str = "top",
+    recursive_rate_first_round: bool = False,
+    recursive_rewrite_func: Optional[Callable[[str, str, int], str]] = None,
+    recursive_rewrite_text_col: str = "text",
+    recursive_keep_stage_columns: bool = True,
+    recursive_add_stage_suffix: bool = True,
+    initial_rating_pass: bool = False,
+    rate_kwargs: Optional[Dict[str, Any]] = None,
+    id_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
@@ -252,11 +266,25 @@ async def rank(
         modality=modality,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        recursive=recursive,
+        recursive_fraction=recursive_fraction,
+        recursive_min_remaining=recursive_min_remaining,
+        recursive_final_round_multiplier=recursive_final_round_multiplier,
+        recursive_cut_attr=recursive_cut_attr,
+        recursive_cut_side=recursive_cut_side,
+        recursive_rate_first_round=recursive_rate_first_round,
+        recursive_rewrite_func=recursive_rewrite_func,
+        recursive_rewrite_text_col=recursive_rewrite_text_col,
+        recursive_keep_stage_columns=recursive_keep_stage_columns,
+        recursive_add_stage_suffix=recursive_add_stage_suffix,
+        initial_rating_pass=initial_rating_pass,
+        rate_kwargs=rate_kwargs or {},
         **cfg_kwargs,
     )
     return await Rank(cfg, template_path=template_path).run(
         df,
         column_name,
+        id_column=id_column,
         reset_files=reset_files,
     )
 

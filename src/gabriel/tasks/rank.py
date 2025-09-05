@@ -46,8 +46,10 @@ import os
 from pathlib import Path
 import random
 import hashlib
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable
+import math
+import copy
+from dataclasses import dataclass, field, fields
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable, Sequence
 import json
 
 import numpy as np
@@ -64,6 +66,7 @@ from gabriel.utils import (
     load_image_inputs,
     load_audio_inputs,
 )
+from .rate import Rate, RateConfig
 
 
 @dataclass
@@ -108,6 +111,34 @@ class RankConfig:
         will be removed.
     additional_instructions:
         Extra, user‑supplied instructions passed to the prompt.
+    recursive:
+        When ``True`` run ranking in multiple stages, pruning the pool
+        of candidates between stages according to ``recursive_fraction``
+        and ``recursive_min_remaining``.
+    recursive_fraction, recursive_min_remaining,
+    recursive_final_round_multiplier:
+        Parameters controlling how many items are kept between stages
+        and how many rounds are executed in the final stage when
+        ``recursive`` is enabled.
+    recursive_cut_attr, recursive_cut_side:
+        Select which attribute and direction are used when choosing
+        which items survive to the next stage.
+    recursive_rate_first_round:
+        If ``True`` perform a :class:`Rate` sweep before the first
+        recursive stage and seed subsequent rounds with those scores.
+    recursive_rewrite_func, recursive_rewrite_text_col:
+        Optional hook to rewrite surviving passages between stages and
+        the column where rewritten text should be stored.
+    recursive_keep_stage_columns, recursive_add_stage_suffix:
+        Control whether intermediate stage outputs are merged into the
+        final results and whether their columns receive stage prefixes.
+    initial_rating_pass:
+        Enables a one-off :class:`Rate` pass before standard ranking
+        rounds.  The centred scores from that pass seed the initial
+        Bradley–Terry ratings which helps pairing focus on refinement.
+    rate_kwargs:
+        Optional dictionary of overrides forwarded to the rating task
+        whenever it is invoked (either as a seed or during recursion).
     """
 
     attributes: Union[Dict[str, str], List[str]]
@@ -128,6 +159,21 @@ class RankConfig:
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    # Recursive execution controls
+    recursive: bool = False
+    recursive_fraction: float = 1.0 / 3.0
+    recursive_min_remaining: int = 30
+    recursive_final_round_multiplier: int = 3
+    recursive_cut_attr: Optional[str] = None
+    recursive_cut_side: str = "top"
+    recursive_rate_first_round: bool = False
+    recursive_rewrite_func: Optional[Callable[[str, str, int], str]] = None
+    recursive_rewrite_text_col: str = "text"
+    recursive_keep_stage_columns: bool = True
+    recursive_add_stage_suffix: bool = True
+    # Optional single pass rating seed controls
+    initial_rating_pass: bool = False
+    rate_kwargs: Dict[str, Any] = field(default_factory=dict)
 
 
 class Rank:
@@ -232,6 +278,105 @@ class Rank:
         if attr not in self.history_multi:
             self.history_multi[attr] = []
         self.history_multi[attr].append(ranking)
+
+    def _attributes_as_dict(self) -> Dict[str, str]:
+        if isinstance(self.cfg.attributes, dict):
+            return dict(self.cfg.attributes)
+        return {attr: "" for attr in self.cfg.attributes}
+
+    def _split_rate_kwargs(self, overrides: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        merged: Dict[str, Any] = {}
+        if self.cfg.rate_kwargs:
+            merged.update(self.cfg.rate_kwargs)
+        if overrides:
+            merged.update(overrides)
+        config_fields = {f.name for f in fields(RateConfig)}
+        cfg_kwargs: Dict[str, Any] = {}
+        run_kwargs: Dict[str, Any] = {}
+        for key, value in merged.items():
+            if key in config_fields:
+                cfg_kwargs[key] = value
+            else:
+                run_kwargs[key] = value
+        return cfg_kwargs, run_kwargs
+
+    async def _run_rate_pass(
+        self,
+        df: pd.DataFrame,
+        column_name: str,
+        *,
+        save_dir: str,
+        file_name: str,
+        reset_files: bool,
+        rate_kwargs: Optional[Dict[str, Any]] = None,
+        runtime_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> pd.DataFrame:
+        cfg_overrides, run_kwargs = self._split_rate_kwargs(rate_kwargs)
+        rate_cfg = RateConfig(
+            attributes=self._attributes_as_dict(),
+            save_dir=save_dir,
+            file_name=file_name,
+            model=self.cfg.model,
+            n_parallels=self.cfg.n_parallels,
+            n_runs=1,
+            use_dummy=self.cfg.use_dummy,
+            additional_instructions=self.cfg.additional_instructions or "",
+            modality=self.cfg.modality,
+            n_attributes_per_run=self.cfg.n_attributes_per_run,
+            reasoning_effort=self.cfg.reasoning_effort,
+            reasoning_summary=self.cfg.reasoning_summary,
+        )
+        for key, value in cfg_overrides.items():
+            setattr(rate_cfg, key, value)
+        combined_kwargs = dict(run_kwargs)
+        if runtime_kwargs:
+            combined_kwargs.update(runtime_kwargs)
+        combined_kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        rate_task = Rate(rate_cfg)
+        return await rate_task.run(
+            df,
+            column_name,
+            reset_files=reset_files,
+            **combined_kwargs,
+        )
+
+    def _seed_ratings_from_rate(
+        self,
+        rate_df: pd.DataFrame,
+        *,
+        id_column: Optional[str],
+        text_column: str,
+        item_ids: Sequence[str],
+        attr_keys: Sequence[str],
+    ) -> Dict[str, Dict[str, float]]:
+        if rate_df.empty:
+            return {}
+        attr_cols = [attr for attr in attr_keys if attr in rate_df.columns]
+        if not attr_cols:
+            return {}
+        if id_column and id_column in rate_df.columns:
+            key_series = rate_df[id_column].astype(str)
+        elif text_column in rate_df.columns:
+            key_series = rate_df[text_column].astype(str).map(
+                lambda x: hashlib.sha1(x.encode()).hexdigest()[:8]
+            )
+        else:
+            return {}
+        stage_df = pd.DataFrame({"_id": key_series})
+        for attr in attr_cols:
+            stage_df[attr] = pd.to_numeric(rate_df[attr], errors="coerce")
+        grouped = stage_df.groupby("_id")[attr_cols].mean()
+        seeds: Dict[str, Dict[str, float]] = {}
+        for attr in attr_cols:
+            series = grouped[attr].dropna()
+            if series.empty:
+                continue
+            mean_val = float(series.mean())
+            centred = series - mean_val
+            for item_id, value in centred.items():
+                seeds.setdefault(item_id, {})[attr] = float(value)
+        # Only retain seeds for items that will appear in the ranking loop
+        return {item_id: seeds[item_id] for item_id in item_ids if item_id in seeds}
 
     # ------------------------------------------------------------------
     # BT / PL fitting utilities
@@ -877,6 +1022,235 @@ class Rank:
                     ratings[i][attr] -= mean_val
             _write_checkpoint()
 
+    async def _run_recursive(
+        self,
+        df: pd.DataFrame,
+        text_column: str,
+        *,
+        id_column: Optional[str],
+        reset_files: bool,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        attr_dict = self._attributes_as_dict()
+        attr_list = list(attr_dict.keys())
+        if not attr_list:
+            raise ValueError("No attributes provided for ranking")
+        cut_attr = self.cfg.recursive_cut_attr or attr_list[0]
+        if cut_attr not in attr_list:
+            raise ValueError(
+                f"recursive_cut_attr '{self.cfg.recursive_cut_attr}' not present in attributes"
+            )
+        cut_side = (self.cfg.recursive_cut_side or "top").lower()
+        if cut_side not in {"top", "bottom"}:
+            raise ValueError("recursive_cut_side must be 'top' or 'bottom'")
+
+        work_df = df.reset_index(drop=True).copy()
+        if id_column is not None:
+            if id_column not in work_df.columns:
+                raise ValueError(f"id_column '{id_column}' not found in DataFrame")
+            work_df["identifier"] = work_df[id_column].astype(str)
+        else:
+            work_df["identifier"] = work_df[text_column].astype(str).map(
+                lambda x: hashlib.sha1(x.encode()).hexdigest()[:8]
+            )
+        if text_column != "text":
+            work_df = work_df.rename(columns={text_column: "text"})
+        rewrite_col = self.cfg.recursive_rewrite_text_col or "text"
+        if rewrite_col not in work_df.columns:
+            work_df[rewrite_col] = work_df["text"]
+        work_df["identifier"] = work_df["identifier"].astype(str)
+
+        base_folder = os.path.join(
+            self.cfg.save_dir, f"{self.cfg.file_name}_recursive"
+        )
+        os.makedirs(base_folder, exist_ok=True)
+
+        cumulative_scores: Dict[str, Dict[str, float]] = {
+            attr: {ident: 0.0 for ident in work_df["identifier"]}
+            for attr in attr_list
+        }
+        exit_stage: Dict[str, Optional[int]] = {
+            ident: None for ident in work_df["identifier"]
+        }
+        stage_dfs: List[pd.DataFrame] = []
+        current_ids = list(work_df["identifier"])
+        all_ids = list(current_ids)
+
+        def _select_next_ids(active_ids: Sequence[str]) -> List[str]:
+            n = len(active_ids)
+            if n <= self.cfg.recursive_min_remaining:
+                return list(active_ids)
+            keep_n = max(
+                int(math.ceil(n * self.cfg.recursive_fraction)),
+                self.cfg.recursive_min_remaining,
+            )
+            series = pd.Series(
+                {i: cumulative_scores[cut_attr][i] for i in active_ids},
+                name="cumulative",
+            )
+            ascending = cut_side == "bottom"
+            ranked = series.sort_values(ascending=ascending)
+            return ranked.head(keep_n).index.tolist()
+
+        def _update_cumulative(stage_df: pd.DataFrame) -> None:
+            for attr in attr_list:
+                if attr not in stage_df.columns:
+                    continue
+                for ident, value in zip(stage_df["identifier"], stage_df[attr]):
+                    try:
+                        cumulative_scores[attr][str(ident)] += float(value)
+                    except Exception:
+                        continue
+
+        def _maybe_rewrite_texts(
+            df_local: pd.DataFrame,
+            ids_to_keep: Sequence[str],
+            stage_idx: int,
+        ) -> pd.DataFrame:
+            if self.cfg.recursive_rewrite_func is None:
+                return df_local
+            mask = df_local["identifier"].isin(ids_to_keep)
+            rewritten: List[str] = []
+            for _, row in df_local[mask].iterrows():
+                rewritten.append(
+                    self.cfg.recursive_rewrite_func(
+                        row[self.cfg.recursive_rewrite_text_col],
+                        row["identifier"],
+                        stage_idx,
+                    )
+                )
+            df_local.loc[mask, self.cfg.recursive_rewrite_text_col] = rewritten
+            if (
+                self.cfg.recursive_rewrite_text_col != "text"
+                and "text" in df_local.columns
+            ):
+                df_local.loc[mask, "text"] = df_local.loc[
+                    mask, self.cfg.recursive_rewrite_text_col
+                ]
+            return df_local
+
+        stage_idx = 0
+        final_stage_df: Optional[pd.DataFrame] = None
+
+        while current_ids:
+            stage_idx += 1
+            n_current = len(current_ids)
+            is_final_stage = False
+            if n_current <= self.cfg.recursive_min_remaining:
+                is_final_stage = True
+            else:
+                next_keep = max(
+                    int(math.ceil(n_current * self.cfg.recursive_fraction)),
+                    self.cfg.recursive_min_remaining,
+                )
+                if next_keep <= self.cfg.recursive_min_remaining:
+                    is_final_stage = True
+
+            stage_rounds = self.cfg.n_rounds
+            if is_final_stage:
+                stage_rounds = max(
+                    1, stage_rounds * self.cfg.recursive_final_round_multiplier
+                )
+
+            stage_folder = os.path.join(base_folder, f"stage{stage_idx}")
+            os.makedirs(stage_folder, exist_ok=True)
+            stage_cfg = copy.deepcopy(self.cfg)
+            stage_cfg.recursive = False
+            stage_cfg.recursive_rate_first_round = False
+            stage_cfg.save_dir = stage_folder
+            stage_cfg.n_rounds = stage_rounds
+            stage_cfg.file_name = self.cfg.file_name
+            stage_cfg.rate_kwargs = dict(self.cfg.rate_kwargs)
+
+            stage_df_in = work_df[work_df["identifier"].isin(current_ids)].copy()
+
+            if stage_idx == 1 and self.cfg.recursive_rate_first_round:
+                stage_df_out = await self._run_rate_pass(
+                    stage_df_in,
+                    column_name="text",
+                    save_dir=stage_folder,
+                    file_name=f"stage{stage_idx}_ratings.csv",
+                    reset_files=reset_files,
+                    runtime_kwargs=kwargs,
+                )
+            else:
+                stage_ranker = Rank(stage_cfg, template=self.template)
+                stage_df_out = await stage_ranker.run(
+                    stage_df_in,
+                    column_name="text",
+                    id_column="identifier",
+                    reset_files=reset_files,
+                    **kwargs,
+                )
+
+            if self.cfg.recursive_keep_stage_columns:
+                keep_cols = [c for c in stage_df_out.columns if c != "text"]
+                if self.cfg.recursive_add_stage_suffix:
+                    renamed = {
+                        c: f"stage{stage_idx}_{c}"
+                        for c in keep_cols
+                        if c != "identifier"
+                    }
+                    stage_dfs.append(stage_df_out.rename(columns=renamed))
+                else:
+                    stage_dfs.append(stage_df_out.copy())
+
+            _update_cumulative(stage_df_out)
+
+            if is_final_stage:
+                for ident in current_ids:
+                    exit_stage[ident] = stage_idx
+                final_stage_df = stage_df_out
+                break
+
+            next_ids = _select_next_ids(current_ids)
+            removed = set(current_ids) - set(next_ids)
+            for ident in removed:
+                exit_stage[ident] = stage_idx
+            work_df = _maybe_rewrite_texts(work_df, next_ids, stage_idx)
+            current_ids = next_ids
+
+        if final_stage_df is None:
+            final_stage_df = work_df[work_df["identifier"].isin(current_ids)].copy()
+
+        cum_rows = []
+        for ident in all_ids:
+            row = {"identifier": ident}
+            for attr in attr_list:
+                row[f"cumulative_{attr}"] = cumulative_scores[attr][ident]
+            cum_rows.append(row)
+        cum_df = pd.DataFrame(cum_rows)
+
+        exit_df = pd.DataFrame(
+            {"identifier": list(exit_stage.keys()), "exit_stage": list(exit_stage.values())}
+        )
+
+        final_cols = [c for c in final_stage_df.columns if c != "text"]
+        final_raw = final_stage_df.rename(
+            columns={c: (c if c == "identifier" else f"final_{c}") for c in final_cols}
+        )
+
+        latest_text_df = work_df[["identifier", "text"]].copy()
+
+        out = (
+            cum_df.merge(exit_df, on="identifier", how="left")
+            .merge(latest_text_df, on="identifier", how="left")
+            .merge(final_raw, on="identifier", how="left")
+        )
+        if self.cfg.recursive_keep_stage_columns and stage_dfs:
+            for sdf in stage_dfs:
+                out = out.merge(sdf, on="identifier", how="left")
+
+        prefixed_cum = [c for c in out.columns if c.startswith("cumulative_")]
+        prefixed_final = [c for c in out.columns if c.startswith("final_")]
+        ordered_cols = ["identifier", "text", "exit_stage"] + prefixed_cum + prefixed_final
+        remaining = [c for c in out.columns if c not in ordered_cols]
+        out = out[ordered_cols + remaining]
+
+        final_path = os.path.join(base_folder, "recursive_final.csv")
+        out.to_csv(final_path, index=False)
+        return out
+
     # ------------------------------------------------------------------
     # Main ranking loop
     # ------------------------------------------------------------------
@@ -885,6 +1259,7 @@ class Rank:
         df: pd.DataFrame,
         column_name: str,
         *,
+        id_column: Optional[str] = None,
         reset_files: bool = False,
         n_runs: Optional[int] = None,
         **kwargs: Any,
@@ -898,6 +1273,13 @@ class Rank:
         column_name:
             Name of the column in ``df`` that holds the text for each
             passage.
+        id_column:
+            Optional name of a column that contains stable identifiers
+            for each row. When provided, these identifiers are used to
+            track passages across rounds instead of hashing the text
+            itself.  Supplying ``id_column`` is recommended when texts
+            may be rewritten between stages (e.g., during recursive
+            runs).
         reset_files:
             If ``True``, ignore any previously saved results and
             recompute the rankings.  Otherwise, if the final output
@@ -910,8 +1292,10 @@ class Rank:
             and that ``n_runs`` has no effect.
         **kwargs:
             Additional keyword arguments forwarded to
-            :func:`get_all_responses`.  Useful for passing through
-            authentication tokens or tracing settings.
+            :func:`get_all_responses`.  When ``initial_rating_pass`` is
+            enabled these arguments are also forwarded to the rating
+            stage.  Useful for passing through authentication tokens or
+            tracing settings.
 
         Returns
         -------
@@ -920,12 +1304,20 @@ class Rank:
             each attribute's score, optional z‑score and standard
             error.  The DataFrame is also written to ``save_dir``.
         """
+        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        if self.cfg.recursive:
+            return await self._run_recursive(
+                df,
+                column_name,
+                id_column=id_column,
+                reset_files=reset_files,
+                **kwargs,
+            )
+
         # prepare file paths
         base_name = os.path.splitext(self.cfg.file_name)[0]
         final_path = os.path.join(self.cfg.save_dir, f"{base_name}_final.csv")
         attr_path = os.path.join(self.cfg.save_dir, f"{base_name}_attrs.json")
-
-        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
         if n_runs is not None:
             print(
                 "Parameter 'n_runs' is ignored. Use 'n_rounds' to control the number of iterations. "
@@ -933,12 +1325,17 @@ class Rank:
             )
 
         df_proc = df.reset_index(drop=True).copy()
-        # assign a stable identifier per row using an sha1 hash
-        df_proc["_id"] = (
-            df_proc[column_name]
-            .astype(str)
-            .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
-        )
+        if id_column is not None:
+            if id_column not in df_proc.columns:
+                raise ValueError(f"id_column '{id_column}' not found in DataFrame")
+            df_proc["_id"] = df_proc[id_column].astype(str)
+        else:
+            # assign a stable identifier per row using an sha1 hash
+            df_proc["_id"] = (
+                df_proc[column_name]
+                .astype(str)
+                .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
+            )
         if reset_files and os.path.exists(attr_path):
             try:
                 os.remove(attr_path)
@@ -992,11 +1389,24 @@ class Rank:
             if os.path.exists(final_path):
                 try:
                     final_df = pd.read_csv(final_path)
-                    final_ids = set(
-                        final_df[column_name]
-                        .astype(str)
-                        .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
+                    identifier_col = (
+                        id_column
+                        if id_column and id_column in final_df.columns
+                        else column_name
                     )
+                    if identifier_col not in final_df.columns:
+                        raise ValueError(
+                            "Existing ranking output is missing identifier column "
+                            f"'{identifier_col}'."
+                        )
+                    if id_column:
+                        final_ids = set(final_df[identifier_col].astype(str))
+                    else:
+                        final_ids = set(
+                            final_df[identifier_col]
+                            .astype(str)
+                            .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
+                        )
                     if last_completed >= self.cfg.n_rounds - 1 and set(df_proc["_id"]) <= final_ids:
                         return final_df
                 except Exception:
@@ -1031,6 +1441,29 @@ class Rank:
         ratings: Dict[str, Dict[str, float]] = {
             i: {a: 0.0 for a in attr_keys} for i in item_ids
         }
+        rate_seed: Dict[str, Dict[str, float]] = {}
+        if self.cfg.initial_rating_pass and attr_keys:
+            rate_dir = os.path.join(self.cfg.save_dir, f"{base_name}_initial_rate")
+            os.makedirs(rate_dir, exist_ok=True)
+            rate_df = await self._run_rate_pass(
+                df_proc,
+                column_name,
+                save_dir=rate_dir,
+                file_name=f"{base_name}_initial_rate.csv",
+                reset_files=reset_files,
+                runtime_kwargs=kwargs,
+            )
+            rate_seed = self._seed_ratings_from_rate(
+                rate_df,
+                id_column=id_column,
+                text_column=column_name,
+                item_ids=item_ids,
+                attr_keys=attr_keys,
+            )
+            for item_id, attr_map in rate_seed.items():
+                for attr, val in attr_map.items():
+                    ratings[item_id][attr] = val
+        has_seed_ratings = bool(rate_seed)
         # maintain a history of pairwise outcomes for each attribute
         history_pairs: Dict[str, List[Tuple[str, str]]] = {a: [] for a in attr_keys}
         # store per‑attribute standard errors across items
@@ -1277,12 +1710,13 @@ class Rank:
                 i: float(np.mean(list(ratings[i].values()))) for i in item_ids
             }
             se_agg_local = self._last_se_agg
-            # generate pairs; on the first new round there may be no se_agg
+            use_current = rnd > 0 or start_round > 0 or has_seed_ratings
+            se_source = se_agg_local if (rnd > 0 or start_round > 0 or se_agg_local is not None) else None
             pairs = self._generate_pairs(
                 item_ids=item_ids,
                 texts_by_id=texts_by_id,
-                current_ratings=current_agg if rnd > 0 or start_round > 0 else None,
-                se_agg=se_agg_local if (rnd > 0 or start_round > 0) else None,
+                current_ratings=current_agg if use_current else None,
+                se_agg=se_source,
             )
             if not pairs:
                 break

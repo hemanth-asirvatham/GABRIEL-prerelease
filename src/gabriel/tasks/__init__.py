@@ -21,8 +21,6 @@ _lazy_imports = {
     "ExtractConfig": ".extract",
     "Regional": ".regional",
     "RegionalConfig": ".regional",
-    "RecursiveRank": ".recursive_rank",
-    "RecursiveRankConfig": ".recursive_rank",
     "CountyCounter": ".county_counter",
     "Compare": ".compare",
     "CompareConfig": ".compare",
