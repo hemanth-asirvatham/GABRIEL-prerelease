@@ -1,6 +1,7 @@
 import asyncio
 import pandas as pd
 import numpy as np
+import openai
 
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils import openai_utils, safest_json
@@ -50,6 +51,43 @@ def test_get_response_audio_dummy():
         )
     )
     assert responses and responses[0].startswith("DUMMY")
+
+
+def test_gpt_audio_modalities(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    openai_utils._clients_async.clear()
+
+    class DummyClient:
+        def __init__(self):
+            self.chat = self
+            self.completions = self
+
+        async def create(self, **kwargs):
+            DummyClient.captured = kwargs
+
+            class Msg:
+                content = ""
+
+            class Choice:
+                message = Msg()
+
+            class Resp:
+                choices = [Choice()]
+
+            return Resp()
+
+    dummy = DummyClient()
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **_: dummy)
+
+    asyncio.run(
+        openai_utils.get_response(
+            "hi",
+            model="gpt-audio",
+            audio=[{"data": "abcd", "format": "mp3"}],
+            use_dummy=False,
+        )
+    )
+    assert DummyClient.captured["modalities"] == ["text"]
 
 
 def test_custom_base_url(monkeypatch):
