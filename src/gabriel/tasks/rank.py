@@ -1226,9 +1226,12 @@ class Rank:
             {"identifier": list(exit_stage.keys()), "exit_stage": list(exit_stage.values())}
         )
 
-        final_cols = [c for c in final_stage_df.columns if c != "text"]
+        final_cols = [c for c in final_stage_df.columns if c != "identifier"]
         final_raw = final_stage_df.rename(
-            columns={c: (c if c == "identifier" else f"final_{c}") for c in final_cols}
+            columns={
+                c: ("final_text" if c == "text" else f"final_{c}")
+                for c in final_cols
+            }
         )
 
         latest_text_df = work_df[["identifier", "text"]].copy()
