@@ -1191,9 +1191,10 @@ class Rank:
                         for c in keep_cols
                         if c != "identifier"
                     }
-                    stage_dfs.append(stage_df_out.rename(columns=renamed))
+                    stage_df_clean = stage_df_out.rename(columns=renamed)
                 else:
-                    stage_dfs.append(stage_df_out.copy())
+                    stage_df_clean = stage_df_out.copy()
+                stage_dfs.append(stage_df_clean.drop(columns=["text"], errors="ignore"))
 
             _update_cumulative(stage_df_out)
 
