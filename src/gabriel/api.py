@@ -1,7 +1,7 @@
 import asyncio
 import os
 import pandas as pd
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, Optional, Union, Any
 
 from .tasks import (
     Rate,
