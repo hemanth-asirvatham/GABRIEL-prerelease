@@ -888,7 +888,7 @@ async def get_response(
     )
     if audio:
         logger.info(
-            "Audio inputs require models gpt-4o-audio-preview or gpt-4o-mini-audio-preview"
+            "Audio inputs require models gpt-4o-audio-preview, gpt-4o-mini-audio-preview, or gpt-audio"
         )
         contents: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         if images:
@@ -902,21 +902,23 @@ async def get_response(
         for a in audio:
             contents.append({"type": "input_audio", "input_audio": a})
         messages = [{"role": "user", "content": contents}]
-        # ``chat.completions`` currently infers the response modality from
-        # the request content.  Supplying an explicit ``modalities`` field
-        # leads to ``Unknown parameter`` errors on newer models (e.g. gpt‑5),
-        # so we omit it here and default to text output.
+        # ``chat.completions`` infers the output modality from the request
+        # content.  ``gpt-audio`` requires explicitly requesting text output
+        # via ``modalities``; other models default to text when omitted.
         params_chat: Dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
         }
+        if model == "gpt-audio":
+            params_chat["modalities"] = ["text"]
         if tools is not None:
             params_chat["tools"] = tools
         if tool_choice is not None:
             params_chat["tool_choice"] = tool_choice
         if cutoff is not None:
             params_chat["max_completion_tokens"] = cutoff
+        params_chat.update(kwargs)
         start = time.time()
         tasks = [
             asyncio.create_task(
