@@ -523,9 +523,12 @@ class Rank:
                 cov_sub = np.linalg.inv(I_sub)
             except np.linalg.LinAlgError:
                 cov_sub = np.linalg.pinv(I_sub)
+            # Replace invalid values to avoid numerical warnings during multiplication.
+            cov_sub = np.nan_to_num(cov_sub)
             # Compute the variance of the reference item using the sum constraint.
             ones = np.ones((n - 1, 1))
-            var_ref = float(ones.T @ cov_sub @ ones)
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                var_ref = float(ones.T @ cov_sub @ ones)
             se = np.zeros(n, dtype=float)
             # Fill standard errors for non‑reference items.
             se[mask] = np.sqrt(np.maximum(0.0, np.diag(cov_sub)))
