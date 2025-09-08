@@ -1299,6 +1299,7 @@ async def get_all_embeddings(
                 active_workers += 1
                 error_logs.setdefault(ident, [])
                 call_timeout = timeout
+                start = time.time()
                 task = asyncio.create_task(
                     get_embedding(
                         text,
@@ -1319,8 +1320,10 @@ async def get_all_embeddings(
                         pickle.dump(embeddings, f)
                 pbar.update(1)
             except asyncio.TimeoutError as e:
-                error_logs[ident].append(str(e))
-                logger.warning(f"Timeout error for {ident}: {e}")
+                elapsed = time.time() - start
+                error_message = f"API call timed out after {elapsed:.2f} s"
+                error_logs[ident].append(error_message)
+                logger.warning(f"Timeout error for {ident}: {error_message}")
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
                     await asyncio.sleep(backoff)
@@ -1769,7 +1772,11 @@ async def get_all_responses(
             if os.path.exists(save_path):
                 existing = pd.read_csv(save_path)
                 existing = existing[~existing["Identifier"].isin(batch_df["Identifier"])]
-                combined = pd.concat([existing, batch_df], ignore_index=True)
+                frames = [existing, batch_df]
+                frames = [f for f in frames if not f.dropna(how="all").empty]
+                combined = (
+                    pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=batch_df.columns)
+                )
             else:
                 combined = batch_df
             combined.to_csv(
@@ -2227,7 +2234,11 @@ async def get_all_responses(
             if os.path.exists(save_path):
                 existing = pd.read_csv(save_path)
                 existing = existing[~existing["Identifier"].isin(batch_df["Identifier"])]
-                combined = pd.concat([existing, batch_df], ignore_index=True)
+                frames = [existing, batch_df]
+                frames = [f for f in frames if not f.dropna(how="all").empty]
+                combined = (
+                    pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=batch_df.columns)
+                )
             else:
                 combined = batch_df
             combined.to_csv(
@@ -2442,10 +2453,12 @@ async def get_all_responses(
                 raise
             except asyncio.TimeoutError as e:
                 status.num_timeout_errors += 1
-                logger.warning(f"Timeout error for {ident}: {e}")
+                elapsed = time.time() - start
+                error_message = f"API call timed out after {elapsed:.2f} s"
+                logger.warning(f"Timeout error for {ident}: {error_message}")
                 inflight.pop(ident, None)
                 await adjust_timeout()
-                error_logs[ident].append(str(e))
+                error_logs[ident].append(error_message)
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
                     # Retry the same prompt after a delay.  We sleep within the
