@@ -2,24 +2,25 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
-from tqdm.auto import tqdm
-
-from ..utils import (
-    get_all_responses,
-    normalize_text_aggressive,
-    letters_only,
-    robust_find_improved,
-    strict_find,
-    safe_json,
-)
 
 from ..core.prompt_template import PromptTemplate
-from ..utils import safest_json, load_image_inputs, load_audio_inputs
+from ..tasks.classify import Classify, ClassifyConfig
+from ..utils import (
+    get_all_responses,
+    letters_only,
+    load_audio_inputs,
+    load_image_inputs,
+    normalize_text_aggressive,
+    robust_find_improved,
+    safe_json,
+    strict_find,
+)
 
 
 @dataclass
@@ -36,6 +37,31 @@ class CodifyConfig:
     use_dummy: bool = False
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    modality: str = "text"
+    json_mode: bool = True
+    max_timeout: Optional[float] = None
+    completion_check: bool = True
+    completion_max_rounds: int = 2
+    completion_classifier_instructions: Optional[str] = None
+
+
+@dataclass
+class ChunkResult:
+    """Container holding the parsed response for a single chunk."""
+
+    identifier: str
+    chunk_text: str
+    data: Dict[str, Any]
+
+
+@dataclass
+class PromptRequest:
+    """Metadata for a prompt dispatched to the model."""
+
+    identifier: str
+    prompt: str
+    row_index: int
+    chunk_text: str
 
 
 class Codify:
@@ -101,14 +127,6 @@ class Codify:
         if len(words) <= max_words:
             return [text]
         return [" ".join(words[i : i + max_words]) for i in range(0, len(words), max_words)]
-
-    def _extract_key_words(self, text: str, n: int = 5) -> tuple:
-        """Extract first n and last n words from text."""
-        words = text.split()
-        if len(words) <= n * 2:
-            return ' '.join(words), ''
-        return ' '.join(words[:n]), ' '.join(words[-n:])
-
 
     def find_snippet_in_text(self, text: str, beginning_excerpt: str, ending_excerpt: str) -> Optional[str]:
         """Fast snippet finding that returns actual text from the original document."""
@@ -369,166 +387,511 @@ class Codify:
         else:
             return " " + " ".join(words[:n])
 
-    def consolidate_snippets(self, original_text: str, chunk_results: List[dict], category: str, debug_print: bool = False, chunk_map: Optional[Dict[int, str]] = None) -> List[str]:
-        """
-        For each chunk, match excerpts in the chunk text first, then in the full text if not found.
-        Tracks hit rate stats but doesn't print immediately.
-        """
-        all_excerpts = []
-        chunk_indices = []
-        for i, chunk_result in enumerate(chunk_results):
-            if category in chunk_result:
-                if isinstance(chunk_result[category], list):
-                    for item in chunk_result[category]:
-                        if isinstance(item, dict):
-                            beginning = item.get("beginning excerpt", "")
-                            ending = item.get("ending excerpt", "")
-                            if beginning:  
-                                all_excerpts.append((beginning, ending))
-                                chunk_indices.append(i)
-        
+    def consolidate_snippets(
+        self,
+        original_text: str,
+        chunk_results: List[ChunkResult],
+        category: str,
+        *,
+        debug_print: bool = False,
+    ) -> List[str]:
+        """Convert per-chunk responses into verbatim snippets for ``category``."""
+
+        all_excerpts: List[Tuple[str, str]] = []
+        chunk_texts: List[str] = []
+        for chunk_result in chunk_results:
+            payload = chunk_result.data
+            if not isinstance(payload, dict):
+                continue
+            if category in payload and isinstance(payload[category], list):
+                for item in payload[category]:
+                    if isinstance(item, dict):
+                        beginning = item.get("beginning excerpt", "")
+                        ending = item.get("ending excerpt", "")
+                        if beginning:
+                            all_excerpts.append((beginning, ending))
+                            chunk_texts.append(chunk_result.chunk_text)
+
         found = 0
-        snippets = []
-        failed = []
+        snippets: List[str] = []
+        failed: List[Tuple[str, str]] = []
         begin_fail_count = 0
         end_fail_count = 0
-        
-        # Also track strict matching stats for comparison
         strict_matches = 0
-        
+
         for idx, (beginning, ending) in enumerate(all_excerpts):
-            chunk_idx = chunk_indices[idx] if idx < len(chunk_indices) else 0
-            chunk_text = chunk_map.get(chunk_idx) if chunk_map else None
-            snippet = None
-            
-            # Track strict matching for comparison (before fallbacks)
+            chunk_text = chunk_texts[idx] if idx < len(chunk_texts) else ""
+            snippet: Optional[str] = None
+
             strict_begin = strict_find(original_text, beginning)
             strict_end = strict_find(original_text, ending) if ending and ending.strip() else True
             if strict_begin and strict_end:
                 strict_matches += 1
-            
-            # Try in chunk first
+
             if chunk_text:
                 snippet = self.find_snippet_in_text(chunk_text, beginning, ending)
                 if debug_print and snippet:
                     print(f"[DEBUG] Found in chunk: '{beginning[:50]}...'")
-            
-            # If not found, try in full text
+
             if not snippet:
                 snippet = self.find_snippet_in_text(original_text, beginning, ending)
                 if debug_print and snippet:
                     print(f"[DEBUG] Found in full text: '{beginning[:50]}...'")
                 elif debug_print:
                     print(f"[DEBUG] FAILED to find: '{beginning[:50]}...'")
-                    # Show what letters-only matching looks like
                     letters_begin = letters_only(beginning)
                     letters_text = letters_only(original_text)
                     print(f"[DEBUG] Letters-only excerpt: '{letters_begin[:50]}...'")
                     print(f"[DEBUG] Letters-only contains: {letters_begin in letters_text}")
-                    
-                    # Now diagnose WHY the snippet extraction failed
                     begin_match = robust_find_improved(original_text, beginning)
                     end_match = robust_find_improved(original_text, ending) if ending else True
-                    
                     print(f"[DEBUG] Failure analysis for '{beginning[:30]}...':")
                     print(f"[DEBUG]   Begin match: {begin_match is not None}")
-                    print(f"[DEBUG]   End match: {end_match is not None} (ending: '{ending[:20]}...' if ending else 'None')")
-            
-            # Track overall snippet success AND failure reasons
+                    print(
+                        f"[DEBUG]   End match: {end_match is not None} (ending: '{ending[:20]}...' if ending else 'None')"
+                    )
+
             if snippet:
                 if snippet not in snippets:
                     snippets.append(snippet)
                     found += 1
             else:
-                # NOW track the actual failure reasons using STRICT matching (not the permissive fallback method)
-                # Use direct text matching to see what actually failed
                 begin_match = strict_find(original_text, beginning)
-
-                # For ending, we need to distinguish between "no ending provided" vs "ending provided but failed"
-                if ending and ending.strip():  # Only count as end failure if there was actually ending text
+                if ending and ending.strip():
                     end_match = strict_find(original_text, ending)
                     if not end_match:
                         end_fail_count += 1
-                else:
-                    # No ending text provided, so this is purely a begin failure
-                    pass
-
                 if not begin_match:
                     begin_fail_count += 1
-                
                 failed.append((beginning, ending))
-        
-        # Track stats with detailed failure reasons
+
         total = len(all_excerpts)
-        if category not in self.hit_rate_stats:
-            self.hit_rate_stats[category] = {
-                'found': 0, 'total': 0, 'failed_examples': [],
-                'begin_failures': 0, 'end_failures': 0, 'strict_matches': 0
-            }
-        self.hit_rate_stats[category]['found'] += found
-        self.hit_rate_stats[category]['total'] += total
-        self.hit_rate_stats[category]['begin_failures'] += begin_fail_count
-        self.hit_rate_stats[category]['end_failures'] += end_fail_count
-        self.hit_rate_stats[category]['strict_matches'] += strict_matches
-        if failed and len(self.hit_rate_stats[category]['failed_examples']) < 3:
-            self.hit_rate_stats[category]['failed_examples'].extend(failed[:2])
-        
-        if debug_print:
-            print(f"[DEBUG] Category '{category}': {found}/{total} matched ({100.0*found/total if total else 0:.1f}%)")
-            print(f"[DEBUG] Strict matches (before fallbacks): {strict_matches}/{total} ({100.0*strict_matches/total if total else 0:.1f}%)")
-            print(f"[DEBUG] Begin failures: {begin_fail_count}, End failures: {end_fail_count}")
-            print(f"[DEBUG] Accounted for: {found + len(failed)}/{total} ({100.0*(found + len(failed))/total if total else 0:.1f}%)")
-        
+        if total:
+            stats = self.hit_rate_stats.setdefault(
+                category,
+                {
+                    "found": 0,
+                    "total": 0,
+                    "failed_examples": [],
+                    "begin_failures": 0,
+                    "end_failures": 0,
+                    "strict_matches": 0,
+                },
+            )
+            stats["found"] += found
+            stats["total"] += total
+            stats["begin_failures"] += begin_fail_count
+            stats["end_failures"] += end_fail_count
+            stats["strict_matches"] += strict_matches
+            if failed and len(stats["failed_examples"]) < 3:
+                stats["failed_examples"].extend(failed[:2])
+
+        if debug_print and total:
+            rate = 100.0 * found / total if total else 0.0
+            strict_rate = 100.0 * strict_matches / total if total else 0.0
+            print(
+                f"[DEBUG] Category '{category}': {found}/{total} matched ({rate:.1f}%)"
+                f" | Strict: {strict_matches} ({strict_rate:.1f}%)"
+                f" | Begin failures: {begin_fail_count} | End failures: {end_fail_count}"
+            )
+
         return snippets
 
-    def print_final_hit_rates(self):
-        """Print aggregated hit rate statistics with detailed failure analysis."""
-        print("\n" + "="*80)
+    def print_final_hit_rates(self) -> None:
+        """Print aggregated hit-rate statistics for debugging."""
+
+        if not self.hit_rate_stats:
+            return
+
+        print("\n" + "=" * 80)
         print("FINAL MATCHING STATISTICS")
-        print("="*80)
-        
+        print("=" * 80)
+
         total_found = 0
         total_excerpts = 0
         total_begin_failures = 0
         total_end_failures = 0
         total_strict_matches = 0
-        
+
         for category in sorted(self.hit_rate_stats.keys()):
             stats = self.hit_rate_stats[category]
-            found = stats['found']
-            total = stats['total']  
-            begin_fail = stats.get('begin_failures', 0)
-            end_fail = stats.get('end_failures', 0)
-            strict_match = stats.get('strict_matches', 0)
+            found = stats.get("found", 0)
+            total = stats.get("total", 0)
+            begin_fail = stats.get("begin_failures", 0)
+            end_fail = stats.get("end_failures", 0)
+            strict_match = stats.get("strict_matches", 0)
             hit_rate = 100.0 * found / total if total else 0.0
             strict_rate = 100.0 * strict_match / total if total else 0.0
-            
-            # Calculate failure percentages
             begin_fail_pct = 100.0 * begin_fail / total if total else 0.0
             end_fail_pct = 100.0 * end_fail / total if total else 0.0
-            
-            print(f"{category:25s}: {found:3d}/{total:3d} ({hit_rate:4.1f}%) | Strict: {strict_match:3d} ({strict_rate:4.1f}%) | Begin fails: {begin_fail:2d} ({begin_fail_pct:4.1f}%) | End fails: {end_fail:2d} ({end_fail_pct:4.1f}%)")
-            
+
+            print(
+                f"{category:25s}: {found:3d}/{total:3d} ({hit_rate:4.1f}%) | "
+                f"Strict: {strict_match:3d} ({strict_rate:4.1f}%) | "
+                f"Begin fails: {begin_fail:2d} ({begin_fail_pct:4.1f}%) | "
+                f"End fails: {end_fail:2d} ({end_fail_pct:4.1f}%)"
+            )
+
             total_found += found
             total_excerpts += total
             total_begin_failures += begin_fail
             total_end_failures += end_fail
             total_strict_matches += strict_match
-        
+
         overall_rate = 100.0 * total_found / total_excerpts if total_excerpts else 0.0
-        overall_strict_rate = 100.0 * total_strict_matches / total_excerpts if total_excerpts else 0.0
-        overall_begin_fail_rate = 100.0 * total_begin_failures / total_excerpts if total_excerpts else 0.0
-        overall_end_fail_rate = 100.0 * total_end_failures / total_excerpts if total_excerpts else 0.0
-        
+        overall_strict_rate = (
+            100.0 * total_strict_matches / total_excerpts if total_excerpts else 0.0
+        )
+        overall_begin_fail_rate = (
+            100.0 * total_begin_failures / total_excerpts if total_excerpts else 0.0
+        )
+        overall_end_fail_rate = (
+            100.0 * total_end_failures / total_excerpts if total_excerpts else 0.0
+        )
+
         print("-" * 80)
-        print(f"{'OVERALL':25s}: {total_found:3d}/{total_excerpts:3d} ({overall_rate:4.1f}%) | Strict: {total_strict_matches:3d} ({overall_strict_rate:4.1f}%) | Begin fails: {total_begin_failures:2d} ({overall_begin_fail_rate:4.1f}%) | End fails: {total_end_failures:2d} ({overall_end_fail_rate:4.1f}%)")
-        print("="*80)
-        
-        # Show accounting verification
-        accounted = total_found + (total_excerpts - total_found)
-        print(f"ACCOUNTING CHECK: {accounted}/{total_excerpts} excerpts accounted for ({100.0*accounted/total_excerpts if total_excerpts else 0:.1f}%)")
-        if total_begin_failures + total_end_failures == 0 and total_found < total_excerpts:
-            print("⚠️  WARNING: No failures recorded but some excerpts are missing - accounting error detected!")
+        print(
+            f"{'OVERALL':25s}: {total_found:3d}/{total_excerpts:3d} ({overall_rate:4.1f}%) | "
+            f"Strict: {total_strict_matches:3d} ({overall_strict_rate:4.1f}%) | "
+            f"Begin fails: {total_begin_failures:2d} ({overall_begin_fail_rate:4.1f}%) | "
+            f"End fails: {total_end_failures:2d} ({overall_end_fail_rate:4.1f}%)"
+        )
+        print("=" * 80)
+
+    def _iteration_file_name(self, iteration: int) -> str:
+        if iteration == 0:
+            return self.cfg.file_name
+        stem, ext = os.path.splitext(self.cfg.file_name)
+        return f"{stem}_iter{iteration}{ext}"
+
+    def _strip_snippets(self, text: str, snippets_by_category: Dict[str, List[str]]) -> str:
+        remaining = text
+        for snippets in snippets_by_category.values():
+            for snippet in snippets:
+                if snippet:
+                    remaining = remaining.replace(snippet, " ", 1)
+        return re.sub(r"\s+", " ", remaining).strip()
+
+    def _merge_snippet_results(
+        self,
+        destination: Dict[int, Dict[str, List[str]]],
+        source: Dict[int, Dict[str, List[str]]],
+    ) -> bool:
+        added = False
+        for row_idx, cat_map in source.items():
+            dest_row = destination.setdefault(row_idx, {})
+            for category, snippets in cat_map.items():
+                dest_list = dest_row.setdefault(category, [])
+                for snippet in snippets:
+                    if snippet and snippet not in dest_list:
+                        dest_list.append(snippet)
+                        added = True
+        return added
+
+    async def _gather_iteration(
+        self,
+        row_texts: Dict[int, str],
+        *,
+        original_texts: List[str],
+        raw_values: List[Any],
+        categories: Optional[Dict[str, str]],
+        additional_instructions: Optional[str],
+        iteration: int,
+        dynamic_mode: bool,
+        reset_files: bool,
+        category_subset: Optional[Set[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[int, Dict[str, List[str]]]:
+        if not row_texts:
+            return {}
+
+        debug = self.cfg.debug_print
+        selected_categories: List[str] = []
+        if not dynamic_mode and categories:
+            selected_categories = [
+                cat
+                for cat in categories.keys()
+                if category_subset is None or cat in category_subset
+            ]
+            if not selected_categories:
+                return {}
+
+        requests: List[PromptRequest] = []
+        prompt_images: Dict[str, List[str]] = {}
+        prompt_audio: Dict[str, List[Dict[str, str]]] = {}
+
+        if not dynamic_mode and categories:
+            category_batches = [
+                selected_categories[i : i + self.cfg.max_categories_per_call]
+                for i in range(0, len(selected_categories), self.cfg.max_categories_per_call)
+            ]
+        else:
+            category_batches = []
+
+        for row_idx, text in row_texts.items():
+            text_str = str(text or "")
+            if not text_str.strip():
+                continue
+            chunks = self.chunk_by_words(text_str, self.cfg.max_words_per_call)
+            images = (
+                load_image_inputs(raw_values[row_idx])
+                if self.cfg.modality == "image"
+                else None
+            )
+            audio_inputs = (
+                load_audio_inputs(raw_values[row_idx])
+                if self.cfg.modality == "audio"
+                else None
+            )
+
+            for chunk_idx, chunk in enumerate(chunks):
+                if dynamic_mode:
+                    identifier = f"row{row_idx}_iter{iteration}_chunk{chunk_idx}"
+                    prompt = self.template.render(
+                        text=chunk,
+                        categories=None,
+                        additional_instructions=additional_instructions,
+                        modality=self.cfg.modality,
+                    )
+                    requests.append(
+                        PromptRequest(
+                            identifier=identifier,
+                            prompt=prompt,
+                            row_index=row_idx,
+                            chunk_text=chunk,
+                        )
+                    )
+                    if images:
+                        prompt_images[identifier] = list(images)
+                    if audio_inputs:
+                        prompt_audio[identifier] = list(audio_inputs)
+                else:
+                    for batch_idx, batch_keys in enumerate(category_batches):
+                        assert categories is not None
+                        batch_categories = {k: categories[k] for k in batch_keys}
+                        identifier = (
+                            f"row{row_idx}_iter{iteration}_chunk{chunk_idx}_batch{batch_idx}"
+                        )
+                        prompt = self.template.render(
+                            text=chunk,
+                            categories=batch_categories,
+                            additional_instructions=additional_instructions,
+                            modality=self.cfg.modality,
+                        )
+                        requests.append(
+                            PromptRequest(
+                                identifier=identifier,
+                                prompt=prompt,
+                                row_index=row_idx,
+                                chunk_text=chunk,
+                            )
+                        )
+                        if images:
+                            prompt_images[identifier] = list(images)
+                        if audio_inputs:
+                            prompt_audio[identifier] = list(audio_inputs)
+
+        if not requests:
+            return {}
+
+        prompts = [req.prompt for req in requests]
+        identifiers = [req.identifier for req in requests]
+        id_to_request = {req.identifier: req for req in requests}
+
+        batch_df = await get_all_responses(
+            prompts=prompts,
+            identifiers=identifiers,
+            n_parallels=self.cfg.n_parallels,
+            save_path=os.path.join(self.cfg.save_dir, self._iteration_file_name(iteration)),
+            reset_files=reset_files,
+            use_dummy=self.cfg.use_dummy,
+            json_mode=self.cfg.json_mode,
+            model=self.cfg.model,
+            max_timeout=self.cfg.max_timeout,
+            print_example_prompt=True,
+            reasoning_effort=self.cfg.reasoning_effort,
+            reasoning_summary=self.cfg.reasoning_summary,
+            prompt_images=prompt_images or None,
+            prompt_audio=prompt_audio or None,
+            **kwargs,
+        )
+
+        chunk_results_by_row: Dict[int, List[ChunkResult]] = defaultdict(list)
+        for ident, resp in zip(batch_df["Identifier"], batch_df["Response"]):
+            request = id_to_request.get(ident)
+            if request is None:
+                continue
+            main = resp[0] if isinstance(resp, list) and resp else resp
+            parsed = self.parse_json(main) or {}
+            if debug:
+                if not parsed:
+                    print(f"[DEBUG] Failed to parse response for {ident}")
+                else:
+                    print(f"[DEBUG] Parsed response for {ident} with keys: {list(parsed.keys())}")
+            chunk_results_by_row[request.row_index].append(
+                ChunkResult(identifier=ident, chunk_text=request.chunk_text, data=parsed)
+            )
+
+        iteration_results: Dict[int, Dict[str, List[str]]] = {}
+        if dynamic_mode:
+            for row_idx in row_texts.keys():
+                chunk_results = chunk_results_by_row.get(row_idx, [])
+                if not chunk_results:
+                    continue
+                categories_seen: Set[str] = set()
+                for chunk_result in chunk_results:
+                    for key, value in chunk_result.data.items():
+                        if isinstance(key, str) and isinstance(value, list):
+                            categories_seen.add(key)
+                if not categories_seen:
+                    continue
+                row_map: Dict[str, List[str]] = {}
+                for category in sorted(categories_seen):
+                    snippets = self.consolidate_snippets(
+                        original_texts[row_idx],
+                        chunk_results,
+                        category,
+                        debug_print=debug,
+                    )
+                    if snippets:
+                        row_map[category] = snippets
+                if row_map:
+                    iteration_results[row_idx] = row_map
+        else:
+            for row_idx in row_texts.keys():
+                chunk_results = chunk_results_by_row.get(row_idx, [])
+                row_map: Dict[str, List[str]] = {}
+                for category in selected_categories:
+                    snippets = self.consolidate_snippets(
+                        original_texts[row_idx],
+                        chunk_results,
+                        category,
+                        debug_print=debug,
+                    )
+                    row_map[category] = snippets
+                iteration_results[row_idx] = row_map
+
+        return iteration_results
+
+    async def _classify_remaining(
+        self,
+        aggregated: Dict[int, Dict[str, List[str]]],
+        original_texts: List[str],
+        categories: Dict[str, str],
+        additional_instructions: Optional[str],
+        iteration: int,
+        reset_files: bool,
+    ) -> Dict[int, Set[str]]:
+        row_indices: List[int] = []
+        remaining_texts: List[str] = []
+        for row_idx, original in enumerate(original_texts):
+            snippet_map = aggregated.get(row_idx, {})
+            stripped = self._strip_snippets(original, snippet_map)
+            if stripped:
+                row_indices.append(row_idx)
+                remaining_texts.append(stripped)
+
+        if not row_indices:
+            return {}
+
+        validation_dir = os.path.join(self.cfg.save_dir, "completion_checks")
+        os.makedirs(validation_dir, exist_ok=True)
+        stem = Path(self.cfg.file_name).stem
+        file_name = f"{stem}_completion_iter{iteration}.csv"
+
+        base_instruction = (
+            "These passages contain the remaining text after previously extracted snippets were removed. "
+            "Return True for a label only if the remaining text still contains a clear, distinct snippet "
+            "that should be coded for that label. Default to False when unsure."
+        )
+        if self.cfg.completion_classifier_instructions:
+            base_instruction += "\n" + self.cfg.completion_classifier_instructions.strip()
+        if additional_instructions:
+            base_instruction += "\nOriginal coding instructions:\n" + additional_instructions.strip()
+
+        classify_cfg = ClassifyConfig(
+            labels=categories,
+            save_dir=validation_dir,
+            file_name=file_name,
+            model=self.cfg.model,
+            n_parallels=self.cfg.n_parallels,
+            n_runs=1,
+            use_dummy=self.cfg.use_dummy,
+            additional_instructions=base_instruction,
+            modality=self.cfg.modality,
+            n_attributes_per_run=self.cfg.max_categories_per_call,
+            reasoning_effort=self.cfg.reasoning_effort,
+            reasoning_summary=self.cfg.reasoning_summary,
+        )
+        classifier = Classify(classify_cfg)
+
+        cls_df = pd.DataFrame({"text": remaining_texts})
+        results_df = await classifier.run(
+            cls_df,
+            column_name="text",
+            reset_files=reset_files and iteration == 0,
+        )
+
+        flagged: Dict[int, Set[str]] = {}
+        for idx, row_idx in enumerate(row_indices):
+            flagged_categories = {
+                category
+                for category in categories.keys()
+                if bool(results_df.at[idx, category])
+            }
+            if flagged_categories:
+                flagged[row_idx] = flagged_categories
+
+        return flagged
+
+    async def _completion_loop(
+        self,
+        aggregated: Dict[int, Dict[str, List[str]]],
+        original_texts: List[str],
+        raw_values: List[Any],
+        categories: Dict[str, str],
+        additional_instructions: Optional[str],
+        reset_files: bool,
+        **kwargs: Any,
+    ) -> Dict[int, Dict[str, List[str]]]:
+        for depth in range(1, self.cfg.completion_max_rounds + 1):
+            flagged = await self._classify_remaining(
+                aggregated,
+                original_texts,
+                categories,
+                additional_instructions,
+                iteration=depth - 1,
+                reset_files=reset_files,
+            )
+            if not flagged:
+                break
+
+            category_subset = set().union(*flagged.values())
+            row_texts: Dict[int, str] = {}
+            for row_idx in flagged.keys():
+                stripped = self._strip_snippets(original_texts[row_idx], aggregated.get(row_idx, {}))
+                if stripped:
+                    row_texts[row_idx] = stripped
+            if not row_texts:
+                break
+
+            iteration_results = await self._gather_iteration(
+                row_texts,
+                original_texts=original_texts,
+                raw_values=raw_values,
+                categories=categories,
+                additional_instructions=additional_instructions,
+                iteration=depth,
+                dynamic_mode=False,
+                reset_files=False,
+                category_subset=category_subset,
+                **kwargs,
+            )
+            added = self._merge_snippet_results(aggregated, iteration_results)
+            if not added:
+                break
+
+        return aggregated
 
     async def run(
         self,
@@ -540,250 +903,71 @@ class Codify:
         reset_files: bool = False,
         **kwargs: Any,
     ) -> pd.DataFrame:
-        """
-        Process all texts in the dataframe, coding passages according to categories.
-
-        Args:
-            df: Input dataframe
-            column_name: Column containing text to code
-            categories: Dict mapping category names to their definitions (optional)
-            additional_instructions: Additional instructions for the prompt. When
-                ``categories`` is ``None``, this must describe the broad topic for
-                dynamic category discovery.
-            reset_files: Whether to reset existing files
-
-        Returns:
-            Enhanced dataframe with columns for each category (if categories provided)
-            or with 'coded_passages' column containing full category dict (if dynamic)
-        """
-
         df_proc = df.reset_index(drop=True).copy()
+        self.hit_rate_stats = {}
 
-        # Normalize additional instructions so empty strings count as missing
-        if additional_instructions is not None:
-            additional_instructions = additional_instructions.strip()
-        if not additional_instructions:
-            additional_instructions = None
+        raw_values = df_proc[column_name].tolist()
+        original_texts = ["" if pd.isna(val) else str(val) for val in raw_values]
 
-        # Determine if we're in dynamic category mode
+        additional = (additional_instructions or "").strip() or None
         dynamic_mode = categories is None
-
-        if dynamic_mode and not additional_instructions:
+        if dynamic_mode and not additional:
             raise ValueError(
                 "additional_instructions must be provided when categories is None"
             )
 
-        # Create category batches for processing
-        if dynamic_mode:
-            # In dynamic mode, we have only one "batch" per text chunk
-            category_batches = [None]  # Single batch for dynamic processing
-        else:
-            # Split categories into batches of max_categories_per_call
-            category_keys = list(categories.keys())
-            category_batches = [
-                category_keys[i : i + self.cfg.max_categories_per_call]
-                for i in range(0, len(category_keys), self.cfg.max_categories_per_call)
-            ]
-        
-        # Build prompts for all text chunks and category batches
-        template = self.template
-        prompts: List[str] = []
-        identifiers: List[str] = []
-        text_index_to_chunks: Dict[int, List[int]] = {}  # Maps original text index to chunk indices
+        categories_dict = categories or {}
+        aggregated: Dict[int, Dict[str, List[str]]] = {}
+        if not dynamic_mode:
+            for idx in range(len(df_proc)):
+                aggregated[idx] = {cat: [] for cat in categories_dict.keys()}
 
-        chunk_idx = 0
-        chunk_map = {}
-        for text_idx, row in df_proc.iterrows():
-            text = str(row[column_name])
-            chunks = self.chunk_by_words(text, self.cfg.max_words_per_call)
-
-            chunk_indices = []
-            for chunk in chunks:
-                # Process each category batch for this chunk
-                for batch_idx, category_batch in enumerate(category_batches):
-                    if dynamic_mode:
-                        # Dynamic mode: use additional instructions as topic guidance
-                        prompt = template.render(
-                            text=chunk,
-                            categories=None,
-                            additional_instructions=additional_instructions,
-                        )
-                        batch_suffix = ""
-                    else:
-                        # Static mode: use subset of categories
-                        batch_categories = {k: categories[k] for k in category_batch}
-                        prompt = template.render(
-                            text=chunk,
-                            categories=batch_categories,
-                            additional_instructions=additional_instructions,
-                        )
-                        batch_suffix = f"_batch_{batch_idx}"
-
-                    prompts.append(prompt)
-                    identifiers.append(f"text_{text_idx}_chunk_{chunk_idx}{batch_suffix}")
-                    chunk_indices.append(chunk_idx)
-                    chunk_map[chunk_idx] = chunk
-                    chunk_idx += 1
-
-            text_index_to_chunks[text_idx] = chunk_indices
-        
-        if self.cfg.debug_print and prompts:
-            print(f"\n[DEBUG] First prompt:\n{prompts[0][:500]}...\n")
-            print(f"[DEBUG] Total chunks to process: {len(prompts)}")
-        
-        # Process all chunks - let the model handle JSON structure naturally
-        expected_schema = None
-        
-        batch_df = await get_all_responses(
-            prompts=prompts,
-            identifiers=identifiers,
-            n_parallels=self.cfg.n_parallels,
-            save_path=os.path.join(self.cfg.save_dir, self.cfg.file_name),
+        row_texts = {idx: original_texts[idx] for idx in range(len(df_proc))}
+        initial_results = await self._gather_iteration(
+            row_texts,
+            original_texts=original_texts,
+            raw_values=raw_values,
+            categories=None if dynamic_mode else categories_dict,
+            additional_instructions=additional,
+            iteration=0,
+            dynamic_mode=dynamic_mode,
             reset_files=reset_files,
-            use_dummy=self.cfg.use_dummy,
-            json_mode=True,
-            expected_schema=expected_schema,
-            model=self.cfg.model,
-            max_timeout=300,  # This will be forwarded to get_response via **kwargs
-            print_example_prompt=True,
-            reasoning_effort=self.cfg.reasoning_effort,
-            reasoning_summary=self.cfg.reasoning_summary,
             **kwargs,
         )
-        
-        # Group results by original text index and batch
-        text_to_results: Dict[int, List[dict]] = {}
-        for ident, resp in zip(batch_df["Identifier"], batch_df["Response"]):
-            # Parse identifier: text_X_chunk_Y[_batch_Z]
-            parts = ident.split("_")
-            text_idx = int(parts[1])
-            
-            if self.cfg.debug_print:
-                print(f"[DEBUG] {ident}: resp type={type(resp)}")
-                if isinstance(resp, list):
-                    print(f"[DEBUG] resp is list with {len(resp)} elements")
-                    if resp:
-                        print(f"[DEBUG] first element type: {type(resp[0])}")
-                        if isinstance(resp[0], str):
-                            print(f"[DEBUG] first element content: {resp[0][:200]}...")
-            
-            # Handle the response structure - resp is already deserialized from JSON
-            if isinstance(resp, list) and resp:
-                main = resp[0]  # Get the first response
-            else:
-                main = resp
-            
-            # Parse the JSON string
-            parsed = self.parse_json(main) or {}
-            
-            if self.cfg.debug_print:
-                if not parsed:
-                    print(f"[DEBUG] Failed to parse response for {ident}")
-                else:
-                    print(f"[DEBUG] Successfully parsed response with keys: {list(parsed.keys())}")
-            
-            if text_idx not in text_to_results:
-                text_to_results[text_idx] = []
-            text_to_results[text_idx].append(parsed)
-        
-        # Consolidate results for each text
-        if dynamic_mode:
-            # Dynamic mode: create single column with all discovered categories
-            df_proc["coded_passages"] = None
-            
-            # Add progress bar for overall text processing
-            text_iterator = df_proc.iterrows()
-            if len(df_proc) > 1:
-                text_iterator = tqdm(text_iterator, total=len(df_proc), 
-                                   desc="Processing texts", leave=True)
-            
-            for text_idx, row in text_iterator:
-                original_text = str(row[column_name])
-                chunk_results = text_to_results.get(text_idx, [])
-                
-                # Merge all categories from all chunks and batches
-                all_categories = {}
-                for chunk_result in chunk_results:
-                    for category, category_data in chunk_result.items():
-                        if category not in all_categories:
-                            all_categories[category] = []
-                        # Extend with items from this chunk
-                        if isinstance(category_data, list):
-                            all_categories[category].extend(category_data)
-                
-                # Convert to actual snippets
-                final_coded_passages = {}
-                for category in all_categories.keys():
-                    snippets = self.consolidate_snippets(
-                        original_text,
-                        chunk_results,
-                        category,
-                        debug_print=self.cfg.debug_print,
-                        chunk_map=chunk_map,
-                    )
-                    if snippets:  # Only include categories that have snippets
-                        final_coded_passages[category] = snippets
-                
-                df_proc.at[text_idx, "coded_passages"] = final_coded_passages
-                
-                if self.cfg.debug_print:
-                    total_snippets = sum(len(snippets) for snippets in final_coded_passages.values())
-                    print(
-                        f"[DEBUG] Text {text_idx}: {len(final_coded_passages)} categories, {total_snippets} total snippets"
-                    )
-        else:
-            # Static mode: create column for each predefined category
-            for category in categories.keys():
-                df_proc[category] = None
-            
-            # Add progress bar for overall text processing
-            text_iterator = df_proc.iterrows()
-            if len(df_proc) > 1:
-                text_iterator = tqdm(text_iterator, total=len(df_proc), 
-                                   desc="Processing texts", leave=True)
-            
-            for text_idx, row in text_iterator:
-                original_text = str(row[column_name])
-                chunk_results = text_to_results.get(text_idx, [])
-                
-                # For each category, consolidate snippets from all chunks and batches
-                for category in categories.keys():
-                    snippets = self.consolidate_snippets(
-                        original_text,
-                        chunk_results,
-                        category,
-                        debug_print=self.cfg.debug_print,
-                        chunk_map=chunk_map,
-                    )
-                    df_proc.at[text_idx, category] = snippets
+        self._merge_snippet_results(aggregated, initial_results)
 
-                    if self.cfg.debug_print:
-                        print(
-                            f"[DEBUG] Text {text_idx}, Category '{category}': {len(snippets)} snippets found"
-                        )
-        
-        # Save final results
-        df_proc.to_csv(os.path.join(self.cfg.save_dir, "coded_passages.csv"), index=False)
+        if self.cfg.completion_check and not dynamic_mode and categories_dict:
+            aggregated = await self._completion_loop(
+                aggregated,
+                original_texts,
+                raw_values,
+                categories_dict,
+                additional,
+                reset_files=reset_files,
+                **kwargs,
+            )
+
+        if dynamic_mode:
+            coded_passages: List[Dict[str, List[str]]] = []
+            for idx in range(len(df_proc)):
+                row_map = aggregated.get(idx, {})
+                coded_passages.append(
+                    {cat: list(snippets) for cat, snippets in row_map.items()}
+                )
+            df_proc["coded_passages"] = coded_passages
+        else:
+            for category in categories_dict.keys():
+                df_proc[category] = [
+                    list(aggregated.get(idx, {}).get(category, []))
+                    for idx in range(len(df_proc))
+                ]
+
+        output_path = os.path.join(self.cfg.save_dir, "coded_passages.csv")
+        df_proc.to_csv(output_path, index=False)
 
         if self.cfg.debug_print:
             print(f"\n[DEBUG] Processing complete. Results saved to: {self.cfg.save_dir}")
-            if dynamic_mode:
-                all_categories = set()
-                for coded_passages in df_proc["coded_passages"]:
-                    if coded_passages:
-                        all_categories.update(coded_passages.keys())
-                
-                for category in all_categories:
-                    total_snippets = sum(
-                        len(coded_passages.get(category, [])) 
-                        for coded_passages in df_proc["coded_passages"] if coded_passages
-                    )
-                    print(f"[DEBUG] {category}: {total_snippets} total snippets found")
-            else:
-                for category in categories.keys():
-                    total_snippets = sum(len(snippets) for snippets in df_proc[category] if snippets)
-                    print(f"[DEBUG] {category}: {total_snippets} total snippets found")
-        
-        # At the very end, before returning:
-        self.print_final_hit_rates()
+            self.print_final_hit_rates()
+
         return df_proc
+
