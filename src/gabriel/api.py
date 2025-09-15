@@ -306,6 +306,12 @@ async def codify(
     use_dummy: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    modality: str = "text",
+    json_mode: bool = True,
+    max_timeout: Optional[float] = None,
+    completion_check: bool = True,
+    completion_max_rounds: int = 2,
+    completion_classifier_instructions: Optional[str] = None,
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
@@ -323,6 +329,12 @@ async def codify(
         use_dummy=use_dummy,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        modality=modality,
+        json_mode=json_mode,
+        max_timeout=max_timeout,
+        completion_check=completion_check,
+        completion_max_rounds=completion_max_rounds,
+        completion_classifier_instructions=completion_classifier_instructions,
         **cfg_kwargs,
     )
     return await Codify(cfg, template_path=template_path).run(
