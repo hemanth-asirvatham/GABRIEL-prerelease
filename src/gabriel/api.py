@@ -123,10 +123,12 @@ async def extract(
 
 async def classify(
     df: pd.DataFrame,
-    column_name: str,
     *,
     labels: dict[str, str],
     save_dir: str,
+    column_name: Optional[str] = None,
+    circle_column_name: Optional[str] = None,
+    square_column_name: Optional[str] = None,
     additional_instructions: Optional[str] = None,
     model: str = "gpt-5-mini",
     n_parallels: int = 750,
