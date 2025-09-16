@@ -123,14 +123,15 @@ async def extract(
 
 async def classify(
     df: pd.DataFrame,
+    column_name: Optional[str] = None,
     *,
     labels: dict[str, str],
     save_dir: str,
-    column_name: Optional[str] = None,
-    circle_column_name: Optional[str] = None,
-    square_column_name: Optional[str] = None,
     additional_instructions: Optional[str] = None,
     model: str = "gpt-5-mini",
+    differentiate: bool = False,
+    circle_column_name: Optional[str] = None,
+    square_column_name: Optional[str] = None,
     n_parallels: int = 750,
     n_runs: int = 1,
     min_frequency: float = 0.6,
@@ -151,6 +152,7 @@ async def classify(
         save_dir=save_dir,
         file_name=file_name,
         model=model,
+        differentiate=differentiate,
         n_parallels=n_parallels,
         n_runs=n_runs,
         min_frequency=min_frequency,
@@ -164,6 +166,8 @@ async def classify(
     return await Classify(cfg, template_path=template_path).run(
         df,
         column_name,
+        circle_column_name=circle_column_name,
+        square_column_name=square_column_name,
         reset_files=reset_files,
     )
 
