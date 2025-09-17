@@ -1467,6 +1467,7 @@ async def get_all_responses(
     verbose: bool = True,
     global_cooldown: int = 15,
     token_sample_size: int = 20,
+    status_report_interval: Optional[float] = 300.0,
     logging_level: Union[str, int] = "warning",
     **get_response_kwargs: Any,
 ) -> pd.DataFrame:
@@ -1489,6 +1490,12 @@ async def get_all_responses(
     ``max_timeout``) and it is increased if later responses are slower.  Any
     request exceeding the current limit is cancelled and retried.
 
+    Long‑running jobs can also emit periodic status updates.  The
+    ``status_report_interval`` parameter controls how frequently the helper
+    prints the current concurrency cap, number of active workers, queue size and
+    failure counts (default: every five minutes).  Set the interval to ``None``
+    or ``0`` to disable these reports.
+
     The worker pool responds promptly to user cancellation (e.g. pressing
     stop/``Ctrl+C``) by signalling all workers to halt before any new API
     requests are issued.  Transient network disruptions such as lost
@@ -1505,6 +1512,18 @@ async def get_all_responses(
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
+    if status_report_interval is not None:
+        try:
+            status_report_interval = float(status_report_interval)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid `status_report_interval=%r`; disabling periodic status reports.",
+                status_report_interval,
+            )
+            status_report_interval = None
+        else:
+            if status_report_interval <= 0:
+                status_report_interval = None
     base_url = base_url or os.getenv("OPENAI_BASE_URL")
     # ``use_web_search`` was the original parameter name; ``web_search`` is the
     # preferred modern spelling.  If both are supplied we favour ``web_search``
@@ -2245,6 +2264,23 @@ async def get_all_responses(
     usage_samples: List[Tuple[int, int, int]] = []
     estimated_output_tokens = initial_estimated_output_tokens
 
+    def emit_parallelization_status(reason: str, *, force: bool = False) -> None:
+        """Print and log a snapshot of the current worker utilisation."""
+
+        if not force and status_report_interval is None and not verbose:
+            return
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        msg = (
+            f"[parallelization] {timestamp} | {reason}: "
+            f"cap={concurrency_cap}, active={active_workers}, inflight={len(inflight)}, "
+            f"queue={queue.qsize()}, processed={processed}/{status.num_tasks_started}, "
+            f"rate_limit_errors={status.num_rate_limit_errors}"
+        )
+        print(msg)
+        logger.info(msg)
+
+    emit_parallelization_status("Initial parallelization settings", force=True)
+
     async def flush() -> None:
         nonlocal results, df, processed
         if results:
@@ -2324,10 +2360,15 @@ async def get_all_responses(
                     decrement = max(1, int(math.ceil(max(concurrency_cap * 0.15, 1))))
                     new_cap = max(1, concurrency_cap - decrement)
                     if new_cap != concurrency_cap:
-                        logger.warning(
-                            f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
+                        old_cap = concurrency_cap
+                        concurrency_cap = new_cap
+                        reason = (
+                            f"[scale down] Reducing parallel workers from {old_cap} to {new_cap} due to repeated rate limit errors."
                         )
-                    concurrency_cap = new_cap
+                        logger.warning(reason)
+                        emit_parallelization_status(reason, force=True)
+                    else:
+                        concurrency_cap = new_cap
                     rate_limit_errors_since_adjust = 0
                     successes_since_adjust = 0
                     return
@@ -2337,10 +2378,15 @@ async def get_all_responses(
                 increment = max(1, int(math.ceil(max(concurrency_cap * 0.25, 1))))
                 new_cap = min(max_parallel_ceiling, concurrency_cap + increment)
                 if new_cap != concurrency_cap:
-                    logger.info(
-                        f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
+                    old_cap = concurrency_cap
+                    concurrency_cap = new_cap
+                    reason = (
+                        f"[scale up] Increasing parallel workers from {old_cap} to {new_cap} after sustained success."
                     )
-                concurrency_cap = new_cap
+                    logger.info(reason)
+                    emit_parallelization_status(reason, force=True)
+                else:
+                    concurrency_cap = new_cap
                 successes_since_adjust = 0
                 rate_limit_errors_since_adjust = 0
 
@@ -2441,10 +2487,15 @@ async def get_all_responses(
                     if new_cap < 1:
                         new_cap = 1
                     if new_cap != concurrency_cap:
-                        logger.info(
-                            f"[token-based adaptation] Updating parallel workers from {concurrency_cap} to {new_cap} based on observed token usage."
+                        old_cap = concurrency_cap
+                        concurrency_cap = new_cap
+                        reason = (
+                            f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} based on observed token usage."
                         )
-                    concurrency_cap = new_cap
+                        logger.info(reason)
+                        emit_parallelization_status(reason, force=True)
+                    else:
+                        concurrency_cap = new_cap
                 # Check for empty outputs
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
@@ -2639,8 +2690,23 @@ async def get_all_responses(
                 if now - start > t_out and not task.done():
                     task.cancel()
 
+    async def status_reporter() -> None:
+        if status_report_interval is None:
+            return
+        try:
+            while not stop_event.is_set():
+                await asyncio.sleep(status_report_interval)
+                if stop_event.is_set() or processed >= status.num_tasks_started:
+                    break
+                emit_parallelization_status("Periodic status update", force=True)
+        except asyncio.CancelledError:
+            pass
+
     # Spawn workers and ensure they are cleaned up on exit or cancellation
     watcher = asyncio.create_task(timeout_watcher())
+    status_task: Optional[asyncio.Task] = None
+    if status_report_interval is not None:
+        status_task = asyncio.create_task(status_reporter())
     initial_worker_count = max(1, min(max_parallel_ceiling, queue.qsize()))
     workers = [asyncio.create_task(worker()) for _ in range(initial_worker_count)]
     try:
@@ -2654,8 +2720,12 @@ async def get_all_responses(
         for w in workers:
             w.cancel()
         watcher.cancel()
+        if status_task is not None:
+            status_task.cancel()
         worker_results = await asyncio.gather(*workers, return_exceptions=True)
         await asyncio.gather(watcher, return_exceptions=True)
+        if status_task is not None:
+            await asyncio.gather(status_task, return_exceptions=True)
         for res in worker_results:
             if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
                 # flush partial results before raising
