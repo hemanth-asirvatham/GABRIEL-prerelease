@@ -2276,6 +2276,10 @@ async def get_all_responses(
     last_concurrency_scale_down = 0.0
     usage_samples: List[Tuple[int, int, int]] = []
     estimated_output_tokens = initial_estimated_output_tokens
+    limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
+    limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
+    limiter_wait_ratio_threshold = 0.25
+    limiter_wait_duration_threshold = 0.5
 
     def emit_parallelization_status(reason: str, *, force: bool = False) -> None:
         """Print and log a snapshot of the current worker utilisation."""
@@ -2431,8 +2435,13 @@ async def get_all_responses(
                 active_workers += 1
                 input_tokens = len(tokenizer.encode(prompt))
                 gating_output = estimated_output_tokens
+                limiter_wait_time = 0.0
+                wait_start = time.perf_counter()
                 await req_lim.acquire()
+                limiter_wait_time += time.perf_counter() - wait_start
+                wait_start = time.perf_counter()
                 await tok_lim.acquire((input_tokens + gating_output) * n)
+                limiter_wait_time += time.perf_counter() - wait_start
                 call_count += 1
                 error_logs.setdefault(ident, [])
                 start = time.time()
@@ -2464,6 +2473,14 @@ async def get_all_responses(
                 inflight.pop(ident, None)
                 success_times.append(t)
                 await adjust_timeout()
+                limiter_wait_ratio = 0.0
+                if limiter_wait_time > 0:
+                    if t > 0:
+                        limiter_wait_ratio = min(1.0, limiter_wait_time / max(t, 1e-6))
+                    else:
+                        limiter_wait_ratio = 1.0
+                limiter_wait_durations.append(limiter_wait_time)
+                limiter_wait_ratios.append(limiter_wait_ratio)
                 # collect usage
                 total_input = sum(getattr(r.usage, "input_tokens", 0) for r in raw)
                 total_output = sum(getattr(r.usage, "output_tokens", 0) for r in raw)
@@ -2506,12 +2523,55 @@ async def get_all_responses(
                     new_cap = min(max_parallel_ceiling, req_limited, token_limited)
                     if new_cap < 1:
                         new_cap = 1
-                    if new_cap != concurrency_cap:
+                    limiter_pressure = False
+                    if (
+                        limiter_wait_ratio >= limiter_wait_ratio_threshold
+                        or limiter_wait_time >= limiter_wait_duration_threshold
+                    ):
+                        limiter_pressure = True
+                    else:
+                        sample_count = len(limiter_wait_durations)
+                        min_samples = max(5, min(token_sample_size, 20))
+                        if sample_count >= min_samples:
+                            try:
+                                avg_ratio = statistics.mean(limiter_wait_ratios)
+                                avg_wait = statistics.mean(limiter_wait_durations)
+                            except statistics.StatisticsError:
+                                avg_ratio = 0.0
+                                avg_wait = 0.0
+                            high_ratio_events = sum(
+                                1 for r in limiter_wait_ratios if r >= limiter_wait_ratio_threshold
+                            )
+                            high_wait_events = sum(
+                                1 for d in limiter_wait_durations if d >= limiter_wait_duration_threshold
+                            )
+                            limiter_pressure = (
+                                avg_ratio >= limiter_wait_ratio_threshold
+                                or avg_wait >= limiter_wait_duration_threshold
+                                or high_ratio_events >= max(3, math.ceil(sample_count * 0.35))
+                                or high_wait_events >= max(3, math.ceil(sample_count * 0.35))
+                            )
+                    if new_cap < concurrency_cap and not limiter_pressure:
+                        logger.debug(
+                            "[token-based adaptation] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
+                            new_cap,
+                            concurrency_cap,
+                            limiter_wait_time,
+                            limiter_wait_ratio * 100,
+                        )
+                    elif new_cap != concurrency_cap:
                         old_cap = concurrency_cap
                         concurrency_cap = new_cap
-                        reason = (
-                            f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} based on observed token usage."
-                        )
+                        if new_cap < old_cap:
+                            detail = "after sustained limiter waits" if limiter_pressure else "based on observed token usage"
+                            reason = (
+                                f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} {detail}"
+                                f" (recent limiter wait ≈ {limiter_wait_time:.2f}s, {limiter_wait_ratio * 100:.0f}% of call)."
+                            )
+                        else:
+                            reason = (
+                                f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} based on observed token usage."
+                            )
                         logger.info(reason)
                         emit_parallelization_status(reason, force=True)
                     else:
