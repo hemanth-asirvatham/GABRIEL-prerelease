@@ -44,8 +44,8 @@ from pathlib import Path
 import random
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
-from collections import defaultdict
+from typing import Any, Deque, Dict, List, Optional, Tuple, Union
+from collections import defaultdict, deque
 import pickle
 
 from gabriel.utils.logging import get_logger, set_log_level
@@ -1466,6 +1466,7 @@ async def get_all_responses(
     save_every_x_responses: int = 100,
     verbose: bool = True,
     global_cooldown: int = 15,
+    rate_limit_window: float = 30.0,
     token_sample_size: int = 20,
     status_report_interval: Optional[float] = 300.0,
     logging_level: Union[str, int] = "warning",
@@ -1489,6 +1490,15 @@ async def get_all_responses(
     observed durations.  Subsequent calls use this timeout (capped by
     ``max_timeout``) and it is increased if later responses are slower.  Any
     request exceeding the current limit is cancelled and retried.
+
+    Concurrency adapts gently to sustained rate‑limit pressure.  A rolling
+    window (``rate_limit_window``, default 30 seconds) tracks recent rate‑limit
+    errors and only reduces the parallel worker cap when many errors occur
+    within that window or when a long streak of consecutive errors is
+    observed.  After a reduction the helper waits for another full window
+    before scaling down again so brief spikes do not trigger runaway
+    throttling, while successful calls reset the counters and allow the pool to
+    scale back up.
 
     Long‑running jobs can also emit periodic status updates.  The
     ``status_report_interval`` parameter controls how frequently the helper
@@ -2261,6 +2271,9 @@ async def get_all_responses(
     rate_limit_errors_since_adjust = 0
     successes_since_adjust = 0
     active_workers = 0
+    rate_limit_window = max(1.0, float(rate_limit_window))
+    rate_limit_error_times: Deque[float] = deque()
+    last_concurrency_scale_down = 0.0
     usage_samples: List[Tuple[int, int, int]] = []
     estimated_output_tokens = initial_estimated_output_tokens
 
@@ -2340,38 +2353,45 @@ async def get_all_responses(
         except Exception:
             pass
 
-    # We removed the dynamic rate‑limit adjustment functionality.  If the API
-    # returns a 429 (rate limit error), we simply retry after an exponential
-    # backoff without modifying the per‑minute budgets.  This avoids
-    # overreacting to a single error and keeps concurrency stable.  The
-    # budgets and concurrency are determined once at the start of the job.
+    # The per‑minute AsyncLimiter budgets remain fixed.  When rate limits are
+    # hit we only adapt the number of in‑flight worker tasks without
+    # rebuilding the limiters themselves, keeping the gating logic simple.
     async def rebuild_limiters() -> None:
         return None
 
     def maybe_adjust_concurrency() -> None:
-        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust, max_parallel_ceiling
-        total_events = rate_limit_errors_since_adjust + successes_since_adjust
-        if rate_limit_errors_since_adjust > 0:
-            min_samples = max(25, int(math.ceil(concurrency_cap * 0.25)))
-            if total_events >= min_samples:
-                error_ratio = rate_limit_errors_since_adjust / max(1, total_events)
-                error_threshold = 0.25
-                if error_ratio >= error_threshold or rate_limit_errors_since_adjust >= max(10, int(math.ceil(concurrency_cap * 0.2))):
-                    decrement = max(1, int(math.ceil(max(concurrency_cap * 0.15, 1))))
-                    new_cap = max(1, concurrency_cap - decrement)
-                    if new_cap != concurrency_cap:
-                        old_cap = concurrency_cap
-                        concurrency_cap = new_cap
-                        reason = (
-                            f"[scale down] Reducing parallel workers from {old_cap} to {new_cap} due to repeated rate limit errors."
-                        )
-                        logger.warning(reason)
-                        emit_parallelization_status(reason, force=True)
-                    else:
-                        concurrency_cap = new_cap
-                    rate_limit_errors_since_adjust = 0
-                    successes_since_adjust = 0
-                    return
+        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust, max_parallel_ceiling, last_concurrency_scale_down
+        now = time.time()
+        window_start = now - rate_limit_window
+        while rate_limit_error_times and rate_limit_error_times[0] < window_start:
+            rate_limit_error_times.popleft()
+        recent_errors = len(rate_limit_error_times)
+        error_window_threshold = max(25, int(math.ceil(concurrency_cap * 0.25)))
+        consecutive_threshold = max(10, int(math.ceil(concurrency_cap * 0.2)))
+        should_scale_down = False
+        if recent_errors >= error_window_threshold:
+            should_scale_down = True
+        elif rate_limit_errors_since_adjust >= consecutive_threshold:
+            should_scale_down = True
+        if should_scale_down and (now - last_concurrency_scale_down) >= rate_limit_window:
+            decrement = max(1, int(math.ceil(max(concurrency_cap * 0.15, 1))))
+            new_cap = max(1, concurrency_cap - decrement)
+            if new_cap != concurrency_cap:
+                old_cap = concurrency_cap
+                concurrency_cap = new_cap
+                reason = (
+                    f"[scale down] Reducing parallel workers from {old_cap} to {new_cap} "
+                    f"after {recent_errors} rate limit errors in the last {int(round(rate_limit_window))}s."
+                )
+                logger.warning(reason)
+                emit_parallelization_status(reason, force=True)
+            else:
+                concurrency_cap = new_cap
+            rate_limit_errors_since_adjust = 0
+            successes_since_adjust = 0
+            rate_limit_error_times.clear()
+            last_concurrency_scale_down = now
+            return
         if rate_limit_errors_since_adjust == 0 and concurrency_cap < max_parallel_ceiling:
             success_threshold = max(20, int(math.ceil(concurrency_cap * 0.8)))
             if successes_since_adjust >= success_threshold:
@@ -2578,6 +2598,7 @@ async def get_all_responses(
                 cooldown_until = status.time_of_last_rate_limit_error + global_cooldown
                 logger.warning(f"Rate limit error for {ident}: {e}")
                 error_logs[ident].append(str(e))
+                rate_limit_error_times.append(time.time())
                 rate_limit_errors_since_adjust += 1
                 successes_since_adjust = 0
                 maybe_adjust_concurrency()
