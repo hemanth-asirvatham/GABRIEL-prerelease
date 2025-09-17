@@ -1257,30 +1257,38 @@ async def get_all_embeddings(
 
     def maybe_adjust_concurrency() -> None:
         nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust
-        decrease_threshold = 20
-        increase_threshold = 200
-        if rate_limit_errors_since_adjust >= decrease_threshold:
-            new_cap = max(1, int(math.floor(concurrency_cap * 0.75)))
-            if new_cap != concurrency_cap:
-                msg = (
-                    f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
-                )
-                print(msg)
-                logger.warning(msg)
-            concurrency_cap = new_cap
-            rate_limit_errors_since_adjust = 0
-            successes_since_adjust = 0
-        elif rate_limit_errors_since_adjust == 0 and successes_since_adjust >= increase_threshold:
-            new_cap = min(n_parallels, int(math.ceil(concurrency_cap * 1.25)))
-            if new_cap != concurrency_cap:
-                msg = (
-                    f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
-                )
-                print(msg)
-                logger.warning(msg)
-            concurrency_cap = new_cap
-            successes_since_adjust = 0
-            rate_limit_errors_since_adjust = 0
+        total_events = rate_limit_errors_since_adjust + successes_since_adjust
+        if rate_limit_errors_since_adjust > 0:
+            min_samples = max(20, int(math.ceil(concurrency_cap * 0.3)))
+            if total_events >= min_samples:
+                error_ratio = rate_limit_errors_since_adjust / max(1, total_events)
+                if error_ratio >= 0.25 or rate_limit_errors_since_adjust >= max(8, int(math.ceil(concurrency_cap * 0.2))):
+                    decrement = max(1, int(math.ceil(max(concurrency_cap * 0.15, 1))))
+                    new_cap = max(1, concurrency_cap - decrement)
+                    if new_cap != concurrency_cap:
+                        msg = (
+                            f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
+                        )
+                        print(msg)
+                        logger.warning(msg)
+                    concurrency_cap = new_cap
+                    rate_limit_errors_since_adjust = 0
+                    successes_since_adjust = 0
+                    return
+        if rate_limit_errors_since_adjust == 0 and concurrency_cap < n_parallels:
+            success_threshold = max(15, int(math.ceil(concurrency_cap * 0.75)))
+            if successes_since_adjust >= success_threshold:
+                increment = max(1, int(math.ceil(max(concurrency_cap * 0.25, 1))))
+                new_cap = min(n_parallels, concurrency_cap + increment)
+                if new_cap != concurrency_cap:
+                    msg = (
+                        f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
+                    )
+                    print(msg)
+                    logger.info(msg)
+                concurrency_cap = new_cap
+                successes_since_adjust = 0
+                rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
         nonlocal processed, cooldown_until, active_workers, concurrency_cap
@@ -1520,6 +1528,7 @@ async def get_all_responses(
     # so only warnings and errors surface.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     status = StatusTracker()
+    requested_n_parallels = max(1, n_parallels)
     tokenizer = _get_tokenizer(model)
     # Backwards compatibility for identifiers
     if identifiers is None:
@@ -1546,6 +1555,9 @@ async def get_all_responses(
     user_cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
     cutoff = _decide_default_max_output_tokens(user_cutoff, rate_headers, base_url=base_url)
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
+    initial_estimated_output_tokens = (
+        cutoff if cutoff is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+    )
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
     save_path = os.path.expandvars(os.path.expanduser(save_path))
@@ -1657,7 +1669,7 @@ async def get_all_responses(
             max_output_tokens=cutoff,
             model=model,
             use_batch=use_batch,
-            n_parallels=n_parallels,
+            n_parallels=requested_n_parallels,
             verbose=verbose,
             rate_headers=rate_headers,
             base_url=base_url,
@@ -1670,6 +1682,13 @@ async def get_all_responses(
     # runs once at the start of a non‑batch run.  The resulting value acts
     # as the true upper bound on parallelism; it will be used to size the
     # worker pool and to configure the request/token limiters below.
+    max_parallel_ceiling = requested_n_parallels
+    concurrency_cap = requested_n_parallels
+    allowed_req_pm = max(1, requested_n_parallels)
+    estimated_tokens_per_call = max(
+        1.0, (initial_estimated_output_tokens + 1) * max(1, n)
+    )
+    allowed_tok_pm = int(max(1, requested_n_parallels * estimated_tokens_per_call))
     if not use_batch:
         try:
             # Estimate the average number of tokens per call using tiktoken
@@ -1679,12 +1698,9 @@ async def get_all_responses(
                 sum(len(tokenizer.encode(p)) for p, _ in todo_pairs)
                 / max(1, len(todo_pairs))
             )
-            gating_output = cutoff if cutoff is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
-            tokens_per_call = (avg_input_tokens + gating_output) * max(1, n)
-            # Parse limits from the rate headers.  If the API returns both a
-            # limit and a remaining value, we prefer the remaining value (it
-            # reflects your remaining quota for the current minute).  Missing
-            # or zero values are treated as unknown.
+            gating_output = initial_estimated_output_tokens
+            tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
+
             def _pf(val: Optional[str]) -> Optional[float]:
                 try:
                     if val is None:
@@ -1696,61 +1712,64 @@ async def get_all_responses(
                     return f if f > 0 else None
                 except Exception:
                     return None
+
+            lim_r: Optional[float] = None
+            rem_r: Optional[float] = None
+            lim_t: Optional[float] = None
+            rem_t: Optional[float] = None
             if rate_headers:
                 lim_r = _pf(rate_headers.get("limit_requests"))
                 rem_r = _pf(rate_headers.get("remaining_requests"))
-                allowed_req = rem_r if rem_r is not None else lim_r
-                lim_t = _pf(rate_headers.get("limit_tokens")) or _pf(rate_headers.get("limit_tokens_usage_based"))
-                rem_t = _pf(rate_headers.get("remaining_tokens")) or _pf(rate_headers.get("remaining_tokens_usage_based"))
-                allowed_tok = rem_t if rem_t is not None else lim_t
+                lim_t = _pf(rate_headers.get("limit_tokens")) or _pf(
+                    rate_headers.get("limit_tokens_usage_based")
+                )
+                rem_t = _pf(rate_headers.get("remaining_tokens")) or _pf(
+                    rate_headers.get("remaining_tokens_usage_based")
+                )
+            initial_req_budget = rem_r if rem_r is not None else lim_r
+            initial_tok_budget = rem_t if rem_t is not None else lim_t
+            concurrency_candidates = [requested_n_parallels]
+            if initial_req_budget is not None:
+                concurrency_candidates.append(int(max(1, initial_req_budget)))
+            if initial_tok_budget is not None:
+                concurrency_candidates.append(
+                    int(max(1, initial_tok_budget // tokens_per_call))
+                )
+            concurrency_cap = max(1, min(concurrency_candidates))
+            ceiling_candidates = [requested_n_parallels]
+            ceiling_req_budget = lim_r if lim_r is not None else initial_req_budget
+            ceiling_tok_budget = lim_t if lim_t is not None else initial_tok_budget
+            if ceiling_req_budget is not None:
+                ceiling_candidates.append(int(max(1, ceiling_req_budget)))
+            if ceiling_tok_budget is not None:
+                ceiling_candidates.append(
+                    int(max(1, ceiling_tok_budget // tokens_per_call))
+                )
+            max_parallel_ceiling = max(1, min(ceiling_candidates))
+            if max_parallel_ceiling < concurrency_cap:
+                max_parallel_ceiling = concurrency_cap
+            if concurrency_cap < requested_n_parallels:
+                logger.info(
+                    f"[parallel reduction] Limiting parallel workers from {requested_n_parallels} to {concurrency_cap} based on your current rate limits. Consider upgrading your plan for faster processing."
+                )
+            if lim_r is not None:
+                allowed_req_pm = int(max(1, lim_r))
+            elif initial_req_budget is not None:
+                allowed_req_pm = int(max(1, initial_req_budget))
             else:
-                allowed_req = None
-                allowed_tok = None
-            # Compute the theoretical parallelism from request and token budgets
-            if allowed_req is None:
-                concurrency_from_requests: Optional[int] = None
+                allowed_req_pm = max(1, max_parallel_ceiling)
+            if lim_t is not None:
+                allowed_tok_pm = int(max(1, lim_t))
+            elif initial_tok_budget is not None:
+                allowed_tok_pm = int(max(1, initial_tok_budget))
             else:
-                concurrency_from_requests = int(max(1, allowed_req))
-            if allowed_tok is None:
-                concurrency_from_tokens: Optional[int] = None
-            else:
-                concurrency_from_tokens = int(max(1, allowed_tok // tokens_per_call))
-            if concurrency_from_requests is None and concurrency_from_tokens is None:
-                concurrency_possible: Optional[int] = None
-            elif concurrency_from_requests is None:
-                concurrency_possible = concurrency_from_tokens
-            elif concurrency_from_tokens is None:
-                concurrency_possible = concurrency_from_requests
-            else:
-                concurrency_possible = min(concurrency_from_requests, concurrency_from_tokens)
-            # Determine final concurrency cap.  If concurrency_possible is None
-            # (unknown), we leave n_parallels unchanged.  Otherwise we limit
-            # to the lesser of the calculated parallelism and the user‑supplied
-            # ceiling.
-            if concurrency_possible is not None:
-                concurrency_cap = max(1, min(n_parallels, concurrency_possible))
-            else:
-                concurrency_cap = max(1, n_parallels)
+                allowed_tok_pm = int(max(1, max_parallel_ceiling * tokens_per_call))
+            estimated_tokens_per_call = tokens_per_call
         except Exception:
-            concurrency_cap = max(1, n_parallels)
-        # Warn the user when concurrency is reduced due to rate limits.
-        if concurrency_cap < n_parallels:
-            logger.info(
-                f"[parallel reduction] Limiting parallel workers from {n_parallels} to {concurrency_cap} based on your current rate limits. Consider upgrading your plan for faster processing."
-            )
-        n_parallels = concurrency_cap
-        # Compute per‑minute budgets for gating.  When the API returns a
-        # request or token limit, we use it; otherwise we derive a large
-        # default based on the concurrency cap.  The defaults ensure that
-        # limiters do not unnecessarily throttle when limits are unknown.
-        if allowed_req is not None:
-            allowed_req_pm = int(max(1, allowed_req))
-        else:
-            allowed_req_pm = max(1, n_parallels)
-        if allowed_tok is not None:
-            allowed_tok_pm = int(max(1, allowed_tok))
-        else:
-            allowed_tok_pm = int(max(1, n_parallels * tokens_per_call))
+            concurrency_cap = max(1, requested_n_parallels)
+            max_parallel_ceiling = concurrency_cap
+            allowed_req_pm = max(1, requested_n_parallels)
+            allowed_tok_pm = int(max(1, requested_n_parallels * estimated_tokens_per_call))
     else:
         # In batch mode we don't set concurrency or limiters here; they are
         # handled by the batch API submission.
@@ -2208,7 +2227,9 @@ async def get_all_responses(
     inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     call_count = 0
-    samples_for_timeout = max(1, int(0.90 * min(len(todo_pairs), n_parallels)))
+    samples_for_timeout = max(
+        1, int(0.90 * min(len(todo_pairs), max_parallel_ceiling))
+    )
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in todo_pairs:
         queue.put_nowait((item[0], item[1], max_retries))
@@ -2221,9 +2242,8 @@ async def get_all_responses(
     rate_limit_errors_since_adjust = 0
     successes_since_adjust = 0
     active_workers = 0
-    concurrency_cap = n_parallels
     usage_samples: List[Tuple[int, int, int]] = []
-    estimated_output_tokens = cutoff if cutoff is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+    estimated_output_tokens = initial_estimated_output_tokens
 
     async def flush() -> None:
         nonlocal results, df, processed
@@ -2293,30 +2313,39 @@ async def get_all_responses(
         return None
 
     def maybe_adjust_concurrency() -> None:
-        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust
-        decrease_threshold = 20
-        increase_threshold = 200
-        if rate_limit_errors_since_adjust >= decrease_threshold:
-            new_cap = max(1, int(math.floor(concurrency_cap * 0.75)))
-            if new_cap != concurrency_cap:
-                logger.warning(
-                    f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
-                )
-            concurrency_cap = new_cap
-            rate_limit_errors_since_adjust = 0
-            successes_since_adjust = 0
-        elif rate_limit_errors_since_adjust == 0 and successes_since_adjust >= increase_threshold:
-            new_cap = min(n_parallels, int(math.ceil(concurrency_cap * 1.25)))
-            if new_cap != concurrency_cap:
-                logger.warning(
-                    f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
-                )
-            concurrency_cap = new_cap
-            successes_since_adjust = 0
-            rate_limit_errors_since_adjust = 0
+        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust, max_parallel_ceiling
+        total_events = rate_limit_errors_since_adjust + successes_since_adjust
+        if rate_limit_errors_since_adjust > 0:
+            min_samples = max(25, int(math.ceil(concurrency_cap * 0.25)))
+            if total_events >= min_samples:
+                error_ratio = rate_limit_errors_since_adjust / max(1, total_events)
+                error_threshold = 0.25
+                if error_ratio >= error_threshold or rate_limit_errors_since_adjust >= max(10, int(math.ceil(concurrency_cap * 0.2))):
+                    decrement = max(1, int(math.ceil(max(concurrency_cap * 0.15, 1))))
+                    new_cap = max(1, concurrency_cap - decrement)
+                    if new_cap != concurrency_cap:
+                        logger.warning(
+                            f"[scale down] Reducing parallel workers from {concurrency_cap} to {new_cap} due to repeated rate limit errors."
+                        )
+                    concurrency_cap = new_cap
+                    rate_limit_errors_since_adjust = 0
+                    successes_since_adjust = 0
+                    return
+        if rate_limit_errors_since_adjust == 0 and concurrency_cap < max_parallel_ceiling:
+            success_threshold = max(20, int(math.ceil(concurrency_cap * 0.8)))
+            if successes_since_adjust >= success_threshold:
+                increment = max(1, int(math.ceil(max(concurrency_cap * 0.25, 1))))
+                new_cap = min(max_parallel_ceiling, concurrency_cap + increment)
+                if new_cap != concurrency_cap:
+                    logger.info(
+                        f"[scale up] Increasing parallel workers from {concurrency_cap} to {new_cap} after sustained success."
+                    )
+                concurrency_cap = new_cap
+                successes_since_adjust = 0
+                rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
-        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event
+        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling
         while True:
             if stop_event.is_set():
                 break
@@ -2404,11 +2433,11 @@ async def get_all_responses(
                     avg_reason = statistics.mean(u[2] for u in usage_samples)
                     estimated_output_tokens = avg_out + avg_reason
                     tokens_per_call_est = (avg_in + estimated_output_tokens) * max(1, n)
-                    new_cap = min(
-                        n_parallels,
-                        int(allowed_req_pm),
-                        int(max(1, allowed_tok_pm // max(1, tokens_per_call_est))),
+                    token_limited = int(
+                        max(1, allowed_tok_pm // max(1, tokens_per_call_est))
                     )
+                    req_limited = int(max(1, allowed_req_pm))
+                    new_cap = min(max_parallel_ceiling, req_limited, token_limited)
                     if new_cap < 1:
                         new_cap = 1
                     if new_cap != concurrency_cap:
@@ -2612,7 +2641,8 @@ async def get_all_responses(
 
     # Spawn workers and ensure they are cleaned up on exit or cancellation
     watcher = asyncio.create_task(timeout_watcher())
-    workers = [asyncio.create_task(worker()) for _ in range(n_parallels)]
+    initial_worker_count = max(1, min(max_parallel_ceiling, queue.qsize()))
+    workers = [asyncio.create_task(worker()) for _ in range(initial_worker_count)]
     try:
         await queue.join()
     except (asyncio.CancelledError, KeyboardInterrupt):
