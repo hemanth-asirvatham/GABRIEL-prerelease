@@ -178,6 +178,7 @@ async def deidentify(
     *,
     save_dir: str,
     grouping_column: Optional[str] = None,
+    mapping_column: Optional[str] = None,
     model: str = "gpt-5-mini",
     n_parallels: int = 750,
     use_dummy: bool = False,
@@ -187,6 +188,8 @@ async def deidentify(
     additional_guidelines: str = "",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    n_passes: int = 1,
+    use_existing_mappings_only: bool = False,
     template_path: Optional[str] = None,
     reset_files: bool = False,
     **cfg_kwargs,
@@ -205,12 +208,15 @@ async def deidentify(
         additional_guidelines=additional_guidelines,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        n_passes=n_passes,
+        use_existing_mappings_only=use_existing_mappings_only,
         **cfg_kwargs,
     )
-    return await Deidentifier(cfg).run(
+    return await Deidentifier(cfg, template_path=template_path).run(
         df,
         column_name,
         grouping_column=grouping_column,
+        mapping_column=mapping_column,
         reset_files=reset_files,
     )
 
