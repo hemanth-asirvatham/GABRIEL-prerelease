@@ -1,7 +1,7 @@
 import asyncio
 import os
 import pandas as pd
-from typing import Callable, Dict, Optional, Union, Any
+from typing import Callable, Dict, Optional, Union, Any, List
 
 from .tasks import (
     Rate,
@@ -34,6 +34,13 @@ from .tasks import (
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
 from .core.prompt_template import PromptTemplate
+from .tasks.debias import (
+    DebiasConfig,
+    DebiasPipeline,
+    DebiasResult,
+    MeasurementMode,
+    RemovalMethod,
+)
 
 async def rate(
     df: pd.DataFrame,
@@ -721,6 +728,56 @@ async def filter(
         column_name,
         reset_files=reset_files,
     )
+
+
+async def debias(
+    df: pd.DataFrame,
+    column_name: str,
+    *,
+    mode: MeasurementMode = "rate",
+    signal_attribute: str,
+    signal_dictionary: Dict[str, str],
+    attributes: Optional[Dict[str, str]] = None,
+    removal_method: RemovalMethod = "codify",
+    save_dir: str = os.path.expanduser("~/Documents/runs"),
+    run_name: Optional[str] = None,
+    strip_percentages: Optional[List[int]] = None,
+    categories_to_strip: Optional[List[str]] = None,
+    template_path: Optional[str] = None,
+    model: str = "gpt-5-mini",
+    n_parallels: int = 750,
+    measurement_kwargs: Optional[Dict[str, Any]] = None,
+    removal_kwargs: Optional[Dict[str, Any]] = None,
+    use_dummy: bool = False,
+    robust_regression: bool = True,
+    random_seed: int = 12345,
+    verbose: bool = True,
+) -> DebiasResult:
+    """Run the econometric debiasing pipeline on ``df[column_name]``."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    cfg = DebiasConfig(
+        mode=mode,
+        signal_attribute=signal_attribute,
+        signal_dictionary=signal_dictionary,
+        attributes=attributes or {},
+        removal_method=removal_method,
+        save_dir=save_dir,
+        run_name=run_name,
+        strip_percentages=strip_percentages,
+        categories_to_strip=categories_to_strip,
+        template_path=template_path,
+        model=model,
+        n_parallels=n_parallels,
+        measurement_kwargs=measurement_kwargs or {},
+        removal_kwargs=removal_kwargs or {},
+        use_dummy=use_dummy,
+        robust_regression=robust_regression,
+        random_seed=random_seed,
+        verbose=verbose,
+    )
+    pipeline = DebiasPipeline(cfg)
+    return await pipeline.run(df, column_name)
 
 
 async def whatever(

@@ -34,6 +34,12 @@ _lazy_imports = {
     "DiscoverConfig": ".discover",
     "Filter": ".filter",
     "FilterConfig": ".filter",
+    "DebiasPipeline": ".debias",
+    "DebiasConfig": ".debias",
+    "DebiasResult": ".debias",
+    "DebiasRegressionResult": ".debias",
+    "MeasurementMode": ".debias",
+    "RemovalMethod": ".debias",
 }
 
 __all__ = list(_lazy_imports.keys())
