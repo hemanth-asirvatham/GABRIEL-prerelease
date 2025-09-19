@@ -735,7 +735,8 @@ async def debias(
     column_name: str,
     *,
     mode: MeasurementMode = "rate",
-    signal_attribute: str,
+    measurement_attribute: Optional[str] = None,
+    removal_attribute: Optional[str] = None,
     signal_dictionary: Dict[str, str],
     attributes: Optional[Dict[str, str]] = None,
     removal_method: RemovalMethod = "codify",
@@ -748,17 +749,45 @@ async def debias(
     n_parallels: int = 750,
     measurement_kwargs: Optional[Dict[str, Any]] = None,
     removal_kwargs: Optional[Dict[str, Any]] = None,
+    max_words_per_call: Optional[int] = None,
+    completion_max_rounds: Optional[int] = None,
     use_dummy: bool = False,
     robust_regression: bool = True,
     random_seed: int = 12345,
     verbose: bool = True,
 ) -> DebiasResult:
-    """Run the econometric debiasing pipeline on ``df[column_name]``."""
+    """Run the econometric debiasing pipeline on ``df[column_name]``.
+
+    Parameters
+    ----------
+    measurement_attribute, removal_attribute:
+        Specify the attribute used for regression and the key from
+        ``signal_dictionary`` that should be removed.  When
+        ``measurement_attribute`` is omitted the first key from
+        ``attributes`` is used.  ``removal_attribute`` defaults to the
+        measurement attribute when it exists in ``signal_dictionary`` or
+        otherwise the first key from ``signal_dictionary``.  When defaults are
+        inferred a notice is printed if ``verbose`` is ``True``.
+    max_words_per_call, completion_max_rounds:
+        Convenience passthroughs for the removal stage.  ``max_words_per_call``
+        configures the codify task's chunk size, while
+        ``completion_max_rounds`` is forwarded to codify and to the underlying
+        paraphrase API calls.
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    measurement_kwargs = dict(measurement_kwargs or {})
+    removal_kwargs = dict(removal_kwargs or {})
+
+    if removal_method == "codify" and max_words_per_call is not None:
+        removal_kwargs.setdefault("max_words_per_call", max_words_per_call)
+    if completion_max_rounds is not None:
+        removal_kwargs.setdefault("completion_max_rounds", completion_max_rounds)
+
     cfg = DebiasConfig(
         mode=mode,
-        signal_attribute=signal_attribute,
+        measurement_attribute=measurement_attribute,
+        removal_attribute=removal_attribute,
         signal_dictionary=signal_dictionary,
         attributes=attributes or {},
         removal_method=removal_method,
@@ -769,8 +798,8 @@ async def debias(
         template_path=template_path,
         model=model,
         n_parallels=n_parallels,
-        measurement_kwargs=measurement_kwargs or {},
-        removal_kwargs=removal_kwargs or {},
+        measurement_kwargs=measurement_kwargs,
+        removal_kwargs=removal_kwargs,
         use_dummy=use_dummy,
         robust_regression=robust_regression,
         random_seed=random_seed,

@@ -18,7 +18,7 @@ def test_prepare_codify_variants_strips_text(monkeypatch, tmp_path):
     df = pd.DataFrame({"text": ["alpha BIAS0 omega", "beta BIAS1 gamma"]})
     cfg = DebiasConfig(
         mode="rate",
-        signal_attribute="bias_score",
+        measurement_attribute="bias_score",
         attributes={"bias_score": "desc"},
         signal_dictionary={"bias_score": "remove"},
         removal_method="codify",
@@ -45,7 +45,7 @@ def test_prepare_codify_variants_strips_text(monkeypatch, tmp_path):
         snippets = [[f"BIAS{i}"] for i in idx]
         out = pd.DataFrame({
             column_name: df_in[column_name].tolist(),
-            cfg.signal_attribute: snippets,
+            cfg.removal_attribute: snippets,
         })
         out.index = pd.Index(idx, name="__debias_row_id")
         return out
@@ -65,7 +65,7 @@ def test_prepare_paraphrase_variant_builds_instructions(monkeypatch, tmp_path):
     df = pd.DataFrame({"text": ["alpha BIAS omega", "beta BIAS gamma"]})
     cfg = DebiasConfig(
         mode="rate",
-        signal_attribute="bias_score",
+        measurement_attribute="bias_score",
         attributes={"bias_score": "desc"},
         signal_dictionary={"bias_score": "Mentions of BIAS."},
         removal_method="paraphrase",
@@ -105,6 +105,23 @@ def test_prepare_paraphrase_variant_builds_instructions(monkeypatch, tmp_path):
     assert "bias_score" in captured["instructions"]
 
 
+def test_debias_config_defaults_emit_notice(capsys, tmp_path):
+    cfg = DebiasConfig(
+        mode="rate",
+        attributes={"bias_score": "desc"},
+        signal_dictionary={"bias_flag": "Mentions of the token FLAG."},
+        removal_method="codify",
+        save_dir=str(tmp_path),
+        strip_percentages=[100],
+        run_name="default_notice",
+        verbose=True,
+    )
+    DebiasPipeline(cfg)
+    output = capsys.readouterr().out
+    assert "measurement_attribute not provided" in output
+    assert "removal_attribute not provided" in output
+
+
 def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
     texts = [
         "Row0 BIAS narrative",
@@ -115,7 +132,7 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
     df = pd.DataFrame({"text": texts})
     cfg = DebiasConfig(
         mode="rate",
-        signal_attribute="bias_score",
+        measurement_attribute="bias_score",
         attributes={
             "bias_score": "Intensity of bias language",
             "context_score": "Contextual richness",
@@ -143,7 +160,7 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
         snippets = [["BIAS"]] * len(df_in)
         out = pd.DataFrame({
             column_name: df_in[column_name].tolist(),
-            cfg.signal_attribute: snippets,
+            cfg.removal_attribute: snippets,
         })
         out.index = pd.Index(
             df_in["__debias_row_id"].astype(int).tolist(), name="__debias_row_id"
@@ -152,7 +169,7 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Codify, "run", fake_codify_run)
 
-    variant_col = f"text ({cfg.signal_attribute} stripped 100%)"
+    variant_col = f"text ({cfg.removal_attribute} stripped 100%)"
     index = _range_index(len(df))
     measurement_map = {
         ("rate", "original", "text"): pd.DataFrame(
@@ -227,7 +244,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     df = pd.DataFrame({"text": texts})
     cfg = DebiasConfig(
         mode="rate",
-        signal_attribute="bias_score",
+        measurement_attribute="bias_score",
         attributes={
             "bias_score": "Bias intensity",
             "context_score": "Context attribute",
@@ -251,7 +268,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     ) -> pd.DataFrame:
         idx = df_in["__debias_row_id"].astype(int).tolist()
         revised_name = self.cfg.revised_column_name or (
-            f"{column_name} ({cfg.signal_attribute} stripped paraphrase)"
+            f"{column_name} ({cfg.removal_attribute} stripped paraphrase)"
         )
         revised = [str(text).replace("BIAS", "").strip() for text in df_in[column_name]]
         out = pd.DataFrame({revised_name: revised})
@@ -263,7 +280,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Paraphrase, "run", fake_paraphrase_run)
 
-    variant_col = f"text ({cfg.signal_attribute} stripped paraphrase)"
+    variant_col = f"text ({cfg.removal_attribute} stripped paraphrase)"
     index = _range_index(len(df))
     measurement_map = {
         ("rate", "original", "text"): pd.DataFrame(
@@ -326,3 +343,108 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     saved_df = pd.read_csv(metadata["result_path"])
     pdt.assert_frame_equal(saved_df, results_df, check_dtype=False)
     assert "bias_score" in captured["instructions"]
+
+
+def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
+    texts = [
+        "Row0 FLAG narrative",
+        "Row1 FLAG commentary",
+        "Row2 FLAG discussion",
+        "Row3 FLAG overview",
+    ]
+    df = pd.DataFrame({"text": texts})
+    cfg = DebiasConfig(
+        mode="rate",
+        attributes={"bias_score": "Intensity of bias language"},
+        signal_dictionary={
+            "bias_flag": "Mentions of the token FLAG.",
+            "alternate_flag": "Secondary flag to leave untouched.",
+        },
+        removal_method="codify",
+        save_dir=str(tmp_path),
+        strip_percentages=[100],
+        run_name="distinct_attrs_pipeline",
+        verbose=False,
+    )
+    pipeline = DebiasPipeline(cfg)
+
+    assert cfg.measurement_attribute == "bias_score"
+    assert cfg.removal_attribute == "bias_flag"
+    assert cfg.categories_to_strip == ["bias_flag"]
+
+    async def fake_codify_run(
+        self,
+        df_in: pd.DataFrame,
+        column_name: str,
+        *,
+        categories=None,
+        additional_instructions="",
+        reset_files=False,
+        **kwargs,
+    ) -> pd.DataFrame:
+        assert categories == cfg.signal_dictionary
+        idx = df_in["__debias_row_id"].astype(int).tolist()
+        snippets = [["FLAG"]] * len(df_in)
+        out = pd.DataFrame(
+            {
+                column_name: df_in[column_name].tolist(),
+                cfg.removal_attribute: snippets,
+            }
+        )
+        out.index = pd.Index(idx, name="__debias_row_id")
+        return out
+
+    monkeypatch.setattr(Codify, "run", fake_codify_run)
+
+    variant_col = f"text ({cfg.removal_attribute} stripped 100%)"
+    index = _range_index(len(df))
+    measurement_map = {
+        ("rate", "original", "text"): pd.DataFrame(
+            {
+                "bias_score": [0.0, 5.0, 10.0, 20.0],
+            },
+            index=index,
+        ),
+        ("rate", "stripped_100pct", variant_col): pd.DataFrame(
+            {
+                "bias_score": [0.0, 1.0, 2.0, 3.0],
+            },
+            index=index,
+        ),
+    }
+
+    async def fake_run_measurement(
+        self,
+        df_in: pd.DataFrame,
+        *,
+        column_name: str,
+        mode: str,
+        save_label: str,
+        attributes,
+        template_path,
+        extra_kwargs,
+        default_model,
+    ) -> pd.DataFrame:
+        key = (mode, save_label, column_name)
+        assert key in measurement_map, key
+        return measurement_map[key].copy()
+
+    monkeypatch.setattr(DebiasPipeline, "_run_measurement", fake_run_measurement)
+
+    result = asyncio.run(pipeline.run(df, "text"))
+
+    results_df = result.results
+    assert variant_col in results_df.columns
+    measurement_variant = (
+        f"{cfg.measurement_attribute} ({cfg.removal_attribute} stripped 100%)"
+    )
+    assert measurement_variant in results_df.columns
+    residual_col = "bias_score__residual_stripped_100pct"
+    debiased_col = "bias_score__debiased_stripped_100pct"
+    pdt.assert_series_equal(
+        results_df[residual_col],
+        results_df[debiased_col],
+        check_names=False,
+    )
+    assert result.metadata["config"]["removal_attribute"] == "bias_flag"
+    assert result.metadata["config"]["measurement_attribute"] == "bias_score"
