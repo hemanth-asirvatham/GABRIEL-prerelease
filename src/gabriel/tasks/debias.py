@@ -147,7 +147,8 @@ class DebiasConfig:
     """Configuration for :class:`DebiasPipeline`."""
 
     mode: MeasurementMode = "rate"
-    signal_attribute: str = ""
+    measurement_attribute: Optional[str] = None
+    removal_attribute: Optional[str] = None
     attributes: Dict[str, str] = field(default_factory=dict)
     signal_dictionary: Dict[str, str] = field(default_factory=dict)
     removal_method: RemovalMethod = "codify"
@@ -197,7 +198,12 @@ class DebiasPipeline:
 
     # ------------------------------------------------------------------
     def _default_run_name(self) -> str:
-        cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.cfg.signal_attribute or "signal")
+        base_name = (
+            self.cfg.measurement_attribute
+            or self.cfg.removal_attribute
+            or "signal"
+        )
+        cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", base_name)
         prefix = "debias"
         cleaned = cleaned.strip("_")
         if cleaned:
@@ -209,27 +215,54 @@ class DebiasPipeline:
         valid_modes = {"rate", "classify", "extract", "rank"}
         if self.cfg.mode not in valid_modes:
             raise ValueError("mode must be one of {'rate', 'classify', 'extract', 'rank'}")
-        if not self.cfg.signal_attribute:
-            raise ValueError("signal_attribute must be provided")
-
         self.cfg.attributes = dict(self.cfg.attributes or {})
         if not self.cfg.attributes:
             raise ValueError("attributes must be supplied for the selected mode")
-        if self.cfg.signal_attribute not in self.cfg.attributes:
-            raise ValueError("signal_attribute must be a key in attributes")
 
         self.cfg.signal_dictionary = dict(self.cfg.signal_dictionary or {})
         if not self.cfg.signal_dictionary:
             raise ValueError("signal_dictionary must describe the signal to remove")
+        measurement_attr = self.cfg.measurement_attribute
+        if measurement_attr is None:
+            measurement_attr = next(iter(self.cfg.attributes))
+            if self.cfg.verbose:
+                print(
+                    "[Debias] measurement_attribute not provided; "
+                    f"defaulting to '{measurement_attr}'."
+                )
+        elif measurement_attr not in self.cfg.attributes:
+            raise ValueError(
+                f"Measurement attribute '{measurement_attr}' must be a key in attributes"
+            )
+        self.cfg.measurement_attribute = measurement_attr
+
+        removal_attr = self.cfg.removal_attribute
+        if removal_attr is None:
+            if measurement_attr in self.cfg.signal_dictionary:
+                removal_attr = measurement_attr
+                if self.cfg.verbose:
+                    print(
+                        "[Debias] removal_attribute not provided; "
+                        f"defaulting to measurement attribute '{removal_attr}'."
+                    )
+            else:
+                removal_attr = next(iter(self.cfg.signal_dictionary))
+                if self.cfg.verbose:
+                    print(
+                        "[Debias] removal_attribute not provided; "
+                        f"defaulting to '{removal_attr}'."
+                    )
+        elif removal_attr not in self.cfg.signal_dictionary:
+            raise ValueError(
+                f"Removal attribute '{removal_attr}' must be a key in signal_dictionary"
+            )
+        self.cfg.removal_attribute = removal_attr
         if self.cfg.removal_method not in {"codify", "paraphrase"}:
             raise ValueError("removal_method must be 'codify' or 'paraphrase'")
 
         if self.cfg.categories_to_strip is None:
             if self.cfg.removal_method == "codify":
-                if self.cfg.signal_attribute in self.cfg.signal_dictionary:
-                    self.cfg.categories_to_strip = [self.cfg.signal_attribute]
-                else:
-                    self.cfg.categories_to_strip = list(self.cfg.signal_dictionary.keys())
+                self.cfg.categories_to_strip = [self.cfg.removal_attribute]
             else:
                 self.cfg.categories_to_strip = []
         else:
@@ -329,12 +362,14 @@ class DebiasPipeline:
 
         regression_info: Dict[str, DebiasRegressionResult] = {}
         for key, info in variant_info.items():
-            stripped_column = info["measurement_columns"].get(self.cfg.signal_attribute)
+            stripped_column = info["measurement_columns"].get(
+                self.cfg.measurement_attribute
+            )
             if not stripped_column:
                 continue
             summary = self._run_regression(
                 df_master,
-                original_column=self.cfg.signal_attribute,
+                original_column=self.cfg.measurement_attribute,
                 stripped_column=stripped_column,
                 variant_key=key,
                 display_name=info["display"],
@@ -494,7 +529,7 @@ class DebiasPipeline:
             if pct <= 0:
                 continue
             key = f"stripped_{pct:03d}pct"
-            display = f"{self.cfg.signal_attribute} stripped {pct}%"
+            display = f"{self.cfg.removal_attribute} stripped {pct}%"
             new_col = f"{column_name} ({display})"
             df[new_col] = [
                 self._strip_passages(
@@ -521,8 +556,11 @@ class DebiasPipeline:
         kwargs = dict(self.cfg.removal_kwargs or {})
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, "paraphrase"))
         os.makedirs(save_dir, exist_ok=True)
-        revised_name = f"{column_name} ({self.cfg.signal_attribute} stripped paraphrase)"
+        revised_name = f"{column_name} ({self.cfg.removal_attribute} stripped paraphrase)"
         instructions = kwargs.pop("instructions", None) or self._build_paraphrase_instructions()
+        response_kwargs: Dict[str, Any] = {}
+        if "completion_max_rounds" in kwargs:
+            response_kwargs["completion_max_rounds"] = kwargs.pop("completion_max_rounds")
         cfg = ParaphraseConfig(
             instructions=instructions,
             revised_column_name=revised_name,
@@ -533,12 +571,12 @@ class DebiasPipeline:
             **kwargs,
         )
         runner = Paraphrase(cfg)
-        paraphrased = await runner.run(df.reset_index(), column_name)
+        paraphrased = await runner.run(df.reset_index(), column_name, **response_kwargs)
         df[revised_name] = paraphrased[revised_name].reindex(df.index)
         return {
             "paraphrase": {
                 "text_column": revised_name,
-                "display": f"{self.cfg.signal_attribute} stripped (paraphrase)",
+                "display": f"{self.cfg.removal_attribute} stripped (paraphrase)",
                 "strip_percentage": None,
             }
         }
@@ -626,9 +664,10 @@ class DebiasPipeline:
         strip_percentage: Optional[int],
     ) -> DebiasRegressionResult:
         cols = [original_column, stripped_column]
+        measurement_attr = self.cfg.measurement_attribute
         rename_map = {
-            original_column: f"{self.cfg.signal_attribute} (original)",
-            stripped_column: f"{self.cfg.signal_attribute} ({display_name})",
+            original_column: f"{measurement_attr} (original)",
+            stripped_column: f"{measurement_attr} ({display_name})",
         }
         reg_df = df[cols].apply(pd.to_numeric, errors="coerce")
         reg_df = reg_df.dropna()
@@ -677,10 +716,10 @@ class DebiasPipeline:
         resid = pd.Series(
             reg_res["resid"],
             index=reg_df.index,
-            name=f"{self.cfg.signal_attribute}__residual_{variant_key}",
+            name=f"{measurement_attr}__residual_{variant_key}",
         )
         df.loc[resid.index, resid.name] = resid
-        df.loc[resid.index, f"{self.cfg.signal_attribute}__debiased_{variant_key}"] = resid
+        df.loc[resid.index, f"{measurement_attr}__debiased_{variant_key}"] = resid
         correlation = float(reg_df[original_column].corr(reg_df[stripped_column]))
         summary = DebiasRegressionResult(
             variant=variant_key,
