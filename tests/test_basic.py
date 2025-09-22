@@ -2,6 +2,7 @@ import asyncio
 import pandas as pd
 import numpy as np
 import openai
+import pytest
 
 from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils import openai_utils, safest_json
@@ -174,6 +175,76 @@ def test_get_all_responses_audio_dummy(tmp_path):
         )
     )
     assert len(df) == 1
+
+
+def test_get_all_responses_custom_callable(tmp_path):
+    calls = []
+
+    async def custom(prompt: str, *, n: int) -> list:
+        calls.append((prompt, n))
+        return [f"CUSTOM::{prompt}"]
+
+    df = asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["x", "y"],
+            identifiers=["1", "2"],
+            save_path=str(tmp_path / "custom.csv"),
+            response_fn=custom,
+            reset_files=True,
+        )
+    )
+    assert sorted(calls) == [("x", 1), ("y", 1)]
+    df = df.sort_values("Identifier").reset_index(drop=True)
+    assert df.loc[0, "Response"] == ["CUSTOM::x"]
+    assert df.loc[1, "Response"] == ["CUSTOM::y"]
+    assert df["Successful"].all()
+    assert df["Time Taken"].isna().all()
+
+
+def test_get_all_responses_custom_usage(tmp_path):
+    recorded_kwargs = []
+
+    async def custom(prompt: str, **kwargs) -> tuple:
+        recorded_kwargs.append(kwargs)
+        return (
+            [f"ANS:{prompt}"],
+            0.5,
+            [
+                {
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 7,
+                        "output_tokens_details": {"reasoning_tokens": 2},
+                    },
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "summary": [{"text": f"summary-{prompt}"}],
+                        }
+                    ],
+                }
+            ],
+        )
+
+    df = asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["z"],
+            identifiers=["id"],
+            save_path=str(tmp_path / "custom_usage.csv"),
+            response_fn=custom,
+            reasoning_summary="short",
+            reset_files=True,
+        )
+    )
+    assert recorded_kwargs and recorded_kwargs[0].get("return_raw") is True
+    row = df.iloc[0]
+    assert row["Response"] == ["ANS:z"]
+    assert row["Input Tokens"] == 10
+    assert row["Output Tokens"] == 7
+    assert row["Reasoning Tokens"] == 2
+    assert row["Reasoning Summary"] == "summary-z"
+    assert bool(row["Successful"])
+    assert row["Time Taken"] == pytest.approx(0.5)
 
 
 def test_get_all_embeddings_dummy(tmp_path):
