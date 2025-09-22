@@ -38,14 +38,17 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
+import inspect
 import json
 import os
 from pathlib import Path
 import random
 import tempfile
 import time
-from typing import Any, Deque, Dict, List, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict, deque
+from collections.abc import Iterable
 import pickle
 
 from gabriel.utils.logging import get_logger, set_log_level
@@ -450,7 +453,7 @@ def _print_usage_overview(
     print(f"Total input words: {sum(len(str(p).split()) for p in prompts):,}")
     # Fetch fresh headers if not supplied.  Pass the model and base_url so the
     # helper knows which endpoint to probe when performing the dummy call.
-    rl = rate_headers or _get_rate_limit_headers(model, base_url=base_url)
+    rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(model, base_url=base_url)
     # Determine whether the headers include any meaningful limit values.  Some
     # endpoints (or API tiers) may omit rate‑limit headers, or return zero
     # values, which should be treated as unknown.
@@ -651,7 +654,7 @@ def _decide_default_max_output_tokens(
     # When rate headers are not supplied, fall back to fetching them using
     # the default model.  Passing a model ensures the helper uses the
     # minimal chat call rather than the unsupported ``/v1/models`` endpoint.
-    rl = rate_headers or _get_rate_limit_headers(base_url=base_url)
+    rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(base_url=base_url)
     if rl and rl.get("remaining_tokens"):
         try:
             rem = int(float(rl["remaining_tokens"]))
@@ -1416,6 +1419,79 @@ async def get_all_embeddings(
     return embeddings
 
 
+def _coerce_to_list(value: Any) -> List[Any]:
+    """Return ``value`` as a list while preserving common container types."""
+
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+        return list(value)
+    return [value]
+
+
+def _safe_get(obj: Any, attr: str, default: Any = None) -> Any:
+    """Retrieve ``attr`` from ``obj`` supporting dicts and objects uniformly."""
+
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(attr, default)
+    return getattr(obj, attr, default)
+
+
+def _normalize_response_result(result: Any) -> Tuple[List[Any], Optional[float], List[Any]]:
+    """Normalize outputs from ``response_fn`` into ``(responses, duration, raw)``."""
+
+    responses_obj: Any = None
+    duration: Optional[float] = None
+    raw_obj: Any = []
+    if isinstance(result, dict):
+        responses_obj = result.get("responses") or result.get("response")
+        duration = result.get("duration")
+        raw_obj = result.get("raw", result.get("raw_responses", []))
+    elif isinstance(result, tuple):
+        seq = list(result)
+        responses_obj = seq[0] if seq else None
+        if len(seq) >= 2:
+            candidate = seq[1]
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+                duration = float(candidate)
+                tail = seq[2:]
+                if len(tail) == 1:
+                    raw_obj = tail[0]
+                elif tail:
+                    raw_obj = tail
+            elif candidate is None:
+                duration = None
+                tail = seq[2:]
+                if len(tail) == 1:
+                    raw_obj = tail[0]
+                elif tail:
+                    raw_obj = tail
+            else:
+                raw_obj = seq[1:]
+    else:
+        responses_obj = result
+    if responses_obj is None:
+        responses_obj = [] if isinstance(result, tuple) else result
+    responses_list = _coerce_to_list(responses_obj)
+    raw_list = _coerce_to_list(raw_obj)
+    if duration is not None:
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            duration = None
+    if not raw_list or (len(raw_list) == 1 and raw_list[0] is None):
+        raw_list = []
+    return responses_list, duration, raw_list
+
+
 async def get_all_responses(
     prompts: List[str],
     identifiers: Optional[List[str]] = None,
@@ -1438,6 +1514,7 @@ async def get_all_responses(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     use_dummy: bool = False,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
     base_url: Optional[str] = None,
     print_example_prompt: bool = True,
     save_path: str = "responses.csv",
@@ -1512,16 +1589,55 @@ async def get_all_responses(
     connections are retried with exponential backoff so long‑running jobs can
     resume automatically once connectivity returns.
 
+    For organisations that route prompts through an internal LLM gateway the
+    ``response_fn`` parameter exposes a lightweight dependency‑injection
+    point.  When provided, the callable is awaited for every prompt instead of
+    :func:`get_response`.  Only the keyword arguments accepted by the callable
+    are forwarded, allowing simple signatures (e.g. ``async def fn(prompt)``)
+    while still supporting advanced features for fully compatible adapters.
+    The callable may return a list of responses, a ``(responses, duration)``
+    pair, or the traditional ``(responses, duration, raw)`` tuple.  Missing
+    duration or raw values simply disable the associated timeout and
+    token‑tracking heuristics, keeping the worker resilient to alternative
+    backends without forcing callers to mirror the OpenAI API exactly.
+
     The function remains backwards compatible with the original version, except
     that the parameter ``max_tokens`` has been renamed to ``max_output_tokens``.
     When both are provided, ``max_output_tokens`` takes precedence.  The former
     ``use_web_search`` flag is still accepted but ``web_search`` should be used
     going forward.
 """
-    if not use_dummy:
+    response_callable = response_fn or get_response
+    underlying_callable = response_callable
+    if isinstance(underlying_callable, functools.partial):
+        underlying_callable = underlying_callable.func  # type: ignore[attr-defined]
+    try:
+        underlying_callable = inspect.unwrap(underlying_callable)  # type: ignore[arg-type]
+    except Exception:
+        pass
+    using_custom_response_fn = response_fn is not None and underlying_callable is not get_response
+    if not use_dummy and not using_custom_response_fn:
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
+    response_param_names: Set[str] = set()
+    response_accepts_var_kw = False
+    response_accepts_return_raw = False
+    try:
+        sig = inspect.signature(response_callable)
+    except (TypeError, ValueError):
+        response_accepts_var_kw = True
+        response_accepts_return_raw = True
+    else:
+        for name, param in sig.parameters.items():
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                response_accepts_var_kw = True
+                continue
+            if name in {"self", "cls", "prompt"}:
+                continue
+            if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                response_param_names.add(name)
+        response_accepts_return_raw = response_accepts_var_kw or ("return_raw" in response_param_names)
     if status_report_interval is not None:
         try:
             status_report_interval = float(status_report_interval)
@@ -1544,6 +1660,12 @@ async def get_all_responses(
         logger.warning(
             "`use_web_search` is deprecated; please use `web_search` instead."
         )
+
+    if using_custom_response_fn and use_batch:
+        logger.warning(
+            "Custom response_fn cannot be combined with batch mode; falling back to per-request execution."
+        )
+        use_batch = False
 
     if get_response_kwargs.get("web_search", web_search) and get_response_kwargs.get(
         "json_mode", json_mode
@@ -1580,9 +1702,17 @@ async def get_all_responses(
     # Retrieve rate‑limit headers for the chosen model.  Passing the model
     # ensures the helper performs a dummy call with the correct model
     # rather than probing the unsupported ``/v1/models`` endpoint.
-    rate_headers = _get_rate_limit_headers(model, base_url=base_url)
+    rate_headers = (
+        _get_rate_limit_headers(model, base_url=base_url)
+        if not using_custom_response_fn
+        else {}
+    )
     user_cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
-    cutoff = _decide_default_max_output_tokens(user_cutoff, rate_headers, base_url=base_url)
+    cutoff = (
+        _decide_default_max_output_tokens(user_cutoff, rate_headers, base_url=base_url)
+        if not using_custom_response_fn
+        else user_cutoff
+    )
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     initial_estimated_output_tokens = (
         cutoff if cutoff is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
@@ -1692,17 +1822,27 @@ async def get_all_responses(
     if print_example_prompt and todo_pairs:
         # Build prompt list for cost estimate
         prompt_list = [p for p, _ in todo_pairs]
-        _print_usage_overview(
-            prompts=prompt_list,
-            n=n,
-            max_output_tokens=cutoff,
-            model=model,
-            use_batch=use_batch,
-            n_parallels=requested_n_parallels,
-            verbose=verbose,
-            rate_headers=rate_headers,
-            base_url=base_url,
-        )
+        if not using_custom_response_fn:
+            _print_usage_overview(
+                prompts=prompt_list,
+                n=n,
+                max_output_tokens=cutoff,
+                model=model,
+                use_batch=use_batch,
+                n_parallels=requested_n_parallels,
+                verbose=verbose,
+                rate_headers=rate_headers,
+                base_url=base_url,
+            )
+        elif verbose:
+            print(
+                "\n===== Job summary ====="
+                f"\nNumber of prompts: {len(prompt_list)}"
+                f"\nParallel workers (requested): {requested_n_parallels}"
+            )
+            logger.info(
+                "Skipping OpenAI usage overview because a custom response_fn was supplied."
+            )
         example_prompt, _ = todo_pairs[0]
         logger.warning(f"Example prompt: {example_prompt}")
     # Dynamically adjust the maximum number of parallel workers based on rate
@@ -2281,6 +2421,37 @@ async def get_all_responses(
     limiter_wait_ratio_threshold = 0.25
     limiter_wait_duration_threshold = 0.5
 
+    def _aggregate_usage(raw_items: List[Any]) -> Tuple[int, int, int]:
+        total_in = total_out = total_reason = 0
+        for item in raw_items:
+            usage = _safe_get(item, "usage")
+            if usage is None:
+                continue
+            input_tokens = _safe_get(usage, "input_tokens")
+            if input_tokens in (None, 0):
+                input_tokens = _safe_get(usage, "prompt_tokens")
+            output_tokens = _safe_get(usage, "output_tokens")
+            if output_tokens in (None, 0):
+                output_tokens = _safe_get(usage, "completion_tokens")
+            details = _safe_get(usage, "output_tokens_details")
+            if isinstance(details, dict):
+                reasoning_tokens = details.get("reasoning_tokens") or 0
+            else:
+                reasoning_tokens = _safe_get(details, "reasoning_tokens", 0)
+            try:
+                total_in += int(input_tokens or 0)
+            except Exception:
+                pass
+            try:
+                total_out += int(output_tokens or 0)
+            except Exception:
+                pass
+            try:
+                total_reason += int(reasoning_tokens or 0)
+            except Exception:
+                pass
+        return total_in, total_out, total_reason
+
     def emit_parallelization_status(reason: str, *, force: bool = False) -> None:
         """Print and log a snapshot of the current worker utilisation."""
 
@@ -2450,56 +2621,71 @@ async def get_all_responses(
                 call_timeout = None if math.isinf(base_timeout) else base_timeout * multiplier
                 if call_timeout is not None and dynamic_timeout and not math.isinf(max_timeout_val):
                     call_timeout = min(call_timeout, max_timeout_val)
-                task = asyncio.create_task(
-                    get_response(
-                        prompt,
-                        n=n,
-                        timeout=call_timeout,
-                        use_dummy=use_dummy,
-                        images=prompt_images.get(str(ident)) if prompt_images else None,
-                        audio=prompt_audio.get(str(ident)) if prompt_audio else None,
-                        return_raw=True,
-                        **get_response_kwargs,
-                    )
+                images_payload = prompt_images.get(str(ident)) if prompt_images else None
+                audio_payload = prompt_audio.get(str(ident)) if prompt_audio else None
+                call_kwargs = dict(get_response_kwargs)
+                if images_payload is not None:
+                    call_kwargs["images"] = images_payload
+                if audio_payload is not None:
+                    call_kwargs["audio"] = audio_payload
+                call_kwargs.update(
+                    {
+                        "n": n,
+                        "timeout": call_timeout,
+                        "use_dummy": use_dummy,
+                    }
                 )
-                inflight[ident] = (start, task, call_timeout if call_timeout is not None else float("inf"))
+                if response_accepts_return_raw:
+                    call_kwargs.setdefault("return_raw", True)
+                else:
+                    call_kwargs.pop("return_raw", None)
+                if not response_accepts_var_kw:
+                    call_kwargs = {
+                        k: v for k, v in call_kwargs.items() if k in response_param_names
+                    }
+                task = asyncio.create_task(response_callable(prompt, **call_kwargs))
+                inflight[ident] = (
+                    start,
+                    task,
+                    call_timeout if call_timeout is not None else float("inf"),
+                )
                 try:
-                    resps, t, raw = await task
+                    result = await task
                 except asyncio.CancelledError:
                     inflight.pop(ident, None)
                     raise asyncio.TimeoutError(
                         f"API call timed out after {call_timeout} s"
                     )
                 inflight.pop(ident, None)
-                success_times.append(t)
+                resps, duration, raw = _normalize_response_result(result)
+                if duration is not None:
+                    success_times.append(duration)
                 await adjust_timeout()
                 limiter_wait_ratio = 0.0
-                if limiter_wait_time > 0:
-                    if t > 0:
-                        limiter_wait_ratio = min(1.0, limiter_wait_time / max(t, 1e-6))
-                    else:
-                        limiter_wait_ratio = 1.0
+                if (
+                    limiter_wait_time > 0
+                    and duration is not None
+                    and duration > 0
+                ):
+                    limiter_wait_ratio = min(
+                        1.0, limiter_wait_time / max(duration, 1e-6)
+                    )
                 limiter_wait_durations.append(limiter_wait_time)
                 limiter_wait_ratios.append(limiter_wait_ratio)
-                # collect usage
-                total_input = sum(getattr(r.usage, "input_tokens", 0) for r in raw)
-                total_output = sum(getattr(r.usage, "output_tokens", 0) for r in raw)
-                total_reasoning = sum(
-                    getattr(getattr(r.usage, "output_tokens_details", {}), "reasoning_tokens", 0)
-                    for r in raw
-                )
+                total_input, total_output, total_reasoning = _aggregate_usage(raw)
                 summary_text = None
                 try:
                     for r in raw:
-                        out_items = getattr(r, "output", [])
+                        out_items = _coerce_to_list(_safe_get(r, "output", []))
                         if not out_items:
                             continue
                         for item in out_items:
-                            if getattr(item, "type", None) == "reasoning":
-                                summary_list = getattr(item, "summary", [])
+                            if _safe_get(item, "type") == "reasoning":
+                                summary_list = _coerce_to_list(
+                                    _safe_get(item, "summary", [])
+                                )
                                 if summary_list:
-                                    first = summary_list[0]
-                                    txt = getattr(first, "text", None)
+                                    txt = _safe_get(summary_list[0], "text")
                                     if isinstance(txt, str):
                                         summary_text = txt
                                         break
@@ -2514,8 +2700,12 @@ async def get_all_responses(
                     avg_in = statistics.mean(u[0] for u in usage_samples)
                     avg_out = statistics.mean(u[1] for u in usage_samples)
                     avg_reason = statistics.mean(u[2] for u in usage_samples)
-                    estimated_output_tokens = avg_out + avg_reason
-                    tokens_per_call_est = (avg_in + estimated_output_tokens) * max(1, n)
+                    observed_output = avg_out + avg_reason
+                    if observed_output > 0:
+                        estimated_output_tokens = observed_output
+                    tokens_per_call_est = (
+                        avg_in + max(estimated_output_tokens, observed_output)
+                    ) * max(1, n)
                     token_limited = int(
                         max(1, allowed_tok_pm // max(1, tokens_per_call_est))
                     )
@@ -2540,10 +2730,14 @@ async def get_all_responses(
                                 avg_ratio = 0.0
                                 avg_wait = 0.0
                             high_ratio_events = sum(
-                                1 for r in limiter_wait_ratios if r >= limiter_wait_ratio_threshold
+                                1
+                                for r in limiter_wait_ratios
+                                if r >= limiter_wait_ratio_threshold
                             )
                             high_wait_events = sum(
-                                1 for d in limiter_wait_durations if d >= limiter_wait_duration_threshold
+                                1
+                                for d in limiter_wait_durations
+                                if d >= limiter_wait_duration_threshold
                             )
                             limiter_pressure = (
                                 avg_ratio >= limiter_wait_ratio_threshold
@@ -2576,7 +2770,6 @@ async def get_all_responses(
                         emit_parallelization_status(reason, force=True)
                     else:
                         concurrency_cap = new_cap
-                # Check for empty outputs
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
                         logger.warning(
@@ -2586,7 +2779,7 @@ async def get_all_responses(
                     row = {
                         "Identifier": ident,
                         "Response": resps,
-                        "Time Taken": t,
+                        "Time Taken": duration,
                         "Input Tokens": total_input,
                         "Reasoning Tokens": total_reasoning,
                         "Output Tokens": total_output,
