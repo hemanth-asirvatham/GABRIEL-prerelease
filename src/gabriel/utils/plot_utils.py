@@ -346,119 +346,145 @@ from matplotlib import cm
 
 def line_plot(
     df,
-    x,                                  # time/x column
-    y=None,                              # numeric col (long); if None with `by`, counts per (x, by)
-    by=None,                             # category col (long)  XOR with `series`
-    series=None,                         # list of columns (wide)
-    include=None, exclude=None,          # filter groups (long)
-    top_k=None,                          # keep top-k groups by overall weight
-    mode='value',                        # 'value' (raw/agg) or 'proportion' (share within each x)
-    agg='mean',                          # 'mean','median','std','var','cv','se','sum','count'
-    smoothing_window=None,               # int (rolling mean)
-    smoothing_method='rolling',          # 'rolling' or 'spline'
-    spline_k=3,
-    interpolation_points=None,
+    x,                                  # x-axis column (year, date, etc.)
+    y=None,                             # numeric column (long); if None with `by`, counts per (x, by)
+    by=None,                            # LONG format: category column (mutually exclusive with `series`)
+    series=None,                        # WIDE format: list/str of numeric columns to plot
+    include=None, exclude=None,         # LONG: filter groups by values in `by`
+    top_k=None,                         # keep top-k series by overall plotted weight
+    mode='value',                       # 'value' or 'proportion'
+    agg='mean',                         # aggregator for duplicates at (x, by): 'mean','median','std','var','cv','se','sum','count'
+    smoothing_window=None,              # int (rolling mean window, centered)
+    smoothing_method='rolling',         # 'rolling' or 'spline'
+    spline_k=3,                         # spline degree (if using 'spline')
+    interpolation_points=None,          # optional: upsample to N points across x-range
     # --- presentation ---
     title=None,
-    xlabel=None,                         # simple axis label override
-    ylabel=None,                         # simple axis label override
-    x_range=None, y_range=None,          # (min,max) soft clamps for view
-    xlim=None, ylim=None,                # aliases for x_range/y_range
+    xlabel=None, ylabel=None,
+    x_range=None, y_range=None,         # soft clamps for view; aliases below
+    xlim=None, ylim=None,
     dpi=400,
     font_family='monospace',
-    wrap_width=100,
+    wrap_width=96,
     grid=True,
-    linewidth=2,
-    cmap_names=None,                     # list of colormap names
-    gradient_mode='value',               # 'value' or 'linear'
-    gradient_start=0.4, gradient_end=0.7,
-    max_lines_per_plot=5,                # batch panels if too many series
-    save_path=None,                      # file or dir; batches get suffix _setN
+    linewidth=2.0,
+    cmap_names=None,                    # list of colormap names for distinct series (when no color_map)
+    gradient_mode='value',              # 'value' or 'linear' (used only if gradient=True)
+    gradient_start=0.35, gradient_end=0.75,
+    gradient=True,                      # if False, draw solid lines (respecting color_map/colors)
+    color_map=None,                     # dict: {series_name: color_hex}; overrides colormaps
+    legend_order=None,                  # list to control legend order
+    legend_loc='best',
+    alpha=1.0,
+    max_lines_per_plot=8,               # batch panels if many series
+    save_path=None,                     # file or dir; batches get suffix _setN
     show=True,
 ):
     """
-    Multi-line plots from wide or long data.
+    Multi-line plotter for *long* or *wide* data with optional proportions, aggregation, smoothing, and batching.
 
-    Two modes
-    ---------
-    - mode='value': plot values (or aggregated values) per x.
-    - mode='proportion': for long data, plot share of each category within x (value / sum over groups at same x).
-                         For wide data, shares are computed across the selected series at each x.
+    Quick recipes
+    -------------
+    LONG (group column):
+        line_plot(df, x='year', y='score', by='party', agg='mean')
+        # share within each year:
+        line_plot(df, x='year', by='party', mode='proportion')  # y=None => counts
 
-    Formats
-    -------
-    Wide:  series=[colA, colB,...]; x is your x-axis.
-    Long:  by='group_col', y optional (None => counts). Use agg to combine duplicates at (x, by).
+    WIDE (several numeric columns already):
+        line_plot(df, x='year', series=['dem_score','gop_score'])
 
-    Ranges & Labels
-    ---------------
-    - x_range=(xmin, xmax) and y_range=(ymin, ymax) limit what’s shown.
-      (aliases: xlim, ylim)
-    - xlabel / ylabel override axis labels with simple strings.
+    Key behaviors
+    -------------
+    • mode='value'     : plot values (after aggregating duplicates if long).
+    • mode='proportion': within each x, divide each series' value by total across series at that x.
+                         (Works for long and wide.)
+    • Aggregation (long): when multiple rows share (x, by), combine with `agg`.
+    • Smoothing         : centered rolling mean (or B-spline if SciPy available).
+    • Colors            : deterministic; prefer `color_map={'A':'#...', 'B':'#...'}` to pin exact hues.
+                          If not provided, falls back to colormaps in `cmap_names`.
+    • Batching          : if many series, panels are split into sets of `max_lines_per_plot`.
+
+    Parameters worth remembering
+    ----------------------------
+    - `legend_order=['Democrat','Republican']` for stable legend order.
+    - `gradient=False` for solid lines; `True` for aesthetic gradient lines.
+    - `top_k=...` to focus on the most important series by overall plotted mass.
     """
-    # SciPy spline (optional)
+
+    # ---- optional SciPy spline
     try:
         from scipy.interpolate import make_interp_spline
         _spline_available = True
     except Exception:
         _spline_available = False
         if smoothing_method == 'spline':
-            print("SciPy not available; falling back to rolling smoothing.")
+            print("SciPy not available; using rolling smoothing instead.")
             smoothing_method = 'rolling'
 
+    # Matplotlib basics
     plt.rcParams.update({'font.family': font_family})
     if cmap_names is None:
         cmap_names = ["Reds", "Blues", "Greens", "Purples", "Oranges", "Greys"]
 
+    # Exactly one of by / series
     if (by is None) == (series is None):
-        raise ValueError("Specify exactly one of `by` (long) or `series` (wide).")
+        raise ValueError("Specify exactly one of `by` (long) OR `series` (wide).")
 
     work = df.copy()
 
-    # ---- unify to long: (x, _series, _value) ----
+    # ---- standardize x to something plottable
+    if pd.api.types.is_datetime64_any_dtype(work[x]):
+        pass
+    else:
+        # try to coerce numeric; if that fails, leave as-is
+        try:
+            work[x] = pd.to_numeric(work[x], errors='ignore')
+        except Exception:
+            pass
+
+    # ---- represent everything as long: (x, _series, _value)
     if series is not None:
         if isinstance(series, (str, int)):
             series = [series]
         missing = [c for c in series if c not in work.columns]
         if missing:
-            raise KeyError(f"Missing series columns: {missing}")
+            raise KeyError(f"Missing `series` columns: {missing}")
         long_all = work[[x] + series].melt(id_vars=[x], var_name="_series", value_name="_value")
+
     else:
         if by not in work.columns:
             raise KeyError(f"`by` column '{by}' not found.")
+
         if include is not None:
             work = work[work[by].isin(include)]
         if exclude is not None:
             work = work[~work[by].isin(exclude)]
 
-        # choose aggregator
         agg_fns = {
             'mean':  np.mean,
             'median': np.median,
             'std':   np.std,
             'var':   np.var,
-            'cv':    lambda s: np.std(s) / (np.mean(s).item() if np.mean(s)!=0 else np.nan),
-            'se':    lambda s: np.std(s) / np.sqrt(len(s)),
+            'cv':    lambda s: np.std(s) / (np.mean(s) if np.mean(s)!=0 else np.nan),
+            'se':    lambda s: np.std(s) / np.sqrt(max(len(s),1)),
             'sum':   np.sum,
             'count': lambda s: len(s),
         }
         if agg not in agg_fns:
-            raise ValueError(f"Unsupported agg: {agg}")
+            raise ValueError(f"Unsupported agg '{agg}'.")
 
         if y is None:
-            grouped_all = (work.groupby([x, by], dropna=False)
-                               .size().rename("_value").reset_index())
+            long_all = (work.groupby([x, by], dropna=False)
+                            .size().rename("_value").reset_index())
         else:
             if y not in work.columns:
                 raise KeyError(f"`y` column '{y}' not found.")
             tmp = work.rename(columns={y: '_value'})
-            grouped_all = (tmp.groupby([x, by], dropna=False)['_value']
-                              .apply(lambda s: agg_fns[agg](s.values)).reset_index())
+            long_all = (tmp.groupby([x, by], dropna=False)['_value']
+                           .apply(lambda s: agg_fns[agg](s.values)).reset_index())
+        long_all = long_all.rename(columns={by: "_series"})
 
-        grouped_all = grouped_all.rename(columns={by: "_series"})
-        long_all = grouped_all
-
-    # ---- proportions if requested ----
+    # ---- compute plotted value
     if mode not in ('value', 'proportion'):
         raise ValueError("mode must be 'value' or 'proportion'.")
 
@@ -468,45 +494,45 @@ def line_plot(
     else:
         long_all["_plotval"] = long_all["_value"]
 
-    # top_k after computing plot values (order by total contribution)
+    # ---- select top_k series (by total plotted value)
     if top_k is not None:
-        order_tot = (long_all.groupby("_series")["_plotval"]
-                            .sum(numeric_only=True).sort_values(ascending=False))
-        keep = set(order_tot.head(int(top_k)).index)
-        long_sel = long_all[long_all["_series"].isin(keep)].copy()
-    else:
-        long_sel = long_all.copy()
+        keep = (long_all.groupby("_series")["_plotval"]
+                        .sum(numeric_only=True)
+                        .sort_values(ascending=False)
+                        .head(int(top_k)).index)
+        long_all = long_all[long_all["_series"].isin(set(keep))].copy()
 
-    # sort by average plotted value for batching
-    order_scores = (long_sel.groupby("_series")["_plotval"]
-                           .mean(numeric_only=True)
-                           .sort_values(ascending=False))
-    series_list = list(order_scores.index)
+    # ---- sort for plotting
+    long_all = long_all.sort_values([x, "_series"])
 
-    # clean/sort x
-    if pd.api.types.is_object_dtype(long_sel[x]):
-        try:
-            long_sel[x] = pd.to_numeric(long_sel[x], errors='ignore')
-        except Exception:
-            pass
-    long_sel = long_sel.sort_values([x, "_series"])
+    # ---- order series
+    series_order = legend_order if legend_order else (
+        long_all.groupby("_series")["_plotval"].mean(numeric_only=True).sort_values(ascending=False).index.tolist()
+    )
 
-    # batching
+    # ---- batching
     if max_lines_per_plot is None or max_lines_per_plot <= 0:
-        batches = [series_list]
+        batches = [series_order]
     else:
         step = int(max_lines_per_plot)
-        batches = [series_list[i:i+step] for i in range(0, len(series_list), step)]
+        batches = [series_order[i:i+step] for i in range(0, len(series_order), step)]
+
+    # ---- color resolver
+    def _series_color(s, idx):
+        if color_map and s in color_map:
+            return color_map[s]
+        # fall back to palette families by index
+        cmap = cm.get_cmap(cmap_names[idx % len(cmap_names)])
+        return cmap(0.6)
 
     figs_axes = []
 
-    # helper
     def _plot_one(batch_series, batch_idx):
-        fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
+        fig, ax = plt.subplots(figsize=(9.5, 5.2), dpi=dpi)
         global_min, global_max = float('inf'), float('-inf')
 
         for idx, s in enumerate(batch_series):
-            sdf = long_sel[long_sel["_series"] == s].sort_values(x)
+            sdf = long_all[long_all["_series"] == s].sort_values(x)
             xs = sdf[x].to_numpy()
             ys = sdf["_plotval"].to_numpy()
 
@@ -523,7 +549,6 @@ def line_plot(
                     k = max(1, min(int(spline_k), len(xs_o) - 1))
                     x_s = np.linspace(xs_o.min(), xs_o.max(),
                                       max(len(xs_o), interpolation_points or len(xs_o)))
-                    from scipy.interpolate import make_interp_spline
                     y_s = make_interp_spline(xs_o, ys_o, k=k)(x_s)
 
             if interpolation_points and (len(x_s) < interpolation_points):
@@ -535,21 +560,35 @@ def line_plot(
                 global_min = min(global_min, np.nanmin(y_s))
                 global_max = max(global_max, np.nanmax(y_s))
 
-            # gradient line
-            pts = np.array([x_s, y_s]).T.reshape(-1, 1, 2)
-            segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
-            cmap = cm.get_cmap(cmap_names[idx % len(cmap_names)])
-            if gradient_mode == 'value' and len(y_s) > 1:
-                ymin, ymax = np.nanmin(y_s), np.nanmax(y_s)
-                denom = max((ymax - ymin), 1e-12)
-                norm = (y_s - ymin) / denom
-                seg_vals = (norm[:-1] + norm[1:]) / 2
-                seg_vals = gradient_start + seg_vals * (gradient_end - gradient_start)
-                colors = cmap(seg_vals)
+            color = _series_color(s, idx)
+
+            if gradient:
+                # gradient along the line
+                pts = np.array([x_s, y_s]).T.reshape(-1, 1, 2)
+                segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
+                if isinstance(color, str):
+                    # solid color requested but gradient=True → use a subtle light→full alpha ramp
+                    from matplotlib.colors import to_rgba
+                    base = np.array(to_rgba(color))
+                    alphas = np.linspace(gradient_start, gradient_end, max(len(segs), 2))
+                    cols = np.tile(base, (len(segs), 1))
+                    cols[:, -1] = alphas
+                else:
+                    # use colormap-driven gradient
+                    cmap = cm.get_cmap(cmap_names[idx % len(cmap_names)])
+                    if gradient_mode == 'value' and len(y_s) > 1:
+                        ymin, ymax = np.nanmin(y_s), np.nanmax(y_s)
+                        denom = max((ymax - ymin), 1e-12)
+                        norm = (y_s - ymin) / denom
+                        seg_vals = (norm[:-1] + norm[1:]) / 2
+                        seg_vals = gradient_start + seg_vals * (gradient_end - gradient_start)
+                        cols = cmap(seg_vals)
+                    else:
+                        cols = cmap(np.linspace(gradient_start, gradient_end, max(len(segs), 2)))
+                lc = LineCollection(segs, colors=cols, linewidth=linewidth, alpha=alpha, label=str(s))
+                ax.add_collection(lc)
             else:
-                colors = cmap(np.linspace(gradient_start, gradient_end, max(len(segs), 2)))
-            lc = LineCollection(segs, colors=colors, linewidth=linewidth, label=str(s))
-            ax.add_collection(lc)
+                ax.plot(x_s, y_s, linewidth=linewidth, alpha=alpha, label=str(s), color=color)
 
         # axis limits (data-driven, then user overrides)
         if not np.isfinite(global_min) or not np.isfinite(global_max):
@@ -557,16 +596,14 @@ def line_plot(
         if global_max == global_min:
             pad = 1.0 if global_max == 0 else 0.05 * abs(global_max)
             global_min, global_max = global_min - pad, global_max + pad
-        ymin = global_min - 0.05 * (global_max - global_min)
-        ymax = global_max + 0.05 * (global_max - global_min)
 
-        # apply x/y ranges if provided
         xr = xlim if xlim is not None else x_range
         yr = ylim if ylim is not None else y_range
         if xr is None:
-            xr = (pd.Series(long_sel[x]).min(), pd.Series(long_sel[x]).max())
+            xr = (pd.Series(long_all[x]).min(), pd.Series(long_all[x]).max())
         if yr is None:
-            yr = (ymin, ymax)
+            span = (global_max - global_min)
+            yr = (global_min - 0.05*span, global_max + 0.05*span)
 
         ax.set_xlim(xr[0], xr[1])
         ax.set_ylim(yr[0], yr[1])
@@ -574,19 +611,27 @@ def line_plot(
         if grid:
             ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
         else:
-            for sp in ['top', 'right']:
+            for sp in ['top','right']:
                 ax.spines[sp].set_visible(False)
 
-        # labels: simple by default
+        # labels & legend
         ttl = title or "line plot"
         if len(batches) > 1:
             ttl = f"{ttl} (set {batch_idx+1}/{len(batches)})"
         ax.set_title(textwrap.fill(ttl, width=wrap_width))
         ax.set_xlabel(xlabel if xlabel is not None else str(x))
-        # default ylabel: simple; no mode-jargon
         default_ylabel = "share" if mode == 'proportion' else (agg if by is not None else "value")
         ax.set_ylabel(ylabel if ylabel is not None else default_ylabel)
-        ax.legend(loc='best', ncol=1)
+
+        # legend in requested order
+        handles, labels = ax.get_legend_handles_labels()
+        if legend_order:
+            order_index = {lbl:i for i,lbl in enumerate(labels)}
+            order = [order_index[lbl] for lbl in legend_order if lbl in order_index]
+            handles = [handles[i] for i in order] + [h for j,h in enumerate(handles) if j not in order]
+            labels  = [labels[i] for i in order]  + [l for j,l in enumerate(labels) if j not in order]
+        ax.legend(handles, labels, loc=legend_loc, ncol=1, frameon=True)
+
         plt.tight_layout()
 
         # save
