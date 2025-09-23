@@ -12,7 +12,7 @@ This module refines the original plotting utilities to provide:
 
 The functions mirror the earlier API but with cleaner parameter names
 and additional features.  For Python 3.12 and SciPy 1.16+, use
-``statsmodels>=0.14.5`` to avoid import errors【684365170165574†L26-L32】.
+``statsmodels>=0.14.5`` to avoid import errors.
 """
 
 from __future__ import annotations
