@@ -1573,7 +1573,6 @@ async def get_all_responses(
     tools: Optional[List[dict]] = None,
     tool_choice: Optional[dict] = None,
     web_search: Optional[bool] = None,
-    use_web_search: Optional[bool] = None,
     web_search_filters: Optional[Dict[str, Any]] = None,
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
@@ -1721,9 +1720,10 @@ async def get_all_responses(
     # ``use_web_search`` was the original parameter name; ``web_search`` is the
     # preferred modern spelling.  If both are supplied we favour ``web_search``
     # but emit a warning for awareness.
-    if web_search is None:
-        web_search = bool(use_web_search)
-    elif use_web_search is not None and use_web_search != web_search:
+    legacy_use_web_search = get_response_kwargs.pop("use_web_search", None)
+    if web_search is None and legacy_use_web_search is not None:
+        web_search = bool(legacy_use_web_search)
+    elif legacy_use_web_search is not None and bool(legacy_use_web_search) != web_search:
         logger.warning(
             "`use_web_search` is deprecated; please use `web_search` instead."
         )

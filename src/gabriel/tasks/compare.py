@@ -159,7 +159,7 @@ class Compare:
 
         csv_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
 
-        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        kwargs.setdefault("web_search", self.cfg.modality == "web")
 
         df_resp_all = await get_all_responses(
             prompts=prompts,

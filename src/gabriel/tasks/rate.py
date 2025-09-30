@@ -187,7 +187,7 @@ class Rate:
             except Exception:
                 pass
 
-        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        kwargs.setdefault("web_search", self.cfg.modality == "web")
 
         if not isinstance(self.cfg.n_runs, int) or self.cfg.n_runs < 1:
             raise ValueError("n_runs must be an integer >= 1")
