@@ -665,6 +665,46 @@ def _decide_default_max_output_tokens(
     return None
 
 
+def _normalise_web_search_filters(
+    filters: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Convert a user-supplied mapping to the web-search filter schema.
+
+    ``filters`` may contain an ``"allowed_domains"`` list and/or keys
+    describing the user's location (``city``, ``country``, ``region``,
+    ``timezone`` and ``type``).  Only truthy values are propagated to the
+    resulting dictionary; everything else is dropped so the payload remains
+    compact.  The Responses API expects allowed domains under ``filters`` and
+    location hints under ``user_location``; this helper emits that shape.
+    """
+
+    if not filters:
+        return {}
+
+    result: Dict[str, Any] = {}
+
+    allowed_domains = filters.get("allowed_domains")
+    if allowed_domains:
+        if isinstance(allowed_domains, (str, bytes)) or not isinstance(allowed_domains, Iterable):
+            raise TypeError(
+                "web_search_filters['allowed_domains'] must be an iterable of domain strings"
+            )
+        cleaned = [str(d) for d in allowed_domains if d]
+        if cleaned:
+            result["filters"] = {"allowed_domains": cleaned}
+
+    location_keys = ("city", "country", "region", "timezone", "type")
+    location = {
+        key: value
+        for key, value in ((k, filters.get(k)) for k in location_keys)
+        if value
+    }
+    if location:
+        result["user_location"] = location
+
+    return result
+
+
 def _build_params(
     *,
     model: str,
@@ -675,6 +715,7 @@ def _build_params(
     tools: Optional[List[dict]] = None,
     tool_choice: Optional[dict] = None,
     web_search: bool = False,
+    web_search_filters: Optional[Dict[str, Any]] = None,
     search_context_size: str = "medium",
     json_mode: bool = False,
     expected_schema: Optional[Dict[str, Any]] = None,
@@ -710,6 +751,12 @@ def _build_params(
         Optional tool specifications following the Responses API schema.
     web_search:
         When ``True`` a built-in web search tool is appended to the tool list.
+    web_search_filters:
+        Optional mapping with keys ``allowed_domains`` and/or any of
+        ``city``, ``country``, ``region``, ``timezone`` and ``type``.
+        Allowed domains are placed under ``filters.allowed_domains`` and
+        location hints under ``user_location`` to match the Responses API
+        schema.  Keys with falsey values are ignored.
     search_context_size:
         Size of the search context when ``web_search`` is enabled.
     json_mode:
@@ -743,9 +790,16 @@ def _build_params(
         )
     all_tools = list(tools) if tools else []
     if web_search:
-        all_tools.append(
-            {"type": "web_search_preview", "search_context_size": search_context_size}
-        )
+        tool: Dict[str, Any] = {"type": "web_search", "search_context_size": search_context_size}
+        filters = _normalise_web_search_filters(web_search_filters)
+        if filters:
+            domains = filters.get("filters")
+            if domains:
+                tool["filters"] = domains
+            user_location = filters.get("user_location")
+            if user_location:
+                tool["user_location"] = user_location
+        all_tools.append(tool)
     if all_tools:
         params["tools"] = all_tools
     if tool_choice is not None:
@@ -787,6 +841,7 @@ async def get_response(
     tools: Optional[List[dict]] = None,
     tool_choice: Optional[dict] = None,
     web_search: bool = False,
+    web_search_filters: Optional[Dict[str, Any]] = None,
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
@@ -838,6 +893,10 @@ async def get_response(
         Optional tool specifications to pass through to the API.
     web_search, search_context_size:
         Enable and configure the built-in web-search tool.
+    web_search_filters:
+        Optional mapping with ``allowed_domains`` and/or user location hints
+        (``city``, ``country``, ``region``, ``timezone`` and ``type``) to guide
+        search results when ``web_search`` is enabled.
     reasoning_effort, reasoning_summary:
         Additional reasoning controls for ``o`` and ``gpt-5`` models.
     use_dummy:
@@ -867,6 +926,10 @@ async def get_response(
         ``return_raw`` is ``True`` the third element contains the raw response
         objects from the SDK.
     """
+    if web_search_filters and not web_search:
+        logger.debug(
+            "web_search_filters were supplied but web_search is disabled; ignoring filters."
+        )
     if web_search and json_mode:
         logger.warning(
             "Web search cannot be combined with JSON mode; disabling JSON mode."
@@ -996,6 +1059,7 @@ async def get_response(
             tools=tools,
             tool_choice=tool_choice,
             web_search=web_search,
+            web_search_filters=web_search_filters,
             search_context_size=search_context_size,
             json_mode=json_mode,
             expected_schema=expected_schema,
@@ -1510,6 +1574,7 @@ async def get_all_responses(
     tool_choice: Optional[dict] = None,
     web_search: Optional[bool] = None,
     use_web_search: Optional[bool] = None,
+    web_search_filters: Optional[Dict[str, Any]] = None,
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
@@ -1605,7 +1670,9 @@ async def get_all_responses(
     that the parameter ``max_tokens`` has been renamed to ``max_output_tokens``.
     When both are provided, ``max_output_tokens`` takes precedence.  The former
     ``use_web_search`` flag is still accepted but ``web_search`` should be used
-    going forward.
+    going forward.  Additional web search options (allowed domains and user
+    location hints such as ``city``, ``country``, ``region``, ``timezone`` and
+    ``type``) can be supplied together via ``web_search_filters``.
 """
     response_callable = response_fn or get_response
     underlying_callable = response_callable
@@ -1660,6 +1727,10 @@ async def get_all_responses(
         logger.warning(
             "`use_web_search` is deprecated; please use `web_search` instead."
         )
+    if web_search_filters and not web_search and not get_response_kwargs.get("web_search", False):
+        logger.debug(
+            "web_search_filters were supplied but web_search is disabled; filters will be ignored."
+        )
 
     if using_custom_response_fn and use_batch:
         logger.warning(
@@ -1686,6 +1757,8 @@ async def get_all_responses(
         identifiers = prompts
     # Pull default values into kwargs for get_response
     get_response_kwargs.setdefault("web_search", web_search)
+    if web_search_filters is not None:
+        get_response_kwargs.setdefault("web_search_filters", web_search_filters)
     get_response_kwargs.setdefault("search_context_size", search_context_size)
     get_response_kwargs.setdefault("tools", tools)
     get_response_kwargs.setdefault("tool_choice", tool_choice)
@@ -2060,6 +2133,7 @@ async def get_all_responses(
                     tools=get_response_kwargs.get("tools"),
                     tool_choice=get_response_kwargs.get("tool_choice"),
                     web_search=get_response_kwargs.get("web_search", False),
+                    web_search_filters=get_response_kwargs.get("web_search_filters"),
                     search_context_size=get_response_kwargs.get(
                         "search_context_size", "medium"
                     ),
