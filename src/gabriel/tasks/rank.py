@@ -331,7 +331,7 @@ class Rank:
         combined_kwargs = dict(run_kwargs)
         if runtime_kwargs:
             combined_kwargs.update(runtime_kwargs)
-        combined_kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        combined_kwargs.setdefault("web_search", self.cfg.modality == "web")
         rate_task = Rate(rate_cfg)
         return await rate_task.run(
             df,
@@ -1311,7 +1311,7 @@ class Rank:
             each attribute's score, optional z‑score and standard
             error.  The DataFrame is also written to ``save_dir``.
         """
-        kwargs.setdefault("use_web_search", self.cfg.modality == "web")
+        kwargs.setdefault("web_search", self.cfg.modality == "web")
         if self.cfg.recursive:
             return await self._run_recursive(
                 df,

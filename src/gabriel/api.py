@@ -1,4 +1,3 @@
-import asyncio
 import os
 import pandas as pd
 from typing import Callable, Dict, Optional, Union, Any, List
@@ -33,7 +32,6 @@ from .tasks import (
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
-from .core.prompt_template import PromptTemplate
 from .tasks.debias import (
     DebiasConfig,
     DebiasPipeline,
@@ -376,7 +374,7 @@ async def paraphrase(
     file_name: str = "paraphrase_responses.csv",
     model: str = "gpt-5-mini",
     json_mode: bool = False,
-    use_web_search: bool = False,
+    web_search: Optional[bool] = None,
     n_parallels: int = 750,
     use_dummy: bool = False,
     reset_files: bool = False,
@@ -392,6 +390,11 @@ async def paraphrase(
     """Convenience wrapper for :class:`gabriel.tasks.Paraphrase`."""
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
+    if "use_web_search" in cfg_kwargs and "web_search" not in cfg_kwargs:
+        cfg_kwargs["web_search"] = cfg_kwargs.pop("use_web_search")
+    else:
+        cfg_kwargs.pop("use_web_search", None)
+
     cfg = ParaphraseConfig(
         instructions=instructions,
         revised_column_name=revised_column_name,
@@ -400,7 +403,7 @@ async def paraphrase(
         file_name=file_name,
         model=model,
         json_mode=json_mode,
-        use_web_search=use_web_search,
+        web_search=web_search,
         n_parallels=n_parallels,
         use_dummy=use_dummy,
         reasoning_effort=reasoning_effort,
@@ -817,7 +820,9 @@ async def whatever(
     file_name: str = "custom_prompt_responses.csv",
     model: str = "gpt-5-mini",
     json_mode: bool = False,
-    use_web_search: bool = False,
+    web_search: Optional[bool] = None,
+    web_search_filters: Optional[Dict[str, Any]] = None,
+    search_context_size: str = "medium",
     n_parallels: int = 750,
     use_dummy: bool = False,
     reset_files: bool = False,
@@ -827,18 +832,46 @@ async def whatever(
 ) -> pd.DataFrame:
     """Wrapper around :func:`get_all_responses` for arbitrary prompts.
 
-    Results are saved to ``save_dir/file_name``.
+    Results are saved to ``save_dir/file_name``.  Web search features can be
+    customised with ``web_search_filters`` and ``search_context_size`` (both of
+    which map directly to :func:`gabriel.utils.openai_utils.get_all_responses`).
+    The ``web_search`` flag mirrors the OpenAI Python client.  Passing the
+    legacy ``use_web_search`` keyword is still supported and will be coerced to
+    ``web_search`` automatically.
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, file_name)
+
+    if web_search is None and "web_search" in kwargs:
+        web_search = kwargs.pop("web_search")
+    else:
+        kwargs.pop("web_search", None)
+
+    legacy_use_web_search = kwargs.pop("use_web_search", None)
+    if web_search is None and legacy_use_web_search is not None:
+        web_search = bool(legacy_use_web_search)
+
+    if web_search_filters is None and "web_search_filters" in kwargs:
+        web_search_filters = kwargs.pop("web_search_filters")
+    else:
+        kwargs.pop("web_search_filters", None)
+
+    if "search_context_size" in kwargs:
+        if search_context_size == "medium":
+            search_context_size = kwargs.pop("search_context_size")
+        else:
+            kwargs.pop("search_context_size")
+
     return await get_all_responses(
         prompts=prompts,
         identifiers=identifiers,
         save_path=save_path,
         model=model,
         json_mode=json_mode,
-        use_web_search=use_web_search,
+        web_search=web_search,
+        web_search_filters=web_search_filters,
+        search_context_size=search_context_size,
         n_parallels=n_parallels,
         use_dummy=use_dummy,
         reset_files=reset_files,

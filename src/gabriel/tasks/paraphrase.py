@@ -43,8 +43,10 @@ class ParaphraseConfig:
     model: str = "gpt-5-mini"
     # When true, the model will be asked to output JSON only.
     json_mode: bool = False
-    # If true, the underlying helper will use web search augmentation.
-    use_web_search: bool = False
+    # When set, controls whether the underlying helper should use web search
+    # augmentation.  ``None`` defers to downstream defaults while ``True`` and
+    # ``False`` explicitly enable or disable the feature.
+    web_search: Optional[bool] = None
     # Maximum number of parallel requests that will be sent to the
     # underlying API.  Note that classification and paraphrasing share
     # this value for simplicity.
@@ -158,7 +160,7 @@ class Paraphrase:
                 save_path=save_path,
                 model=self.cfg.model,
                 json_mode=self.cfg.json_mode,
-                use_web_search=self.cfg.use_web_search,
+                web_search=self.cfg.web_search,
                 n_parallels=self.cfg.n_parallels,
                 use_dummy=self.cfg.use_dummy,
                 reset_files=reset_files,
@@ -329,7 +331,7 @@ class Paraphrase:
                 save_path=tmp_save_path,
                 model=self.cfg.model,
                 json_mode=self.cfg.json_mode,
-                use_web_search=self.cfg.use_web_search,
+                web_search=self.cfg.web_search,
                 n_parallels=self.cfg.n_parallels,
                 use_dummy=self.cfg.use_dummy,
                 reset_files=reset_files,
