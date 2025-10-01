@@ -18,6 +18,7 @@ and additional features.  For Python 3.12 and SciPy 1.16+, use
 from __future__ import annotations
 
 import textwrap
+from itertools import combinations
 from typing import Iterable, Dict, Any, Optional, List, Tuple, Sequence, Union
 
 import numpy as np
@@ -197,8 +198,9 @@ def _fit_formula_model(
     controls: Sequence[str],
     control_display: Sequence[str],
     robust: bool,
-    entity_fe: Optional[str],
-    time_fe: Optional[str],
+    entity_fe: Sequence[str],
+    time_fe: Sequence[str],
+    interaction_terms: bool,
     include_intercept: bool,
     cluster_cols: Sequence[str],
 ) -> Tuple[Dict[str, Any], str]:
@@ -206,10 +208,21 @@ def _fit_formula_model(
 
     rhs_terms = [f"Q('{var}')" for var in main_vars]
     rhs_terms.extend(f"Q('{var}')" for var in controls)
-    if entity_fe:
-        rhs_terms.append(f"C(Q('{entity_fe}'))")
-    if time_fe:
-        rhs_terms.append(f"C(Q('{time_fe}'))")
+    for entity in entity_fe:
+        rhs_terms.append(f"C(Q('{entity}'))")
+    for time in time_fe:
+        rhs_terms.append(f"C(Q('{time}'))")
+    if interaction_terms:
+        if entity_fe and time_fe:
+            for entity in entity_fe:
+                for time in time_fe:
+                    rhs_terms.append(f"C(Q('{entity}')):C(Q('{time}'))")
+        else:
+            # Allow interaction terms among same-type fixed effects when only one
+            # class is provided (e.g. two entity effects).
+            fe_collection = entity_fe if entity_fe else time_fe
+            for first, second in combinations(fe_collection, 2):
+                rhs_terms.append(f"C(Q('{first}')):C(Q('{second}'))")
     if not rhs_terms:
         rhs_terms = ["1"]
     formula = f"Q('{y}') ~ " + " + ".join(rhs_terms)
@@ -634,7 +647,12 @@ def regression_plot(
     excess_columns: Optional[Union[str, Iterable[str]]] = None,
     excess_replace: bool = True,
     excess_prefix: str = "",
-    fixed_effects: Optional[Dict[str, Any]] = None,
+    entity_fixed_effects: Optional[Union[str, Iterable[str]]] = None,
+    time_fixed_effects: Optional[Union[str, Iterable[str]]] = None,
+    fe_interactions: bool = False,
+    cluster: Optional[Union[str, Iterable[str]]] = None,
+    include_intercept: Optional[bool] = None,
+    use_formula: Optional[bool] = None,
     latex_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Run OLS regressions for each combination of ``y`` and ``x`` variables.
@@ -658,8 +676,15 @@ def regression_plot(
     used in the regression.  ``excess_prefix`` can be used to disambiguate the
     derived columns when running several specifications in succession.
 
-    ``fixed_effects`` allows inclusion of entity/time fixed effects and
-    clustered standard errors via statsmodels' formula API.  ``latex_options``
+    ``entity_fixed_effects`` and ``time_fixed_effects`` allow inclusion of one or
+    multiple fixed-effect dimensions via statsmodels' formula API.  Provide a
+    string or list of column names for each.  ``fe_interactions`` adds
+    interaction terms between every specified entity/time pair (or pairwise
+    interactions within a single group when only entity or time effects are
+    supplied).  ``cluster`` can provide columns for clustered standard errors.
+    ``include_intercept`` overrides the automatic intercept handling when fixed
+    effects are present, while ``use_formula`` forces the formula-based path even
+    without fixed effects.  ``latex_options``
     controls LaTeX output: pass ``True`` (or ``{}``) for a ready-to-use table,
     or supply a configuration dictionary (see :func:`build_regression_latex`
     for the available keys and an end-to-end example).
@@ -717,20 +742,16 @@ def regression_plot(
     y_actual = {var: replacements.get(var, var) for var in y_vars}
     controls_actual = {var: replacements.get(var, var) for var in control_vars}
     results: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    fe_entity = fixed_effects.get("entity") if fixed_effects else None
-    fe_time = fixed_effects.get("time") if fixed_effects else None
-    cluster_cols = _ensure_list(fixed_effects.get("cluster")) if fixed_effects else []
-    include_intercept = True
-    if fixed_effects:
-        include_intercept = fixed_effects.get("include_intercept")
-        if include_intercept is None:
-            include_intercept = not (fe_entity or fe_time)
-    use_formula = False
-    if fixed_effects:
-        use_formula = bool(fixed_effects.get("use_formula", False) or fe_entity or fe_time or cluster_cols)
-    # In case clustering is requested without other fixed effects
+    fe_entity = list(dict.fromkeys(_ensure_list(entity_fixed_effects)))
+    fe_time = list(dict.fromkeys(_ensure_list(time_fixed_effects)))
+    cluster_cols = list(dict.fromkeys(_ensure_list(cluster)))
+    if include_intercept is None:
+        include_intercept = not (fe_entity or fe_time)
+    if use_formula is None:
+        use_formula = bool(fe_entity or fe_time or cluster_cols)
     if cluster_cols:
         use_formula = True
+    use_formula = bool(use_formula)
     for y_var in y_vars:
         y_col = y_actual[y_var]
         for x_var in x_vars:
@@ -745,10 +766,8 @@ def regression_plot(
             numeric_needed = [x_col, y_col] + [controls_actual[c] for c in control_vars]
             data[numeric_needed] = data[numeric_needed].apply(pd.to_numeric, errors="coerce")
             drop_subset = list(numeric_needed)
-            if fe_entity:
-                drop_subset.append(fe_entity)
-            if fe_time:
-                drop_subset.append(fe_time)
+            drop_subset.extend(fe_entity)
+            drop_subset.extend(fe_time)
             data = data.dropna(subset=drop_subset)
             # Optionally z‑score independent and dependent variables
             x_use = f"{x_col}_z" if zscore_x else x_col
@@ -805,10 +824,11 @@ def regression_plot(
                 "control_display": ctrl_disp,
                 "controls_included": [],
                 "fixed_effects": {
-                    "entity": fe_entity,
-                    "time": fe_time,
-                    "cluster": cluster_cols,
+                    "entity": list(fe_entity),
+                    "time": list(fe_time),
+                    "cluster": list(cluster_cols),
                     "include_intercept": include_intercept,
+                    "interaction_terms": fe_interactions,
                 },
                 "excess_replacements": replacements,
             }
@@ -823,6 +843,7 @@ def regression_plot(
                     robust=robust,
                     entity_fe=fe_entity,
                     time_fe=fe_time,
+                    interaction_terms=fe_interactions,
                     include_intercept=include_intercept,
                     cluster_cols=cluster_cols,
                 )
@@ -851,6 +872,7 @@ def regression_plot(
                         robust=robust,
                         entity_fe=fe_entity,
                         time_fe=fe_time,
+                        interaction_terms=fe_interactions,
                         include_intercept=include_intercept,
                         cluster_cols=cluster_cols,
                     )
