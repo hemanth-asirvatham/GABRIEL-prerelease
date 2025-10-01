@@ -8,7 +8,7 @@ This module refines the original plotting utilities to provide:
   (no more ``x1``, ``x2``) and optional robust standard errors.
 * Binned scatter plots that support multiple independent variables via
   ``controls`` and allow custom axis limits.
-* Bar and line plots with a variety of customisation options.
+* Bar, box and line plots with a variety of customisation options.
 
 The functions mirror the earlier API but with cleaner parameter names
 and additional features.  For Python 3.12 and SciPy 1.16+, use
@@ -283,8 +283,21 @@ def build_regression_latex(
 
     Examples
     --------
-    >>> summary = regression_plot(df, x="treatment", y="outcome", controls=["age", "income"], latex_options=True)
+    >>> summary = regression_plot(  # doctest: +SKIP
+    ...     df,
+    ...     x="treatment",
+    ...     y="outcome",
+    ...     controls=["age", "income"],
+    ...     latex_options=True,
+    ... )
     >>> print(summary["latex_table"])  # doctest: +SKIP
+
+    Passing ``latex_options=True`` during :func:`regression_plot` automatically
+    adds a ``"latex_table"`` entry to the returned dictionary.  To customise the
+    layout, supply a dictionary such as ``{"caption": "My Results"}`` or a
+    detailed ``{"columns": [...], "row_order": [...]}`` specification.  The
+    ``options`` argument here mirrors that structure so you can also refine the
+    table post-hoc.
 
     Parameters
     ----------
@@ -600,7 +613,12 @@ def regression_plot(
     print_summary: bool = True,
     xlim: Optional[Tuple[float, float]] = None,
     ylim: Optional[Tuple[float, float]] = None,
-    excess_config: Optional[Dict[str, Any]] = None,
+    excess_year_col: Optional[str] = None,
+    excess_window: Optional[int] = None,
+    excess_mode: str = "difference",
+    excess_columns: Optional[Union[str, Iterable[str]]] = None,
+    excess_replace: bool = True,
+    excess_prefix: str = "",
     fixed_effects: Optional[Dict[str, Any]] = None,
     latex_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
@@ -614,18 +632,41 @@ def regression_plot(
     variables are standardised before analysis (but the original variables
     remain untouched in the output).
 
-    ``excess_config`` optionally enables computation of excess/ratio variables
-    relative to rolling year means, inspired by the research regression helper
-    code.  ``fixed_effects`` allows inclusion of entity/time fixed effects and
+    ``excess_year_col`` turns on peer-adjusted ("excess") outcome variables.
+    Provide the column that defines peer groups (typically a year column) and a
+    positive ``excess_window`` describing how many peers before/after should be
+    used when computing the rolling mean.  By default every dependent variable
+    in ``y`` is adjusted; override with ``excess_columns`` if you also want the
+    adjustment applied to other variables.  ``excess_mode`` switches between the
+    default difference-from-mean and a ratio-to-mean calculation, while
+    ``excess_replace`` controls whether the adjusted columns are automatically
+    used in the regression.  ``excess_prefix`` can be used to disambiguate the
+    derived columns when running several specifications in succession.
+
+    ``fixed_effects`` allows inclusion of entity/time fixed effects and
     clustered standard errors via statsmodels' formula API.  ``latex_options``
-    controls LaTeX output: pass ``True`` (or ``{}``) for a default table, or a
-    dictionary for customised layouts.  See :func:`build_regression_latex` for
-    the available keys.
+    controls LaTeX output: pass ``True`` (or ``{}``) for a ready-to-use table,
+    or supply a configuration dictionary (see :func:`build_regression_latex`
+    for the available keys and an end-to-end example).
 
     Returns a dictionary keyed by ``(y_var, x_var)`` with entries ``'simple'``,
     ``'with_controls'``, and ``'binned_df'`` along with metadata for downstream
     table construction.  When controls are not provided, ``'with_controls'``
     will be ``None``.
+
+    Examples
+    --------
+    >>> results = regression_plot(  # doctest: +SKIP
+    ...     df,
+    ...     x="treatment",
+    ...     y=["outcome"],
+    ...     controls=["age", "income"],
+    ...     excess_year_col="year",
+    ...     excess_window=2,
+    ...     latex_options=True,
+    ... )
+    >>> list(results.keys())  # doctest: +SKIP
+    [('outcome', 'treatment'), 'latex_table']
     """
     x_vars = _ensure_list(x)
     y_vars = _ensure_list(y)
@@ -635,27 +676,21 @@ def regression_plot(
     rename_map = dict(rename_map or {})
     prepared_df = df.copy()
     replacements: Dict[str, str] = {}
-    if excess_config:
-        excess_columns = _ensure_list(excess_config.get("columns"))
-        if not excess_columns:
-            excess_columns = sorted({*x_vars, *y_vars, *control_vars})
-        year_col = excess_config.get("year_col")
-        if year_col is None:
-            raise ValueError("excess_config requires a 'year_col'.")
-        window = int(excess_config.get("window", 0))
-        if window <= 0:
-            raise ValueError("excess_config 'window' must be a positive integer.")
-        mode = excess_config.get("mode", "difference")
-        replace = bool(excess_config.get("replace", True))
-        prefix = excess_config.get("prefix", "")
+    if excess_year_col is not None:
+        columns = _ensure_list(excess_columns)
+        if not columns:
+            columns = list(dict.fromkeys(y_vars))  # preserve order, default to y variables
+        if excess_window is None or int(excess_window) <= 0:
+            raise ValueError("excess_window must be a positive integer when excess_year_col is provided.")
+        mode = (excess_mode or "difference").lower()
         prepared_df, replacements = _apply_year_excess(
             prepared_df,
-            year_col=year_col,
-            window=window,
-            columns=excess_columns,
+            year_col=excess_year_col,
+            window=int(excess_window),
+            columns=columns,
             mode=mode,
-            replace=replace,
-            prefix=prefix,
+            replace=bool(excess_replace),
+            prefix=excess_prefix,
         )
         suffix = " (excess)" if mode == "difference" else " (ratio)"
         for original, new in replacements.items():
@@ -917,6 +952,170 @@ def bar_plot(
     ax.tick_params(axis="x", labelsize=x_label_font_size)
     plt.tight_layout()
     plt.show()
+
+
+def box_plot(
+    data: Union[pd.DataFrame, Dict[str, Iterable[float]], Iterable[Iterable[float]]],
+    *,
+    labels: Optional[Iterable[str]] = None,
+    title: str = "Distribution by Group",
+    x_label: str = "Group",
+    y_label: str = "Value",
+    cmap: str = "viridis",
+    gradient_start: float = 0.25,
+    gradient_end: float = 0.9,
+    background_color: str = "#ffffff",
+    font_family: str = "monospace",
+    figsize: Tuple[float, float] = (12, 6),
+    dpi: int = 300,
+    notch: bool = False,
+    showfliers: bool = False,
+    patch_alpha: float = 0.9,
+    line_color: str = "#2f2f2f",
+    box_linewidth: float = 1.6,
+    median_linewidth: float = 2.4,
+    annotate_median: bool = True,
+    annotation_font_size: int = 10,
+    annotation_fontweight: str = "bold",
+    wrap_width: int = 22,
+    summary_precision: int = 2,
+    print_summary: bool = True,
+) -> Dict[str, Any]:
+    """Render a high-DPI box plot that matches the house style.
+
+    ``data`` may be a tidy DataFrame (columns interpreted as groups), a mapping
+    from labels to iterables, or a sequence of iterables.  When ``labels`` is
+    omitted, column names or dictionary keys are used automatically.  Numeric
+    data are coerced with ``pd.to_numeric`` and missing values are dropped.
+
+    Returns a dictionary containing the Matplotlib ``figure`` and ``ax`` along
+    with a ``summary`` DataFrame of descriptive statistics (count, median,
+    quartiles and whiskers).  This mirrors the ergonomics of :func:`regression_plot`
+    and friends by providing both a styled visual and machine-friendly output.
+
+    Examples
+    --------
+    >>> out = box_plot(df[["group_a", "group_b"]], title="Score dispersion")  # doctest: +SKIP
+    >>> out["summary"].loc["group_a", "median"]  # doctest: +SKIP
+    0.42
+    """
+
+    if isinstance(data, pd.DataFrame):
+        available = list(data.columns)
+        if labels is None:
+            labels_list = available
+        else:
+            labels_list = list(labels)
+            missing = [label for label in labels_list if label not in data.columns]
+            if missing:
+                raise KeyError(f"Columns {missing} not found in provided DataFrame.")
+        value_arrays = [pd.to_numeric(data[label], errors="coerce").dropna().to_numpy() for label in labels_list]
+    elif isinstance(data, dict):
+        if labels is None:
+            labels_list = list(data.keys())
+        else:
+            labels_list = list(labels)
+        missing = [label for label in labels_list if label not in data]
+        if missing:
+            raise KeyError(f"Keys {missing} not found in data mapping.")
+        value_arrays = [pd.to_numeric(pd.Series(data[label]), errors="coerce").dropna().to_numpy() for label in labels_list]
+    else:
+        if labels is None:
+            try:
+                length = len(data)  # type: ignore[arg-type]
+            except TypeError:
+                raise TypeError("When supplying a sequence of iterables, please provide labels or ensure it has a length.")
+            labels_list = [f"Series {i + 1}" for i in range(length)]
+        else:
+            labels_list = list(labels)
+        value_arrays = []
+        for idx, series in enumerate(data):
+            arr = pd.to_numeric(pd.Series(series), errors="coerce").dropna().to_numpy()
+            value_arrays.append(arr)
+        if len(value_arrays) != len(labels_list):
+            raise ValueError("Number of provided labels does not match the number of series in `data`.")
+
+    if not value_arrays:
+        raise ValueError("No data provided for box_plot.")
+
+    plt.style.use("default")
+    plt.rcParams["font.family"] = font_family
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    ax.set_facecolor(background_color)
+    fig.patch.set_facecolor(background_color)
+
+    bp = ax.boxplot(
+        value_arrays,
+        labels=[textwrap.fill(str(label), wrap_width) for label in labels_list],
+        patch_artist=True,
+        notch=notch,
+        showfliers=showfliers,
+    )
+
+    cmap_obj = cm.get_cmap(cmap)
+    colours = cmap_obj(np.linspace(gradient_start, gradient_end, len(value_arrays)))
+    for patch, colour in zip(bp["boxes"], colours):
+        patch.set_facecolor(colour)
+        patch.set_edgecolor(line_color)
+        patch.set_alpha(patch_alpha)
+        patch.set_linewidth(box_linewidth)
+    for element in ("whiskers", "caps"):
+        for artist in bp[element]:
+            artist.set(color=line_color, linewidth=box_linewidth, alpha=0.9)
+    for median in bp["medians"]:
+        median.set(color=line_color, linewidth=median_linewidth)
+
+    ax.set_title(textwrap.fill(title, width=80), fontsize=14, fontweight="bold")
+    ax.set_xlabel(x_label, fontsize=12, fontweight="bold")
+    ax.set_ylabel(y_label, fontsize=12, fontweight="bold")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+    medians = [np.nanmedian(values) if len(values) else np.nan for values in value_arrays]
+    if annotate_median:
+        for idx, median in enumerate(medians):
+            if np.isnan(median):
+                continue
+            ax.annotate(
+                f"{median:.{summary_precision}f}",
+                xy=(idx + 1, median),
+                xytext=(0, -12),
+                textcoords="offset points",
+                ha="center",
+                va="top",
+                fontsize=annotation_font_size,
+                fontweight=annotation_fontweight,
+                color=line_color,
+            )
+
+    summary_rows = []
+    whisker_pairs = [(bp["whiskers"][i], bp["whiskers"][i + 1]) for i in range(0, len(bp["whiskers"]), 2)]
+    for label, values, whiskers in zip(labels_list, value_arrays, whisker_pairs):
+        if len(values) == 0:
+            summary = {"count": 0, "median": np.nan, "mean": np.nan, "std": np.nan, "q1": np.nan, "q3": np.nan, "whisker_low": np.nan, "whisker_high": np.nan}
+        else:
+            summary = {
+                "count": len(values),
+                "median": float(np.nanmedian(values)),
+                "mean": float(np.nanmean(values)),
+                "std": float(np.nanstd(values, ddof=1)) if len(values) > 1 else 0.0,
+                "q1": float(np.nanpercentile(values, 25)),
+                "q3": float(np.nanpercentile(values, 75)),
+                "whisker_low": float(np.min(whiskers[0].get_ydata())),
+                "whisker_high": float(np.max(whiskers[1].get_ydata())),
+            }
+        summary_rows.append(summary)
+    summary_df = pd.DataFrame(summary_rows, index=labels_list)
+    if print_summary:
+        display_df = summary_df.round(summary_precision)
+        if tabulate is not None:
+            print(tabulate(display_df, headers="keys", tablefmt="github", showindex=True))
+        else:
+            print(display_df.to_string())
+
+    plt.tight_layout()
+    plt.show()
+
+    return {"figure": fig, "ax": ax, "summary": summary_df}
 import os, textwrap
 import numpy as np
 import pandas as pd
