@@ -29,6 +29,8 @@ from .tasks import (
     DiscoverConfig,
     Filter,
     FilterConfig,
+    Whatever,
+    WhateverConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -813,10 +815,16 @@ async def debias(
 
 
 async def whatever(
-    prompts: list[str],
-    identifiers: list[str],
+    prompts: Union[str, list[str], pd.DataFrame],
+    identifiers: Optional[list[str]] = None,
     *,
     save_dir: str,
+    column_name: Optional[str] = None,
+    identifier_column: Optional[str] = None,
+    image_column: Optional[str] = None,
+    audio_column: Optional[str] = None,
+    prompt_images: Optional[Dict[str, List[str]]] = None,
+    prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
     file_name: str = "custom_prompt_responses.csv",
     model: str = "gpt-5-mini",
     json_mode: bool = False,
@@ -841,7 +849,6 @@ async def whatever(
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, file_name)
 
     if web_search is None and "web_search" in kwargs:
         web_search = kwargs.pop("web_search")
@@ -863,10 +870,9 @@ async def whatever(
         else:
             kwargs.pop("search_context_size")
 
-    return await get_all_responses(
-        prompts=prompts,
-        identifiers=identifiers,
-        save_path=save_path,
+    cfg = WhateverConfig(
+        save_dir=save_dir,
+        file_name=file_name,
         model=model,
         json_mode=json_mode,
         web_search=web_search,
@@ -874,9 +880,22 @@ async def whatever(
         search_context_size=search_context_size,
         n_parallels=n_parallels,
         use_dummy=use_dummy,
-        reset_files=reset_files,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+    )
+
+    runner = Whatever(cfg)
+    return await runner.run(
+        prompts,
+        identifiers=identifiers,
+        column_name=column_name,
+        identifier_column=identifier_column,
+        image_column=image_column,
+        audio_column=audio_column,
+        prompt_images=prompt_images,
+        prompt_audio=prompt_audio,
+        web_search_filters=web_search_filters,
+        reset_files=reset_files,
         **kwargs,
     )
 

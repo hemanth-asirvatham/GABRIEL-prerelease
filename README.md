@@ -76,6 +76,21 @@ print(responses[0])
 ```
 
 Images are provided as base64 strings, while audio items are dictionaries with `data` and `format`. Helper functions `encode_image` and `encode_audio` are available for local files.
+
+### Per-prompt web search filters
+
+`get_all_responses` accepts a `prompt_web_search_filters` mapping for prompt-specific web search hints. The keys should match the prompt identifiers passed to `get_all_responses` and each value should mirror the structure of `web_search_filters` (for example including `city`, `region`, `country`, `timezone`, `type`, or `allowed_domains`). These per-prompt settings are merged with any global `web_search_filters` before each request, so you can keep a shared domain whitelist while pulling location hints from a DataFrame column on a row-by-row basis. See `gabriel.utils.openai_utils` for the full normalisation logic.
+
+### Custom prompts with `gabriel.whatever`
+
+Use `gabriel.whatever` when you need a thin wrapper around `get_all_responses`. The helper can work with a single string prompt, a list of prompts, or a DataFrame column. When a DataFrame is supplied you can optionally specify:
+
+- `column_name` – which column contains the prompt text (required for DataFrame input).
+- `identifier_column` – supply unique IDs; otherwise short SHA1 identifiers are generated.
+- `image_column` / `audio_column` – columns containing media to be encoded automatically via `load_image_inputs` and `load_audio_inputs`.
+- `web_search_filters` – pass a dictionary whose values may be column names; for example `{"city": "city_col", "allowed_domains": "domains"}` will read the appropriate cell for every prompt and build a `prompt_web_search_filters` map automatically.
+
+Results are saved to `save_dir/file_name` and all other keyword arguments are forwarded to `get_all_responses`, making it easy to reuse advanced features like JSON mode, batches, or custom tool definitions.
 ### Custom prompt templates
 
 All task classes and the high-level API functions accept a `template_path`
