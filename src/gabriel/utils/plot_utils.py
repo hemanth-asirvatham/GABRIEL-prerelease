@@ -535,18 +535,33 @@ def fit_ols(
             use = res.get_robustcov_results(cov_type="HC1")
     else:
         use = res
+    # Ensure statsmodels returns Series even when given raw ndarrays
+    params = use.params
+    bse = use.bse
+    tvalues = use.tvalues
+    pvalues = use.pvalues
+    if isinstance(params, np.ndarray):
+        if varnames is None:
+            try:
+                varnames = list(res.model.exog_names)
+            except Exception:  # pragma: no cover - very unlikely branch
+                varnames = [f"x{i}" for i in range(params.shape[0])]
+        params = pd.Series(params, index=varnames)
+        bse = pd.Series(np.asarray(bse), index=varnames)
+        tvalues = pd.Series(np.asarray(tvalues), index=varnames)
+        pvalues = pd.Series(np.asarray(pvalues), index=varnames)
     # Extract statistics
     adj_r2 = res.rsquared_adj
     resid = res.resid
     df_resid = n - k_plus1
     rse = np.sqrt((resid @ resid) / df_resid) if df_resid > 0 else np.nan
     F_stat = res.fvalue if k > 0 else np.nan
-    display_names = varnames or list(use.params.index)
+    display_names = varnames or list(params.index)
     return {
-        "coef": use.params,
-        "se": use.bse,
-        "t": use.tvalues,
-        "p": use.pvalues,
+        "coef": params,
+        "se": bse,
+        "t": tvalues,
+        "p": pvalues,
         "r2": res.rsquared,
         "adj_r2": adj_r2,
         "n": n,
