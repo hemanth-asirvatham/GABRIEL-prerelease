@@ -1,154 +1,216 @@
 # GABRIEL
 
-TRIAL NOTEBOOK: https://colab.research.google.com/drive/1RMUeAWACpViqiUMlPMMwPTKyGU-OX756?usp=sharing. See this notebook for the most updated example set.
+**GABRIEL** (Generalized Attribute Based Ratings Information Extraction Library) is an asynchronous toolkit for turning qualitative corpora into structured datasets with the help of modern GPT models.  It packages the prompting, batching, retry logic, and checkpointing you need to scale “ask the model” workflows to hundreds of thousands of passages, images, audio files, or entities.
 
-GABRIEL (Generalized Attribute Based Ratings Information Extraction Library) is a collection of utilities for running large language model driven analyses.  The library provides high level tasks such as passage rating, text classification, de‑identification, regional report generation and several Elo style ranking utilities.
+📓 **Tutorial notebook**: https://colab.research.google.com/drive/1RMUeAWACpViqiUMlPMMwPTKyGU-OX756?usp=sharing — start here for an end-to-end walkthrough.
 
-The current `src` directory contains a cleaned up and asynchronous implementation.  Each task exposes an easy to use `run()` coroutine and sensible configuration dataclasses. 
+## Table of contents
 
-## Quick Start
+- [Why GABRIEL?](#why-gabriel)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Core capabilities](#core-capabilities)
+- [Detailed usage](#detailed-usage)
+- [Working with media and web search](#working-with-media-and-web-search)
+- [Custom prompts and templates](#custom-prompts-and-templates)
+- [Best practices for using GPT as a measurement tool](#best-practices-for-using-gpt-as-a-measurement-tool)
+- [Saving, logging, and outputs](#saving-logging-and-outputs)
+- [Development and testing](#development-and-testing)
+- [Citation](#citation)
 
-```python
-from gabriel.tasks import Rate, RateConfig
+## Why GABRIEL?
 
-cfg = RateConfig(
-    attributes={"clarity": "How understandable is the text?"},
-    save_path="ratings.csv",
-    use_dummy=True  # set to False to call the OpenAI API
-)
+Researchers are awash with qualitative data—parliamentary speeches, product reviews, interviews, historical archives—but need structured variables to test hypotheses.  GPT models are now capable of judging attributes (e.g. *patriotism*, *toxicity*, *policy focus*) and extracting facts with expert-level accuracy.  GABRIEL turns that raw capability into a robust measurement pipeline:
 
-texts = ["This is an example passage"]
-ratings = asyncio.run(Rate(cfg).run(texts))
-print(ratings)
+- 🧠 **Human-like comprehension at scale** – access GPT’s nuanced reasoning with simple configuration objects or one-line helper functions.
+- 📊 **Quantitative outputs** – ratings, rankings, classifications, and extractions are returned as tidy DataFrames ready for statistical analysis.
+- ⚙️ **Operational tooling** – automatic parallelism, retries, resumable runs, and template validation let you focus on research questions instead of API plumbing.
+- 🧰 **Extensible workflows** – combine tasks for complex pipelines (e.g. deduplicate → codify → rank) or craft your own prompts via `gabriel.whatever`.
+
+The guiding philosophy is parsimony: define attributes exactly as you would explain them to a human coder, then let GPT scale that measurement across your corpus.
+
+## Installation
+
+```bash
+pip install gabriel
+
+# or clone the prerelease repo and install locally
+git clone https://github.com/allenai/GABRIEL-prerelease.git
+cd GABRIEL-prerelease
+pip install -e .
 ```
 
-Each task returns a `pandas.DataFrame` and saves raw responses to disk.  Set `use_dummy=False` and provide your OpenAI credentials via the `OPENAI_API_KEY` environment variable to perform real API calls.
-If your OpenAI-compatible service uses a different endpoint, set `OPENAI_BASE_URL`
-or pass a `base_url` argument to override the default API URL.
+Set your API credentials before running real jobs:
 
-### Image and audio inputs
-
-`get_response` and `get_all_responses` can include images or audio with your prompts. Pass `images` and/or `audio` to `get_response` or supply `prompt_images` and `prompt_audio` mappings to `get_all_responses`. Images should be base64 strings and audio entries should be dictionaries containing `data` and `format`. The notebook‑ready cells below show how to fetch media from the web and make a request using `await`:
-
-#### Image example
-
-```python
-import aiohttp, base64
-from gabriel.utils import get_response
-
-# Download an image from the internet
-async with aiohttp.ClientSession() as session:
-    async with session.get(
-        "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png"
-    ) as resp:
-        img_bytes = await resp.read()
-img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-
-# Ask the model about the picture
-responses, _ = await get_response(
-    "What logo is this?", images=[img_b64], use_dummy=True
-)
-print(responses[0])
+```bash
+export OPENAI_API_KEY="sk-..."
+# Optional overrides if you use a compatible endpoint
+export OPENAI_BASE_URL="https://api.openai.com/v1"
 ```
 
-#### Audio example
+All high-level helpers accept `use_dummy=True` for offline dry runs.
+
+## Quick start
+
+The snippet below mirrors the workflow in the tutorial notebook: rate Thanksgiving dishes on flavour attributes and save the results locally.
 
 ```python
-import aiohttp, base64
-from gabriel.utils import get_response
+import asyncio
+import os
+import pandas as pd
+import gabriel
 
-# Download an audio clip
-async with aiohttp.ClientSession() as session:
-    async with session.get(
-        "https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/samples/jfk.wav"
-    ) as resp:
-        audio_bytes = await resp.read()
-audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+os.environ["OPENAI_API_KEY"] = "..."  # or rely on your shell environment
 
-# Transcribe the clip
-responses, _ = await get_response(
-    "Transcribe the clip",
-    audio=[{"data": audio_b64, "format": "wav"}],
-    model="gpt-4o-mini-audio-preview",
-    use_dummy=True,
-)
-print(responses[0])
+PATH = os.path.expanduser("~/Documents/gabriel_runs")
+toy_data = pd.DataFrame({
+    "entity": [
+        "turkey",
+        "pumpkin pie",
+        "green bean casserole",
+        "cornbread",
+    ]
+})
+
+attributes = {
+    "savory taste": "",
+    "sweet taste": "",
+    "tangy taste": "",
+}
+
+async def main():
+    results = await gabriel.rate(
+        toy_data,
+        column_name="entity",
+        attributes=attributes,
+        save_dir=os.path.join(PATH, "toy_rate"),
+        model="gpt-5-mini",
+        n_runs=3,
+        modality="entity",
+        reset_files=True,
+    )
+    print(results.head())
+
+asyncio.run(main())
 ```
 
-Images are provided as base64 strings, while audio items are dictionaries with `data` and `format`. Helper functions `encode_image` and `encode_audio` are available for local files.
+Every task returns a `pandas.DataFrame` and writes raw model responses to `save_dir`.  Swap in other helpers (e.g. `gabriel.rank`, `gabriel.extract`) without changing your event loop setup.
 
-### Per-prompt web search filters
+## Core capabilities
 
-`get_all_responses` accepts a `prompt_web_search_filters` mapping for prompt-specific web search hints. The keys should match the prompt identifiers passed to `get_all_responses` and each value should mirror the structure of `web_search_filters` (for example including `city`, `region`, `country`, `timezone`, `type`, or `allowed_domains`). These per-prompt settings are merged with any global `web_search_filters` before each request, so you can keep a shared domain whitelist while pulling location hints from a DataFrame column on a row-by-row basis. See `gabriel.utils.openai_utils` for the full normalisation logic.
+| Function | Description | Typical use cases |
+| --- | --- | --- |
+| `gabriel.rate` | Score each row on 0–100 attributes with direct prompts. | Measuring concepts like sentiment, ideology, expertise, or tone. |
+| `gabriel.rank` | Tournament-style comparisons that yield relative scores. | Distinguishing subtle ordering (e.g. most innovative technologies). |
+| `gabriel.classify` | Multi-label or single-label tagging of passages. | Topic tagging, content moderation, checklist compliance. |
+| `gabriel.extract` | Pull structured facts or metadata from text or images. | Inventor names, event dates, product attributes. |
+| `gabriel.filter` | High-throughput boolean screen for huge candidate lists. | Keep only Wikipedia titles about technologies, shortlist case files. |
+| `gabriel.codify` | Highlight passages that match qualitative codes. | Thematic analysis of interviews, policy documents, transcripts. |
+| `gabriel.deidentify` | Replace PII with realistic, consistent placeholders. | Anonymising datasets before sharing or further analysis. |
+| `gabriel.deduplicate` | Merge near-identical entities using embeddings + GPT. | Cleaning entity lists, removing redundant rows. |
+| `gabriel.merge` | GPT-assisted fuzzy joins between dissimilar keys. | Matching records across messy schemas (job titles, product names). |
+| `gabriel.compare` | Surface similarities or differences between paired texts. | Contrast persuasive vs. unpersuasive arguments, etc. |
+| `gabriel.bucket` / `gabriel.discover` | Generate taxonomies and explain class differences. | Deriving emergent categories, exploratory feature discovery. |
+| `gabriel.paraphrase` | Rewrite passages under explicit guidelines. | Creating alternative phrasings, redacting mentions, tone shifting. |
+| `gabriel.debias` | Remove signal correlated with protected concepts. | Post-processing ratings to mitigate confounds. |
+| `gabriel.whatever` | Minimal wrapper around `get_all_responses` for bespoke prompts. | Custom pipelines, experiments, prototyping. |
 
-### Custom prompts with `gabriel.whatever`
+Each helper is built on a `Config` dataclass and a `.run()` coroutine in `gabriel.tasks`.  Use the top-level functions for convenience or drop down to the task classes for more control.
 
-Use `gabriel.whatever` when you need a thin wrapper around `get_all_responses`. The helper can work with a single string prompt, a list of prompts, or a DataFrame column. When a DataFrame is supplied you can optionally specify:
+## Detailed usage
 
-- `column_name` – which column contains the prompt text (required for DataFrame input).
-- `identifier_column` – supply unique IDs; otherwise short SHA1 identifiers are generated.
-- `image_column` / `audio_column` – columns containing media to be encoded automatically via `load_image_inputs` and `load_audio_inputs`.
-- `web_search_filters` – pass a dictionary whose values may be column names; for example `{"city": "city_col", "allowed_domains": "domains"}` will read the appropriate cell for every prompt and build a `prompt_web_search_filters` map automatically.
+### Rating (`gabriel.rate` / `Rate`)
+- Provide a DataFrame, the column to evaluate, and an attribute→definition mapping.
+- Supports batching (`n_parallels`), multiple passes (`n_runs`), modality-specific prompts (`modality`), and optional reasoning traces (`reasoning_effort`, `reasoning_summary`).
+- Saves intermediate CSVs (`file_name`, default `ratings.csv`).
 
-Results are saved to `save_dir/file_name` and all other keyword arguments are forwarded to `get_all_responses`, making it easy to reuse advanced features like JSON mode, batches, or custom tool definitions.
-### Custom prompt templates
+### Ranking (`gabriel.rank` / `Rank`)
+- Runs pairwise tournaments with Elo-style updates to capture fine-grained differences.
+- Configure rounds, matches, learning rate, recursive refinement, and optional initial rating passes (`initial_rating_pass`).
+- Ideal when absolute scales are ambiguous but relative ordering matters.
 
-All task classes and the high-level API functions accept a `template_path`
-argument. Supply the path to a Jinja2 file that declares the same variables
-as the built-in template for that task and it will be used instead. Variable
-sets are validated before use and a helpful error is raised if a template is
-missing or introduces unexpected parameters.
+### Classification (`gabriel.classify` / `Classify`)
+- Map label names to definitions; results include per-label probabilities and consensus columns.
+- Optional differentiation mode asks the model to contrast “circle” vs. “square” passages for richer features.
 
-## Tasks
+### Extraction (`gabriel.extract` / `Extract`)
+- Define attributes alongside descriptions of the desired outputs. Optional `types` enforce schemas (e.g. `{"year": "int"}`).
+- Handy for building structured datasets out of biographies, product listings, or transcripts.
 
-### `Rate`
-Rate passages on a set of numeric attributes.  The task builds prompts using `gabriel.prompts.ratings_prompt.jinja2` and parses the JSON style output into a `dict` for each passage.
+### Filtering (`gabriel.filter` / `Filter`)
+- Specify a natural language condition (e.g. “return titles that describe an invention”).
+- Processes short entities in large batches for efficiency; tune `entities_per_call`, `threshold`, and `shuffle` controls.
 
-Key options (see `RateConfig`):
-- `attributes` – mapping of attribute name to description.
-- `model` – model name (default `gpt-5-mini`).
-- `n_parallels` – number of concurrent API calls.
-- `save_path` – CSV file for intermediate results.
-- `rating_scale` – optional custom rating scale text. If omitted, the default 0–100 scale from the template is used.
+### Codifying (`gabriel.codify` / `Codify`)
+- Provide qualitative codes and optional completion checks to ensure every passage was reviewed.
+- Returns tidy tables plus helper functions like `gabriel.view_coded_passages` for rapid auditing.
 
-### `Classify`
-Classify passages into boolean labels.  Uses a prompt in `basic_classifier_prompt.jinja2` and expects JSON `{label: true/false}` responses.
+### Deduplication and merging (`gabriel.deduplicate`, `gabriel.merge`)
+- Combine embeddings with GPT adjudication to produce clean entity lists or fuzzy joins.
+- Control chunk sizes, timeout behaviour, and auto-matching thresholds to fit your dataset.
 
-Options include the label dictionary, output directory, model and an optional maximum timeout.  Results are joined back onto the input DataFrame with one column per label.
+### De-identification (`gabriel.deidentify` / `Deidentifier`)
+- Supports multi-pass runs, consistent mapping columns, and strict “use only existing mappings” modes.
+- Replace names, employers, addresses, or other PII with realistic substitutes guided by optional instructions.
 
-### `Deidentifier`
-Iteratively remove identifying information from text.  Texts are split into manageable chunks and the model returns JSON replacement mappings which are applied across all rows.
+### Paraphrasing (`gabriel.paraphrase` / `Paraphrase`)
+- Rewrite text under constrained instructions, with optional recursive validation loops that select the best candidate paraphrase.
 
-Configuration allows controlling the maximum words per call, LLM model and any additional guidelines for the prompt.
+### Compare, bucket, and discover (`gabriel.compare`, `gabriel.bucket`, `gabriel.discover`)
+- `compare` extracts similarities or contrasts between paired entries.
+- `bucket` creates mutually exclusive categories from large term lists via iterative GPT voting.
+- `discover` chains comparison, bucketing, and classification to surface explanatory features between two classes.
 
-### `EloRater`
-Pairwise Elo / Bradley–Terry rating of items across any set of attributes.  Prompts are built from the `rankings_prompt.jinja2` template and include explicit support for win/loss/draw outcomes.
+### Debiasing (`gabriel.debias` / `DebiasPipeline`)
+- Estimate and remove confounding signals by codifying or rating auxiliary attributes, then regress them out of your measurement target.
+- Configurable measurement/removal tasks, regression robustness, and stripping rules.
 
-`EloConfig` controls the number of rounds, matches per round, rating method (Elo, BT or Plackett–Luce), parallelism and more.  The final DataFrame includes rating, optional standard error and z-score columns.
+### Custom prompts (`gabriel.whatever` / `Whatever`)
+- Accepts plain strings, lists, or DataFrames; automatically tracks identifiers and media attachments.
+- Ideal for experiments that fall outside the packaged task templates while still benefiting from batching, retries, and persistent logs.
 
-### `RecursiveEloRater`
-Higher level orchestrator that repeatedly applies `EloRater` on progressively filtered subsets.  Items can optionally be rewritten between stages and cumulative scores are tracked across recursion steps.
+## Working with media and web search
 
-### `Regional`
-Generate short reports for topics across regions (for example counties or states).  Results are stored in a wide DataFrame with one column per topic.
+`gabriel.utils.openai_utils.get_response` and `get_all_responses` underpin every task and accept image/audio attachments alongside text prompts.  Provide base64-encoded inputs directly or leverage helper utilities (`encode_image`, `encode_audio`) to load local files.  Models such as `gpt-4o-mini-audio-preview` can transcribe audio, while multimodal GPT-5 variants can reason over images.
 
-### `CountyCounter`
-Convenience wrapper that chains a `Regional` run followed by Elo rating of each regional report.  Optionally produces Plotly choropleth maps if FIPS codes are provided.
+For fact-finding prompts, pass `web_search=True` and optional `web_search_filters` (global) or `prompt_web_search_filters` (per prompt) to narrow results by geography, domain, or document type.  These controls are available through every top-level helper as keyword arguments.
 
-## Utilities
+## Custom prompts and templates
 
-The `gabriel.utils` module contains helpers for interacting with the OpenAI API, rendering prompt templates and creating visualisations.  The `OpenAIClient` class in `gabriel.core` provides a minimal asynchronous interface for customised pipelines.
+All task classes and convenience functions accept a `template_path` pointing to a Jinja2 template that mirrors the default variables for that task.  Templates are validated before use, so you get clear errors if a field is missing or renamed.  This makes it easy to customise instructions while keeping output parsing intact.
 
-## Running the Tests
+Prefer working directly with prompt strings?  Use `gabriel.whatever` and forward advanced flags such as `json_mode`, `web_search`, or `reasoning_effort`—they map straight through to `get_all_responses`.
 
-Install the development dependencies and run `pytest`:
+## Best practices for using GPT as a measurement tool
+
+- **Treat GPT outputs as measurements**, then apply the same statistical discipline you would with survey or lab data (hold-out sets, robustness checks, documentation).
+- **Explore your corpus first**: read samples, pilot attributes in ChatGPT, and ensure definitions are precise yet concise.
+- **Guard against p-hacking** by logging every attribute you try and validating on reserved data splits when running large grids of measurements.
+- **Parallelise liberally**: GABRIEL handles concurrency and retry logic, so you can scale to large corpora quickly.
+- **Checkpoint and audit**: intermediate CSVs, JSON logs, and helper viewers (`view_coded_passages`) make it easy to inspect outputs and rerun failed batches.
+
+These principles—and many richer examples—are documented in the tutorial notebook linked above.
+
+## Saving, logging, and outputs
+
+Every run expands `save_dir` (supporting `~` and environment variables), creates the directory if needed, and writes:
+
+- `file_name` CSV/Parquet outputs with structured results.
+- A `responses` subfolder containing raw model payloads from `get_all_responses`.
+- Configuration metadata so you can reproduce experiments.
+
+You can resume partially completed runs by leaving `reset_files=False` (the default) or start fresh by passing `reset_files=True`.
+
+## Development and testing
+
+Install development extras and run the test suite:
 
 ```bash
 pip install -e .[dev]
 pytest
 ```
 
-All tests use `use_dummy=True` so no API key is required.
+Tests rely on dummy responses, so no API key is required.  Linting and type checks are available via `ruff` and `mypy` when the extras are installed.
 
 ## Citation
 
