@@ -1,4 +1,6 @@
 import asyncio
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 import numpy as np
 import openai
@@ -247,6 +249,41 @@ def test_get_all_responses_custom_usage(tmp_path):
     assert row["Time Taken"] == pytest.approx(0.5)
 
 
+def test_get_all_responses_prompt_web_filters(tmp_path):
+    seen_filters: List[Optional[Dict[str, Any]]] = []
+
+    async def capture(prompt: str, **kwargs):
+        seen_filters.append(kwargs.get("web_search_filters"))
+        return (
+            [f"OK:{prompt}"],
+            0.1,
+            [
+                {
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                    }
+                }
+            ],
+        )
+
+    asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["a", "b"],
+            identifiers=["one", "two"],
+            save_path=str(tmp_path / "web.csv"),
+            response_fn=capture,
+            web_search=True,
+            web_search_filters={"allowed_domains": ["example.com"]},
+            prompt_web_search_filters={"two": {"city": "Paris"}},
+        )
+    )
+
+    assert seen_filters[0] == {"allowed_domains": ["example.com"]}
+    assert seen_filters[1] == {"allowed_domains": ["example.com"], "city": "Paris"}
+
+
 def test_get_all_embeddings_dummy(tmp_path):
     res = asyncio.run(
         openai_utils.get_all_embeddings(
@@ -471,6 +508,69 @@ def test_api_wrappers(tmp_path):
         )
     )
     assert len(custom) == 1
+
+
+def test_whatever_dataframe_inputs(tmp_path, monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    async def fake_get_all_responses(**kwargs):
+        captured.update(kwargs)
+        identifiers = kwargs["identifiers"]
+        df = pd.DataFrame(
+            {
+                "Identifier": identifiers,
+                "Response": [["OK"] for _ in identifiers],
+                "Successful": [True for _ in identifiers],
+                "Error Log": [[] for _ in identifiers],
+                "Time Taken": [0.1 for _ in identifiers],
+                "Input Tokens": [1 for _ in identifiers],
+                "Reasoning Tokens": [0 for _ in identifiers],
+                "Output Tokens": [1 for _ in identifiers],
+                "Reasoning Effort": [None for _ in identifiers],
+            }
+        )
+        return df
+
+    monkeypatch.setattr("gabriel.tasks.whatever.get_all_responses", fake_get_all_responses)
+
+    data = pd.DataFrame(
+        {
+            "prompt": ["Hi", "Bye"],
+            "img": [["img1"], None],
+            "aud": [None, [{"data": "a", "format": "mp3"}]],
+            "city_col": ["Austin", "Paris"],
+            "domains": [["example.com"], ["news.com", "blog.com"]],
+            "ident": ["row1", "row2"],
+        }
+    )
+
+    result = asyncio.run(
+        gabriel.whatever(
+            data,
+            save_dir=str(tmp_path / "whatever"),
+            column_name="prompt",
+            identifier_column="ident",
+            image_column="img",
+            audio_column="aud",
+            web_search_filters={"city": "city_col", "allowed_domains": "domains"},
+            use_dummy=True,
+        )
+    )
+
+    assert captured["prompts"] == ["Hi", "Bye"]
+    assert captured["identifiers"] == ["row1", "row2"]
+    assert captured["prompt_images"]["row1"] == ["img1"]
+    assert "row2" not in captured["prompt_images"]
+    assert captured["prompt_audio"]["row2"][0]["format"] == "mp3"
+    assert captured["prompt_web_search_filters"]["row1"] == {
+        "city": "Austin",
+        "allowed_domains": ["example.com"],
+    }
+    assert captured["prompt_web_search_filters"]["row2"]["allowed_domains"] == [
+        "news.com",
+        "blog.com",
+    ]
+    assert result.shape[0] == 2
 
 
 def test_paraphrase_api(tmp_path):

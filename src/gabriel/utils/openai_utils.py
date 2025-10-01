@@ -705,6 +705,41 @@ def _normalise_web_search_filters(
     return result
 
 
+def _merge_web_search_filters(
+    base: Optional[Dict[str, Any]], override: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Combine global and per-prompt web search filter dictionaries."""
+
+    if not base and not override:
+        return None
+
+    merged: Dict[str, Any] = {}
+
+    def _normalise_allowed(val: Any) -> Optional[List[str]]:
+        if not val:
+            return None
+        if isinstance(val, (str, bytes)):
+            candidates = [s.strip() for s in str(val).split(",") if s.strip()]
+            return candidates or None
+        if isinstance(val, Iterable):
+            items = [str(item).strip() for item in val if str(item).strip()]
+            return items or None
+        return None
+
+    for source in (base or {}, override or {}):
+        for key, value in source.items():
+            if not value:
+                continue
+            if key == "allowed_domains":
+                normalised = _normalise_allowed(value)
+                if normalised:
+                    merged[key] = normalised
+            else:
+                merged[key] = value
+
+    return merged or None
+
+
 def _build_params(
     *,
     model: str,
@@ -1561,6 +1596,7 @@ async def get_all_responses(
     identifiers: Optional[List[str]] = None,
     prompt_images: Optional[Dict[str, List[str]]] = None,
     prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
+    prompt_web_search_filters: Optional[Dict[str, Dict[str, Any]]] = None,
     *,
     model: str = "gpt-5-mini",
     n: int = 1,
@@ -1671,7 +1707,12 @@ async def get_all_responses(
     ``use_web_search`` flag is still accepted but ``web_search`` should be used
     going forward.  Additional web search options (allowed domains and user
     location hints such as ``city``, ``country``, ``region``, ``timezone`` and
-    ``type``) can be supplied together via ``web_search_filters``.
+    ``type``) can be supplied together via ``web_search_filters``.  Per-identifier
+    overrides can be passed through ``prompt_web_search_filters`` where the
+    mapping keys correspond to prompt identifiers and values follow the same
+    schema as ``web_search_filters``.  These overrides are merged with the
+    global filters before each request, enabling DataFrame-driven location hints
+    without hand-crafting separate dictionaries.
 """
     response_callable = response_fn or get_response
     underlying_callable = response_callable
@@ -1770,6 +1811,7 @@ async def get_all_responses(
     # Pass the chosen model through to get_response by default
     get_response_kwargs.setdefault("model", model)
     get_response_kwargs.setdefault("base_url", base_url)
+    base_web_search_filters = get_response_kwargs.get("web_search_filters")
     # Decide default cutoff once per job using cached rate headers
     # Fetch rate headers once to avoid multiple API calls
     # Retrieve rate‑limit headers for the chosen model.  Passing the model
@@ -2124,6 +2166,14 @@ async def get_all_responses(
                             {"role": "user", "content": prompt},
                         ]
                     )
+                per_prompt_filters = (
+                    prompt_web_search_filters.get(str(ident))
+                    if prompt_web_search_filters
+                    else None
+                )
+                merged_filters = _merge_web_search_filters(
+                    base_web_search_filters, per_prompt_filters
+                )
                 body = _build_params(
                     model=get_response_kwargs.get("model", "gpt-5-mini"),
                     input_data=input_data,
@@ -2133,7 +2183,7 @@ async def get_all_responses(
                     tools=get_response_kwargs.get("tools"),
                     tool_choice=get_response_kwargs.get("tool_choice"),
                     web_search=get_response_kwargs.get("web_search", False),
-                    web_search_filters=get_response_kwargs.get("web_search_filters"),
+                    web_search_filters=merged_filters,
                     search_context_size=get_response_kwargs.get(
                         "search_context_size", "medium"
                     ),
@@ -2698,6 +2748,18 @@ async def get_all_responses(
                 images_payload = prompt_images.get(str(ident)) if prompt_images else None
                 audio_payload = prompt_audio.get(str(ident)) if prompt_audio else None
                 call_kwargs = dict(get_response_kwargs)
+                per_prompt_filters = (
+                    prompt_web_search_filters.get(str(ident))
+                    if prompt_web_search_filters
+                    else None
+                )
+                merged_filters = _merge_web_search_filters(
+                    base_web_search_filters, per_prompt_filters
+                )
+                if merged_filters is not None:
+                    call_kwargs["web_search_filters"] = merged_filters
+                else:
+                    call_kwargs.pop("web_search_filters", None)
                 if images_payload is not None:
                     call_kwargs["images"] = images_payload
                 if audio_payload is not None:
