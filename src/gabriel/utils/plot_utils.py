@@ -18,7 +18,7 @@ and additional features.  For Python 3.12 and SciPy 1.16+, use
 from __future__ import annotations
 
 import textwrap
-from typing import Iterable, Dict, Any, Optional, List, Tuple
+from typing import Iterable, Dict, Any, Optional, List, Tuple, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -34,6 +34,428 @@ except ModuleNotFoundError:
     tabulate = None  # fallback when tabulate isn't installed
 
 import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+
+def _ensure_list(values: Optional[Union[str, Sequence[str]]]) -> List[str]:
+    """Return ``values`` as a list, accepting strings or iterables."""
+
+    if values is None:
+        return []
+    if isinstance(values, str):
+        return [values]
+    return list(values)
+
+
+def _cluster_groups(df: pd.DataFrame, columns: Sequence[str]) -> Union[np.ndarray, pd.Series]:
+    """Return an array of cluster identifiers suitable for statsmodels."""
+
+    if len(columns) == 1:
+        col = columns[0]
+        series = df[col]
+        if pd.api.types.is_numeric_dtype(series):
+            return series.values
+        return pd.Categorical(series).codes
+    group_df = pd.DataFrame(index=df.index)
+    for col in columns:
+        series = df[col]
+        if pd.api.types.is_numeric_dtype(series):
+            group_df[col] = series.values
+        else:
+            group_df[col] = pd.Categorical(series).codes
+    return group_df.values
+
+
+def _apply_year_excess(
+    df: pd.DataFrame,
+    *,
+    year_col: str,
+    window: int,
+    columns: Sequence[str],
+    mode: str = "difference",
+    replace: bool = True,
+    prefix: str = "",
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """Compute excess/ratio values relative to a rolling window of years.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Data containing the original variables and ``year_col``.
+    year_col : str
+        Column representing the temporal dimension.
+    window : int
+        Number of years on each side used when computing the rolling mean.
+    columns : Sequence[str]
+        Variables for which to compute excess or ratios.
+    mode : {"difference", "ratio"}
+        Whether to subtract (excess) or divide (ratio) by the window mean.
+    replace : bool, default True
+        If True, the returned mapping replaces each original column name with
+        the derived excess/ratio column in downstream analyses.
+    prefix : str, default ""
+        Optional prefix for new columns (useful when running multiple configs).
+
+    Returns
+    -------
+    df_out : DataFrame
+        Copy of ``df`` containing the additional columns.
+    replacements : dict
+        Mapping of original column names to new excess/ratio columns that can
+        be used to update variable lists.
+    """
+
+    if year_col not in df.columns:
+        raise KeyError(f"Year column '{year_col}' not found in dataframe.")
+    if mode not in {"difference", "ratio"}:
+        raise ValueError("mode must be 'difference' or 'ratio'.")
+    df_out = df.copy()
+    missing = [col for col in columns if col not in df_out.columns]
+    if missing:
+        raise KeyError(f"Columns {missing} not found in dataframe for excess calculation.")
+    df_out = df_out.sort_values(year_col)
+    unique_years = df_out[year_col].dropna().unique()
+    unique_years.sort()
+    replacements: Dict[str, str] = {}
+    means: Dict[str, Dict[Any, float]] = {col: {} for col in columns}
+    for i, year in enumerate(unique_years):
+        lower_idx = max(0, i - window)
+        upper_idx = min(len(unique_years) - 1, i + window)
+        relevant_years = unique_years[lower_idx : upper_idx + 1]
+        subset = df_out[df_out[year_col].isin(relevant_years)]
+        year_means = subset[columns].mean()
+        for col in columns:
+            means[col][year] = year_means.get(col, np.nan)
+    for col in columns:
+        mean_col = f"{prefix}{col}__year_mean"
+        df_out[mean_col] = df_out[year_col].map(means[col])
+        new_col = f"{prefix}{col}_{'excess' if mode == 'difference' else 'ratio'}"
+        if mode == "difference":
+            df_out[new_col] = df_out[col] - df_out[mean_col]
+        else:
+            df_out[new_col] = df_out[col] / df_out[mean_col]
+        if replace:
+            replacements[col] = new_col
+    return df_out, replacements
+
+
+def _format_coefficient(coef: float, se: Optional[float], pval: Optional[float], *, float_fmt: str) -> str:
+    """Return a formatted coefficient string with standard error and stars."""
+
+    if np.isnan(coef):
+        return "-"
+    stars = ""
+    if pval is not None:
+        if pval < 0.01:
+            stars = "***"
+        elif pval < 0.05:
+            stars = "**"
+        elif pval < 0.1:
+            stars = "*"
+    coef_part = float_fmt.format(coef)
+    if se is None or np.isnan(se):
+        return f"{coef_part}{stars}"
+    se_part = float_fmt.format(se)
+    return f"{coef_part} ({se_part}){stars}"
+
+
+def _results_to_dict(
+    res: sm.regression.linear_model.RegressionResultsWrapper,
+    *,
+    display_varnames: List[str],
+    param_lookup: Dict[str, str],
+) -> Dict[str, Any]:
+    """Convert a statsmodels result object to the dictionary structure used here."""
+
+    params = res.params
+    se = res.bse
+    return {
+        "coef": params,
+        "se": se,
+        "t": res.tvalues,
+        "p": res.pvalues,
+        "r2": getattr(res, "rsquared", np.nan),
+        "adj_r2": getattr(res, "rsquared_adj", np.nan),
+        "n": int(res.nobs),
+        "k": len(params) - 1 if "Intercept" in params.index else len(params),
+        "rse": np.sqrt(res.mse_resid) if hasattr(res, "mse_resid") else np.nan,
+        "F": getattr(res, "fvalue", np.nan),
+        "resid": res.resid,
+        "varnames": list(params.index),
+        "display_varnames": display_varnames,
+        "param_lookup": param_lookup,
+        "sm_results": res,
+    }
+
+
+def _fit_formula_model(
+    data: pd.DataFrame,
+    *,
+    y: str,
+    main_vars: Sequence[str],
+    main_display: Sequence[str],
+    controls: Sequence[str],
+    control_display: Sequence[str],
+    robust: bool,
+    entity_fe: Optional[str],
+    time_fe: Optional[str],
+    include_intercept: bool,
+    cluster_cols: Sequence[str],
+) -> Tuple[Dict[str, Any], str]:
+    """Fit an OLS model via formulas, optionally with fixed effects."""
+
+    rhs_terms = [f"Q('{var}')" for var in main_vars]
+    rhs_terms.extend(f"Q('{var}')" for var in controls)
+    if entity_fe:
+        rhs_terms.append(f"C(Q('{entity_fe}'))")
+    if time_fe:
+        rhs_terms.append(f"C(Q('{time_fe}'))")
+    if not rhs_terms:
+        rhs_terms = ["1"]
+    formula = f"Q('{y}') ~ " + " + ".join(rhs_terms)
+    if not include_intercept:
+        formula += " - 1"
+    model = smf.ols(formula=formula, data=data)
+    fit_kwargs: Dict[str, Any] = {}
+    if cluster_cols:
+        groups = _cluster_groups(data, cluster_cols)
+        fit_kwargs["cov_type"] = "cluster"
+        fit_kwargs["cov_kwds"] = {"groups": groups}
+    elif robust:
+        fit_kwargs["cov_type"] = "HC3"
+    try:
+        res = model.fit(**fit_kwargs)
+    except ValueError:
+        if fit_kwargs.get("cov_type") == "HC3":
+            fit_kwargs["cov_type"] = "HC1"
+            res = model.fit(**fit_kwargs)
+        else:
+            raise
+    display_varnames: List[str] = []
+    param_lookup: Dict[str, str] = {}
+    if include_intercept and "Intercept" in res.params.index:
+        display_varnames.append("Intercept")
+        param_lookup["Intercept"] = "Intercept"
+    for var, disp in zip(main_vars, main_display):
+        key = f"Q('{var}')"
+        if key in res.params.index:
+            display_varnames.append(disp)
+            param_lookup[disp] = key
+    for var, disp in zip(controls, control_display):
+        key = f"Q('{var}')"
+        if key in res.params.index:
+            display_varnames.append(disp)
+            param_lookup[disp] = key
+    result = _results_to_dict(res, display_varnames=display_varnames, param_lookup=param_lookup)
+    return result, formula
+
+
+def build_regression_latex(
+    results: Dict[Tuple[str, str], Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    *,
+    rename_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """Create a LaTeX regression table from ``regression_plot`` results.
+
+    ``build_regression_latex`` is designed to work out-of-the-box using the
+    metadata produced by :func:`regression_plot`.  Passing ``options=None`` or
+    ``{}`` will emit a sensible default table that lists every model (simple and
+    with controls) that was estimated.  Advanced layouts can still be achieved
+    by providing a configuration dictionary.  The most common keys are:
+
+    ``columns``
+        A list describing which models should appear as columns.  Each entry is
+        a mapping with ``key`` (tuple of ``(y, x)``) and ``model`` (``"simple"``
+        or ``"with_controls"``).  ``label`` and ``dependent_label`` override the
+        column heading and dependent variable label respectively.
+    ``row_order``
+        Ordered list of variable display names to keep.  By default all
+        available coefficients are displayed.
+    ``include_intercept``
+        Whether the intercept should be shown (defaults to ``False``).
+    ``float_format``
+        Format string used for coefficients and summary statistics.
+    ``caption`` / ``label``
+        Metadata for the LaTeX table environment.
+    ``save_path``
+        Path on disk to write the LaTeX string to (optional).
+
+    Examples
+    --------
+    >>> summary = regression_plot(df, x="treatment", y="outcome", controls=["age", "income"], latex_options=True)
+    >>> print(summary["latex_table"])  # doctest: +SKIP
+
+    Parameters
+    ----------
+    results : dict
+        Output of :func:`regression_plot`.
+    options : dict, optional
+        Table configuration overriding the defaults listed above.
+    rename_map : dict, optional
+        Mapping from original variable names to pretty labels.
+    """
+
+    rename_map = rename_map or {}
+    if options is None:
+        options = {}
+    elif not isinstance(options, dict):
+        raise TypeError("options must be a mapping or None")
+    else:
+        options = dict(options)
+    if "caption" not in options:
+        options["caption"] = "Regression results"
+    if "label" not in options:
+        options["label"] = "tab:regression_results"
+    columns_spec = options.get("columns")
+    if not columns_spec:
+        columns_spec = []
+        for (y_var, x_var), model_dict in results.items():
+            dep_label = rename_map.get(y_var, y_var)
+            indep_label = rename_map.get(x_var, x_var)
+            if model_dict.get("simple") is not None:
+                columns_spec.append({
+                    "key": (y_var, x_var),
+                    "model": "simple",
+                    "label": f"{dep_label} ~ {indep_label}",
+                    "dependent_label": dep_label,
+                })
+            if model_dict.get("with_controls") is not None:
+                columns_spec.append({
+                    "key": (y_var, x_var),
+                    "model": "with_controls",
+                    "label": f"{dep_label} ~ {indep_label} + controls",
+                    "dependent_label": dep_label,
+                })
+    models: List[Dict[str, Any]] = []
+    for spec in columns_spec:
+        key = tuple(spec.get("key", ()))
+        if len(key) != 2:
+            raise ValueError("Each column specification must include a (y, x) key tuple.")
+        if key not in results:
+            raise KeyError(f"Result for key {key} not found.")
+        model_name = spec.get("model", "simple")
+        model_entry = results[key].get(model_name)
+        if model_entry is None:
+            continue
+        label = spec.get("label") or f"Model: {key[0]} ~ {key[1]}"
+        dependent_label = spec.get("dependent_label", rename_map.get(key[0], key[0]))
+        models.append({
+            "label": label,
+            "dependent": dependent_label,
+            "result": model_entry,
+        })
+    if not models:
+        raise ValueError("No models found for LaTeX table generation.")
+    include_intercept = bool(options.get("include_intercept", False))
+    float_fmt = options.get("float_format", "{:.3f}")
+    row_order = options.get("row_order")
+    if row_order is None:
+        row_order = []
+        for model in models:
+            for name in model["result"].get("display_varnames", []):
+                if not include_intercept and name == "Intercept":
+                    continue
+                if name not in row_order:
+                    row_order.append(name)
+    caption = options.get("caption", "Regression results")
+    label = options.get("label", "tab:regression_results")
+    include_stats = options.get("include_stats", True)
+    include_adj_r2 = options.get("include_adj_r2", False)
+    include_controls_row = options.get("include_controls_row", True)
+    include_fe_rows = options.get("include_fe_rows", True)
+    include_cluster_row = options.get("include_cluster_row", True)
+    show_dependent = options.get("show_dependent", True)
+    row_end = " " + "\\\\"
+    lines = [r"\begin{table}[!htbp]", r"\centering", r"\begin{tabular}{l" + "c" * len(models) + "}", r"\toprule"]
+    header = " & " + " & ".join(model["label"] for model in models) + row_end
+    lines.append(header)
+    if show_dependent:
+        dep_row = ["Dependent variable"] + [model["dependent"] for model in models]
+        lines.append(" & ".join(dep_row) + row_end)
+        lines.append(r"\midrule")
+    for row in row_order:
+        if not include_intercept and row == "Intercept":
+            continue
+        row_entries = [row]
+        for model in models:
+            res = model["result"]
+            coef_series = res["coef"]
+            se_series = res["se"]
+            pvals = res["p"]
+            lookup = res.get("param_lookup", {})
+            if not isinstance(coef_series, pd.Series):
+                coef_series = pd.Series(coef_series, index=res.get("display_varnames"))
+            if not isinstance(se_series, pd.Series):
+                se_series = pd.Series(se_series, index=res.get("display_varnames"))
+            if not isinstance(pvals, pd.Series):
+                pvals = pd.Series(pvals, index=res.get("display_varnames"))
+            key = lookup.get(row, row)
+            if key in coef_series.index:
+                formatted = _format_coefficient(
+                    float(coef_series[key]),
+                    float(se_series[key]) if key in se_series.index else None,
+                    float(pvals[key]) if key in pvals.index else None,
+                    float_fmt=float_fmt,
+                )
+            else:
+                formatted = "-"
+            row_entries.append(formatted)
+        lines.append(" & ".join(row_entries) + row_end)
+    if include_stats or include_controls_row or include_fe_rows or include_cluster_row:
+        lines.append(r"\midrule")
+    if include_stats:
+        def _fmt_stat(val: Any) -> str:
+            return float_fmt.format(val) if pd.notnull(val) else "-"
+        obs_row = ["Observations"]
+        r2_row = ["R-squared"]
+        adj_row = ["Adj. R-squared"]
+        for model in models:
+            res = model["result"]
+            n_val = res.get("n", np.nan)
+            obs_row.append(str(int(n_val)) if pd.notnull(n_val) else "-")
+            r2_row.append(_fmt_stat(res.get("r2", np.nan)))
+            if include_adj_r2:
+                adj_row.append(_fmt_stat(res.get("adj_r2", np.nan)))
+        lines.append(" & ".join(obs_row) + row_end)
+        lines.append(" & ".join(r2_row) + row_end)
+        if include_adj_r2:
+            lines.append(" & ".join(adj_row) + row_end)
+    if include_controls_row:
+        ctrl_row = ["Controls"]
+        for model in models:
+            meta = model["result"].get("metadata", {})
+            has_controls = bool(meta.get("controls_included"))
+            ctrl_row.append(r"\checkmark" if has_controls else "-")
+        lines.append(" & ".join(ctrl_row) + row_end)
+    if include_fe_rows:
+        entity_row = ["Entity FE"]
+        time_row = ["Time FE"]
+        for model in models:
+            meta = model["result"].get("metadata", {})
+            fe = meta.get("fixed_effects", {})
+            entity_row.append(r"\checkmark" if fe.get("entity") else "-")
+            time_row.append(r"\checkmark" if fe.get("time") else "-")
+        lines.append(" & ".join(entity_row) + row_end)
+        lines.append(" & ".join(time_row) + row_end)
+    if include_cluster_row:
+        cluster_row = ["Clustered SE"]
+        for model in models:
+            meta = model["result"].get("metadata", {})
+            fe = meta.get("fixed_effects", {})
+            cluster_row.append(r"\checkmark" if fe.get("cluster") else "-")
+        lines.append(" & ".join(cluster_row) + row_end)
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+    lines.append(rf"\caption{{{caption}}}")
+    lines.append(rf"\label{{{label}}}")
+    lines.append(r"\end{table}")
+    latex = "\n".join(lines)
+    save_path = options.get("save_path")
+    if save_path:
+        with open(save_path, "w", encoding="utf-8") as fh:
+            fh.write(latex)
+    return latex
 
 # Set monospace font for consistency
 plt.rcParams["font.family"] = "monospace"
@@ -106,6 +528,7 @@ def fit_ols(
     df_resid = n - k_plus1
     rse = np.sqrt((resid @ resid) / df_resid) if df_resid > 0 else np.nan
     F_stat = res.fvalue if k > 0 else np.nan
+    display_names = varnames or list(use.params.index)
     return {
         "coef": use.params,
         "se": use.bse,
@@ -119,11 +542,13 @@ def fit_ols(
         "F": F_stat,
         "resid": resid,
         "varnames": varnames,
+        "display_varnames": display_names,
+        "param_lookup": {name: name for name in display_names},
         "sm_results": res,
     }
 
 
-def _print_table(res: Dict[str, Any], varnames: List[str], *, tablefmt: str = "github") -> None:
+def _print_table(res: Dict[str, Any], *, tablefmt: str = "github") -> None:
     """Print a statsmodels summary and a compact coefficient table.
 
     If the ``tabulate`` library is available, it is used for formatting; otherwise
@@ -132,12 +557,21 @@ def _print_table(res: Dict[str, Any], varnames: List[str], *, tablefmt: str = "g
     """
     # Print the full statsmodels summary for context
     print(res["sm_results"].summary())
-    tbl = pd.DataFrame({
-        "coef": res["coef"],
-        "se(HC3)": res["se"],
-        "t": res["t"],
-        "p": res["p"],
-    }, index=varnames)
+    display_names = res.get("display_varnames") or list(res["coef"].index)
+    lookup = res.get("param_lookup", {name: name for name in display_names})
+    rows = []
+    for name in display_names:
+        param_name = lookup.get(name, name)
+        if param_name not in res["coef"].index:
+            continue
+        rows.append({
+            "variable": name,
+            "coef": res["coef"][param_name],
+            "se(HC3)": res["se"][param_name],
+            "t": res["t"][param_name],
+            "p": res["p"][param_name],
+        })
+    tbl = pd.DataFrame(rows).set_index("variable") if rows else pd.DataFrame()
     if tabulate is not None:
         print(tabulate(tbl.round(7), headers="keys", tablefmt=tablefmt, showindex=True))
     else:
@@ -149,9 +583,9 @@ def _print_table(res: Dict[str, Any], varnames: List[str], *, tablefmt: str = "g
 def regression_plot(
     df: pd.DataFrame,
     *,
-    x: Iterable[str],
-    y: Iterable[str],
-    controls: Optional[Iterable[str]] = None,
+    x: Union[str, Iterable[str]],
+    y: Union[str, Iterable[str]],
+    controls: Optional[Union[str, Iterable[str]]] = None,
     rename_map: Optional[Dict[str, str]] = None,
     zscore_x: bool = False,
     zscore_y: bool = False,
@@ -166,45 +600,115 @@ def regression_plot(
     print_summary: bool = True,
     xlim: Optional[Tuple[float, float]] = None,
     ylim: Optional[Tuple[float, float]] = None,
+    excess_config: Optional[Dict[str, Any]] = None,
+    fixed_effects: Optional[Dict[str, Any]] = None,
+    latex_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """Run OLS regressions for each combination of ``y`` in ``y_vars`` and ``x`` in ``x_vars``.
+    """Run OLS regressions for each combination of ``y`` and ``x`` variables.
 
-    For each pair, two models are estimated: one with just the independent
-    variable and one including any specified ``controls``.  When
+    Parameters accept either a string (single variable) or an iterable of
+    strings.  For each pair, two models are estimated: one with just the
+    independent variable and one including any specified ``controls``.  When
     ``show_plots`` is True, a binned scatter plot with quantile bins and error
-    bars is displayed.  If ``zscore_x`` or ``zscore_y`` is True, the
-    respective variables are standardised before analysis (but the original
-    variables remain untouched in the output).
+    bars is displayed.  If ``zscore_x`` or ``zscore_y`` is True, the respective
+    variables are standardised before analysis (but the original variables
+    remain untouched in the output).
 
-    Additional optional axis limits can be set via ``xlim`` and ``ylim``.
+    ``excess_config`` optionally enables computation of excess/ratio variables
+    relative to rolling year means, inspired by the research regression helper
+    code.  ``fixed_effects`` allows inclusion of entity/time fixed effects and
+    clustered standard errors via statsmodels' formula API.  ``latex_options``
+    controls LaTeX output: pass ``True`` (or ``{}``) for a default table, or a
+    dictionary for customised layouts.  See :func:`build_regression_latex` for
+    the available keys.
 
     Returns a dictionary keyed by ``(y_var, x_var)`` with entries ``'simple'``,
-    ``'with_controls'``, and ``'binned_df'``.  The regression results include
-    the full statsmodels result, coefficient arrays, and residuals.  When
-    controls are not provided, ``'with_controls'`` will be ``None``.
+    ``'with_controls'``, and ``'binned_df'`` along with metadata for downstream
+    table construction.  When controls are not provided, ``'with_controls'``
+    will be ``None``.
     """
-    controls = list(controls) if controls else []
-    rename_map = rename_map or {}
+    x_vars = _ensure_list(x)
+    y_vars = _ensure_list(y)
+    control_vars = _ensure_list(controls)
+    if not x_vars or not y_vars:
+        raise ValueError("At least one x and one y variable must be provided.")
+    rename_map = dict(rename_map or {})
+    prepared_df = df.copy()
+    replacements: Dict[str, str] = {}
+    if excess_config:
+        excess_columns = _ensure_list(excess_config.get("columns"))
+        if not excess_columns:
+            excess_columns = sorted({*x_vars, *y_vars, *control_vars})
+        year_col = excess_config.get("year_col")
+        if year_col is None:
+            raise ValueError("excess_config requires a 'year_col'.")
+        window = int(excess_config.get("window", 0))
+        if window <= 0:
+            raise ValueError("excess_config 'window' must be a positive integer.")
+        mode = excess_config.get("mode", "difference")
+        replace = bool(excess_config.get("replace", True))
+        prefix = excess_config.get("prefix", "")
+        prepared_df, replacements = _apply_year_excess(
+            prepared_df,
+            year_col=year_col,
+            window=window,
+            columns=excess_columns,
+            mode=mode,
+            replace=replace,
+            prefix=prefix,
+        )
+        suffix = " (excess)" if mode == "difference" else " (ratio)"
+        for original, new in replacements.items():
+            if original in rename_map and new not in rename_map:
+                rename_map[new] = rename_map[original] + suffix
+            elif new not in rename_map:
+                rename_map[new] = original + suffix
+    x_actual = {var: replacements.get(var, var) for var in x_vars}
+    y_actual = {var: replacements.get(var, var) for var in y_vars}
+    controls_actual = {var: replacements.get(var, var) for var in control_vars}
     results: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for y_var in y:
-        for x_var in x:
+    fe_entity = fixed_effects.get("entity") if fixed_effects else None
+    fe_time = fixed_effects.get("time") if fixed_effects else None
+    cluster_cols = _ensure_list(fixed_effects.get("cluster")) if fixed_effects else []
+    include_intercept = True
+    if fixed_effects:
+        include_intercept = fixed_effects.get("include_intercept")
+        if include_intercept is None:
+            include_intercept = not (fe_entity or fe_time)
+    use_formula = False
+    if fixed_effects:
+        use_formula = bool(fixed_effects.get("use_formula", False) or fe_entity or fe_time or cluster_cols)
+    # In case clustering is requested without other fixed effects
+    if cluster_cols:
+        use_formula = True
+    for y_var in y_vars:
+        y_col = y_actual[y_var]
+        for x_var in x_vars:
+            x_col = x_actual[x_var]
             # Create a copy for each pair to avoid side effects
-            data = df.copy()
+            data = prepared_df.copy()
             # Pretty names for axes and tables
-            y_disp = rename_map.get(y_var, y_var)
-            x_disp = rename_map.get(x_var, x_var)
-            ctrl_disp = [rename_map.get(c, c) for c in controls]
+            y_disp = rename_map.get(y_var, rename_map.get(y_col, y_var))
+            x_disp = rename_map.get(x_var, rename_map.get(x_col, x_var))
+            ctrl_disp = [rename_map.get(c, rename_map.get(controls_actual[c], c)) for c in control_vars]
             # Ensure variables are numeric; non-numeric rows dropped
-            needed = [x_var, y_var] + controls
-            data[needed] = data[needed].apply(pd.to_numeric, errors="coerce")
-            data = data.dropna(subset=needed)
+            numeric_needed = [x_col, y_col] + [controls_actual[c] for c in control_vars]
+            data[numeric_needed] = data[numeric_needed].apply(pd.to_numeric, errors="coerce")
+            drop_subset = list(numeric_needed)
+            if fe_entity:
+                drop_subset.append(fe_entity)
+            if fe_time:
+                drop_subset.append(fe_time)
+            data = data.dropna(subset=drop_subset)
             # Optionally z‑score independent and dependent variables
-            x_use = f"{x_var}_z" if zscore_x else x_var
-            y_use = f"{y_var}_z" if zscore_y else y_var
+            x_use = f"{x_col}_z" if zscore_x else x_col
+            y_use = f"{y_col}_z" if zscore_y else y_col
             if zscore_x:
-                data[x_use] = _z(data[x_var])
+                data[x_use] = _z(data[x_col])
+                rename_map.setdefault(x_use, f"{x_disp} (z)")
             if zscore_y:
-                data[y_use] = _z(data[y_var])
+                data[y_use] = _z(data[y_col])
+                rename_map.setdefault(y_use, f"{y_disp} (z)")
             # Binned scatter plot
             data["_bin"] = pd.qcut(data[x_use], q=bins, duplicates="drop")
             grp = data.groupby("_bin", observed=True)
@@ -234,37 +738,113 @@ def regression_plot(
             # Prepare design matrices and variable names
             y_arr = data[y_use].values
             # Simple model: intercept and primary x variable
-            X_simple = np.column_stack([np.ones(len(data)), data[x_use].values])
             varnames_simple = ["Intercept", x_disp if not zscore_x else f"{x_disp}_z"]
-            # Controlled model: intercept, primary x, then controls
-            X_ctrl = None
-            varnames_ctrl: List[str] | None = None
-            if controls:
-                arrays = [np.ones(len(data)), data[x_use].values]
-                for c in controls:
-                    arrays.append(data[c].values)
-                X_ctrl = np.column_stack(arrays)
-                varnames_ctrl = ["Intercept", x_disp if not zscore_x else f"{x_disp}_z"] + ctrl_disp
-            # Fit simple model
-            simple_res = fit_ols(y_arr, X_simple, robust=robust, varnames=varnames_simple)
-            simple_res["varnames"] = varnames_simple
+            ctrl_columns = [controls_actual[c] for c in control_vars]
+            ctrl_display = ctrl_disp
+            simple_res: Dict[str, Any]
+            simple_formula = None
+            metadata_base = {
+                "y": y_var,
+                "y_column": y_use,
+                "y_display": y_disp,
+                "x": x_var,
+                "x_column": x_use,
+                "x_display": x_disp,
+                "controls": control_vars,
+                "control_columns": ctrl_columns,
+                "control_display": ctrl_disp,
+                "controls_included": [],
+                "fixed_effects": {
+                    "entity": fe_entity,
+                    "time": fe_time,
+                    "cluster": cluster_cols,
+                    "include_intercept": include_intercept,
+                },
+                "excess_replacements": replacements,
+            }
+            if use_formula:
+                simple_res, simple_formula = _fit_formula_model(
+                    data,
+                    y=y_use,
+                    main_vars=[x_use],
+                    main_display=[x_disp if not zscore_x else f"{x_disp} (z)"],
+                    controls=[],
+                    control_display=[],
+                    robust=robust,
+                    entity_fe=fe_entity,
+                    time_fe=fe_time,
+                    include_intercept=include_intercept,
+                    cluster_cols=cluster_cols,
+                )
+            else:
+                X_simple = np.column_stack([np.ones(len(data)), data[x_use].values])
+                simple_res = fit_ols(y_arr, X_simple, robust=robust, varnames=varnames_simple)
+                simple_res["varnames"] = varnames_simple
+            if "varnames" not in simple_res and "display_varnames" in simple_res:
+                simple_res["varnames"] = simple_res["display_varnames"]
+            simple_res.setdefault("metadata", {}).update(metadata_base | {"model": "simple", "formula": simple_formula})
             if print_summary:
                 print(f"\n=== Model: {y_disp} ~ {x_disp} ===")
-                _print_table(simple_res, varnames_simple, tablefmt=tablefmt)
+                _print_table(simple_res, tablefmt=tablefmt)
             # Fit controlled model if controls exist
             ctrl_res = None
-            if controls and X_ctrl is not None and varnames_ctrl is not None:
-                ctrl_res = fit_ols(y_arr, X_ctrl, robust=robust, varnames=varnames_ctrl)
-                ctrl_res["varnames"] = varnames_ctrl
-                if print_summary:
-                    print(f"\n=== Model: {y_disp} ~ {x_disp} + controls ===")
-                    _print_table(ctrl_res, varnames_ctrl, tablefmt=tablefmt)
+            ctrl_formula = None
+            if control_vars:
+                if use_formula:
+                    ctrl_res, ctrl_formula = _fit_formula_model(
+                        data,
+                        y=y_use,
+                        main_vars=[x_use],
+                        main_display=[x_disp if not zscore_x else f"{x_disp} (z)"],
+                        controls=ctrl_columns,
+                        control_display=ctrl_display,
+                        robust=robust,
+                        entity_fe=fe_entity,
+                        time_fe=fe_time,
+                        include_intercept=include_intercept,
+                        cluster_cols=cluster_cols,
+                    )
+                else:
+                    arrays = [np.ones(len(data)), data[x_use].values]
+                    for c in ctrl_columns:
+                        arrays.append(data[c].values)
+                    X_ctrl = np.column_stack(arrays)
+                    varnames_ctrl = ["Intercept", x_disp if not zscore_x else f"{x_disp}_z"] + ctrl_disp
+                    ctrl_res = fit_ols(y_arr, X_ctrl, robust=robust, varnames=varnames_ctrl)
+                    ctrl_res["varnames"] = varnames_ctrl
+                if ctrl_res is not None:
+                    if "varnames" not in ctrl_res and "display_varnames" in ctrl_res:
+                        ctrl_res["varnames"] = ctrl_res["display_varnames"]
+                    ctrl_res.setdefault("metadata", {}).update(
+                        metadata_base
+                        | {
+                            "model": "with_controls",
+                            "formula": ctrl_formula,
+                            "controls_included": ctrl_columns,
+                        }
+                    )
+                    if print_summary:
+                        print(f"\n=== Model: {y_disp} ~ {x_disp} + controls ===")
+                        _print_table(ctrl_res, tablefmt=tablefmt)
             # Store results keyed by (original y, original x)
             results[(y_var, x_var)] = {
                 "simple": simple_res,
                 "with_controls": ctrl_res,
                 "binned_df": grp[[x_use, y_use]].mean(),
             }
+            results[(y_var, x_var)]["metadata"] = metadata_base
+    latex_opts: Optional[Dict[str, Any]]
+    if isinstance(latex_options, bool):
+        latex_opts = {} if latex_options else None
+    elif latex_options is None:
+        latex_opts = None
+    else:
+        latex_opts = dict(latex_options)
+    if latex_opts is not None:
+        latex = build_regression_latex(results, latex_opts, rename_map=rename_map)
+        results["latex_table"] = latex
+        if latex_opts.get("print", True):
+            print(latex)
     return results
 
 
