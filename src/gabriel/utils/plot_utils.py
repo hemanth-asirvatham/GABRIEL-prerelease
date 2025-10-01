@@ -48,6 +48,74 @@ def _ensure_list(values: Optional[Union[str, Sequence[str]]]) -> List[str]:
     return list(values)
 
 
+def _to_native(value: Any) -> Any:
+    """Convert NumPy scalar types to native Python scalars for metadata."""
+
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _prepare_fixed_effect_columns(
+    data: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    min_share: float,
+) -> Tuple[Dict[str, Any], Dict[str, List[Any]]]:
+    """Normalise fixed-effect columns and return base/rare level metadata."""
+
+    base_levels: Dict[str, Any] = {}
+    rare_levels: Dict[str, List[Any]] = {}
+    total_rows = len(data)
+    min_share = max(float(min_share), 0.0)
+    for col in columns:
+        if col not in data.columns:
+            raise KeyError(f"Fixed-effect column '{col}' not found in dataframe.")
+        series = pd.Series(data[col], index=data.index)
+        if not series.empty:
+            series = series.astype(object)
+        counts = series.dropna().value_counts()
+        if counts.empty:
+            base_levels[col] = None
+            rare_levels[col] = []
+            data[col] = series
+            continue
+        rare: List[Any] = []
+        if min_share > 0 and total_rows > 0:
+            shares = counts / float(total_rows)
+            rare = shares[shares < min_share].index.tolist()
+        placeholder = None
+        if rare:
+            placeholder = f"__rare__{col}__"
+            existing = {str(v) for v in counts.index}
+            while placeholder in existing:
+                placeholder += "_"
+            series = series.where(~series.isin(rare), placeholder)
+        non_missing = series.dropna()
+        if non_missing.empty:
+            base = None
+            ordered_levels: List[Any] = []
+        else:
+            unique_levels = list(dict.fromkeys(non_missing))
+            if placeholder is not None:
+                base = placeholder
+                ordered_levels = [placeholder]
+                ordered_levels.extend(lvl for lvl in unique_levels if lvl != placeholder)
+            else:
+                counts_after = pd.Series(non_missing).value_counts()
+                base = counts_after.idxmax()
+                ordered_levels = [base]
+                ordered_levels.extend(lvl for lvl in unique_levels if lvl != base)
+        if ordered_levels:
+            cat = pd.Categorical(series, categories=ordered_levels)
+            data[col] = pd.Series(cat, index=data.index)
+        else:
+            data[col] = series
+        base_levels[col] = _to_native(base)
+        rare_levels[col] = [_to_native(val) for val in rare]
+    return base_levels, rare_levels
+
+
 def _cluster_groups(df: pd.DataFrame, columns: Sequence[str]) -> Union[np.ndarray, pd.Series]:
     """Return an array of cluster identifiers suitable for statsmodels."""
 
@@ -654,6 +722,7 @@ def regression_plot(
     include_intercept: Optional[bool] = None,
     use_formula: Optional[bool] = None,
     latex_options: Optional[Dict[str, Any]] = None,
+    fixed_effect_min_share: float = 0.01,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Run OLS regressions for each combination of ``y`` and ``x`` variables.
 
@@ -681,7 +750,10 @@ def regression_plot(
     string or list of column names for each.  ``fe_interactions`` adds
     interaction terms between every specified entity/time pair (or pairwise
     interactions within a single group when only entity or time effects are
-    supplied).  ``cluster`` can provide columns for clustered standard errors.
+    supplied).  ``fixed_effect_min_share`` controls how rare categories are
+    handled: levels appearing in fewer than the specified share of rows (default
+    1%) are pooled into a combined "rare" bucket that serves as the baseline
+    category.  ``cluster`` can provide columns for clustered standard errors.
     ``include_intercept`` overrides the automatic intercept handling when fixed
     effects are present, while ``use_formula`` forces the formula-based path even
     without fixed effects.  ``latex_options``
@@ -745,8 +817,24 @@ def regression_plot(
     fe_entity = list(dict.fromkeys(_ensure_list(entity_fixed_effects)))
     fe_time = list(dict.fromkeys(_ensure_list(time_fixed_effects)))
     cluster_cols = list(dict.fromkeys(_ensure_list(cluster)))
+    fe_min_share = max(float(fixed_effect_min_share or 0.0), 0.0)
+    fe_min_share = min(fe_min_share, 1.0)
+    entity_base_levels: Dict[str, Any] = {}
+    entity_rare_levels: Dict[str, List[Any]] = {}
+    time_base_levels: Dict[str, Any] = {}
+    time_rare_levels: Dict[str, List[Any]] = {}
+    if fe_entity:
+        entity_base_levels, entity_rare_levels = _prepare_fixed_effect_columns(
+            prepared_df, fe_entity, min_share=fe_min_share
+        )
+    if fe_time:
+        time_base_levels, time_rare_levels = _prepare_fixed_effect_columns(
+            prepared_df, fe_time, min_share=fe_min_share
+        )
     if include_intercept is None:
-        include_intercept = not (fe_entity or fe_time)
+        include_intercept = True
+    else:
+        include_intercept = bool(include_intercept)
     if use_formula is None:
         use_formula = bool(fe_entity or fe_time or cluster_cols)
     if cluster_cols:
@@ -829,6 +917,11 @@ def regression_plot(
                     "cluster": list(cluster_cols),
                     "include_intercept": include_intercept,
                     "interaction_terms": fe_interactions,
+                    "min_share": fe_min_share if fe_entity or fe_time else None,
+                    "entity_base_levels": dict(entity_base_levels),
+                    "time_base_levels": dict(time_base_levels),
+                    "entity_rare_levels": {k: list(v) for k, v in entity_rare_levels.items()},
+                    "time_rare_levels": {k: list(v) for k, v in time_rare_levels.items()},
                 },
                 "excess_replacements": replacements,
             }
