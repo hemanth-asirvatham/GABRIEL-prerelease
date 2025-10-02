@@ -10,14 +10,12 @@ OpenAI Responses API with several improvements:
   summary showing the number of prompts, input words, remaining rate‑limit
   capacity, usage tier qualifications, and an estimated cost.  It also
   explains the purpose of the ``max_output_tokens`` parameter.
-* Dynamic ``max_output_tokens`` – when a user does not specify
-  ``max_output_tokens`` explicitly, the library inspects the current
-  token quota.  If fewer than one million tokens remain in the minute
-  budget, a safety cutoff of 2 500 tokens is applied; otherwise, the
-  parameter is left ``None`` so the model’s default output limit is used.
-  This prevents long responses from being rejected due to an overly high
-  token estimate, while removing unnecessary complexity when there is
-  ample capacity.
+* Respect for explicit ``max_output_tokens`` – the helper no longer
+  injects a default ceiling when the caller omits the parameter.  Earlier
+  versions applied a 2 500 token cap once the remaining minute budget
+  dipped below one million tokens, which confused users by silently
+  truncating long responses.  Callers who want a limit can still provide
+  one explicitly.
 * Improved rate‑limit gating – the token limiter now estimates the worst
   possible output length when the cutoff is unspecified by assuming
   the response could be as long as the input.  This avoids grossly
@@ -119,6 +117,9 @@ def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
     return client
 
 # Default safety cutoff when token capacity is low
+# Historical default used as a conservative upper bound when rate limits were
+# not known.  We keep the constant so older call sites that import it continue
+# to function, but the helper no longer applies this ceiling automatically.
 DEFAULT_MAX_OUTPUT_TOKENS = 2500
 
 # Estimated output tokens per prompt used for cost estimation when no cutoff is specified.
@@ -566,13 +567,26 @@ def _print_usage_overview(
             rem_r_val2 = _pf(rl.get("remaining_requests"))
             lim_t_val2 = _pf(rl.get("limit_tokens")) or _pf(rl.get("limit_tokens_usage_based"))
             rem_t_val2 = _pf(rl.get("remaining_tokens")) or _pf(rl.get("remaining_tokens_usage_based"))
-            # Allowed requests are whichever remaining value is available, otherwise
-            # the limit.  If both are missing, None indicates unknown.
-            allowed_req = rem_r_val2 if rem_r_val2 is not None else lim_r_val2
-            allowed_tok = rem_t_val2 if rem_t_val2 is not None else lim_t_val2
+            # Track whether we are capping concurrency because of the minute's
+            # remaining allowance or the hard per‑minute limit.  This helps us
+            # explain the cap accurately to the caller.
+            if rem_r_val2 is not None:
+                allowed_req = rem_r_val2
+                allowed_req_source = "remaining"
+            else:
+                allowed_req = lim_r_val2
+                allowed_req_source = "limit" if lim_r_val2 is not None else None
+            if rem_t_val2 is not None:
+                allowed_tok = rem_t_val2
+                allowed_tok_source = "remaining"
+            else:
+                allowed_tok = lim_t_val2
+                allowed_tok_source = "limit" if lim_t_val2 is not None else None
         else:
             allowed_req = None
             allowed_tok = None
+            allowed_req_source = None
+            allowed_tok_source = None
         # Compute concurrency_possible (maximum possible parallelism based on
         # rate limits) before applying the user‑supplied ceiling.  If a value
         # is unknown, treat that dimension as unlimited.
@@ -608,9 +622,47 @@ def _print_usage_overview(
     # remains, suggest that the user could increase n_parallels to make use of
     # their limits.  Otherwise, confirm that we will use the available cap.
     if concurrency_cap < n_parallels:
+        limiting_messages: List[str] = []
+        suggest_upgrade = False
+        if (
+            concurrency_possible is not None
+            and concurrency_possible_from_requests is not None
+            and concurrency_possible == concurrency_possible_from_requests
+        ):
+            if allowed_req_source == "remaining":
+                limiting_messages.append(
+                    f"the API reported only {int(allowed_req):,} request slots remaining in the current minute"
+                )
+            elif allowed_req_source == "limit":
+                limiting_messages.append(
+                    f"your per-minute request limit is {int(allowed_req):,}"
+                )
+                suggest_upgrade = True
+        if (
+            concurrency_possible is not None
+            and concurrency_possible_from_tokens is not None
+            and concurrency_possible == concurrency_possible_from_tokens
+        ):
+            approx_tokens = int(max(1, allowed_tok)) if allowed_tok is not None else None
+            if allowed_tok_source == "remaining" and approx_tokens is not None:
+                limiting_messages.append(
+                    f"about {approx_tokens:,} tokens remain in the current minute"
+                )
+            elif allowed_tok_source == "limit" and approx_tokens is not None:
+                limiting_messages.append(
+                    f"your per-minute token limit is about {approx_tokens:,}"
+                )
+                suggest_upgrade = True
+        if not limiting_messages:
+            limiting_messages.append("of the reported rate limits")
+        reason = " and ".join(limiting_messages)
         print(
-            f"\nNote: based on your current plan and rate limits, we'll run up to {concurrency_cap} requests at the same time instead of {n_parallels}. Upgrading your tier would allow more parallel requests and speed up processing."
+            f"\nNote: we'll run up to {concurrency_cap} requests at the same time instead of {n_parallels} because {reason}."
         )
+        if suggest_upgrade:
+            print(
+                "Upgrading your tier would allow more parallel requests and speed up processing."
+            )
     else:
         # If concurrency_possible is larger than the user‑supplied ceiling, let the
         # user know they could increase n_parallels to utilise the available headroom.
@@ -641,28 +693,20 @@ def _decide_default_max_output_tokens(
     *,
     base_url: Optional[str] = None,
 ) -> Optional[int]:
-    """Decide a default ``max_output_tokens`` based on current token budget.
+    """Return the caller supplied cutoff, or ``None`` if no preference.
 
-    If ``user_specified`` is not ``None``, return it unchanged.  Otherwise,
-    use the supplied ``rate_headers`` dict (or fetch one if ``None``) to
-    determine how many tokens remain in the per‑minute budget.  If fewer than
-    one million tokens remain, return ``DEFAULT_MAX_OUTPUT_TOKENS``; else
-    return ``None`` to indicate no cutoff.
+    Earlier revisions attempted to infer a sensible default by inspecting the
+    live rate‑limit headers.  That behaviour surprised users because the
+    helper would silently clamp outputs once the remaining budget dipped below
+    a hardcoded threshold.  The new policy is straightforward: when a caller
+    does not ask for a ceiling we honour that request and allow the model to
+    stream its full response.  The ``rate_headers`` and ``base_url`` arguments
+    remain for backwards compatibility and to support future heuristics, but
+    they are no longer consulted.
     """
-    if user_specified is not None:
-        return user_specified
-    # When rate headers are not supplied, fall back to fetching them using
-    # the default model.  Passing a model ensures the helper uses the
-    # minimal chat call rather than the unsupported ``/v1/models`` endpoint.
-    rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(base_url=base_url)
-    if rl and rl.get("remaining_tokens"):
-        try:
-            rem = int(float(rl["remaining_tokens"]))
-            if rem < 1_000_000:
-                return DEFAULT_MAX_OUTPUT_TOKENS
-        except Exception:
-            pass
-    return None
+
+    del rate_headers, base_url  # Unused; retained for backward compatibility.
+    return user_specified
 
 
 def _normalise_web_search_filters(
