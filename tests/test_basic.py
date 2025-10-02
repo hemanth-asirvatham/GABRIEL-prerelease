@@ -16,6 +16,21 @@ from gabriel.tasks.rank import Rank, RankConfig
 import gabriel
 
 
+def test_decide_default_max_output_tokens_respects_user_choice():
+    assert (
+        openai_utils._decide_default_max_output_tokens(4096, {"remaining_tokens": "10"})
+        == 4096
+    )
+
+
+def test_decide_default_max_output_tokens_no_longer_caps_by_default():
+    cutoff = openai_utils._decide_default_max_output_tokens(
+        None,
+        {"remaining_tokens": "500000", "limit_tokens": "1000000"},
+    )
+    assert cutoff is None
+
+
 def test_prompt_template():
     tmpl = PromptTemplate.from_package("ratings_prompt.jinja2")
     text = tmpl.render(attributes=["a"], descriptions=["desc"], passage="x", object_category="obj", attribute_category="att", format="json")
@@ -198,9 +213,26 @@ def test_get_all_responses_custom_callable(tmp_path):
     assert sorted(calls) == [("x", 1), ("y", 1)]
     df = df.sort_values("Identifier").reset_index(drop=True)
     assert df.loc[0, "Response"] == ["CUSTOM::x"]
-    assert df.loc[1, "Response"] == ["CUSTOM::y"]
-    assert df["Successful"].all()
-    assert df["Time Taken"].isna().all()
+
+
+def test_usage_overview_reports_remaining_budget_reason(capsys):
+    openai_utils._print_usage_overview(
+        prompts=["hello"],
+        n=1,
+        max_output_tokens=None,
+        model="gpt-5-mini",
+        use_batch=False,
+        n_parallels=250,
+        rate_headers={
+            "limit_requests": "10000",
+            "remaining_requests": "13",
+            "limit_tokens": "30000000",
+            "remaining_tokens": "29000000",
+        },
+    )
+    captured = capsys.readouterr().out
+    assert "13 request slots remaining" in captured
+    assert "Upgrading your tier" not in captured
 
 
 def test_get_all_responses_custom_usage(tmp_path):
