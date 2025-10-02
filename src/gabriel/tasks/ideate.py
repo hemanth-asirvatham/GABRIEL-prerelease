@@ -13,12 +13,15 @@ from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.rate import Rate, RateConfig
 
 
-_DEF_ATTR_LABEL = "Novel and brilliant"
+_DEF_ATTR_LABEL = "novel and brilliant"
 _DEF_ATTR_DESCRIPTION = (
     "Measures how original, well-reasoned, and consequential the proposed theory is. "
-    "High scores correspond to ideas that introduce a specific new mechanism or twist, "
-    "clearly situate themselves in the existing literature, lay out testable predictions, "
-    "and demonstrate real-world significance."
+    "High scores correspond to ideas that introduce a specific new mechanism, twist, addendum, etc, "
+    "inspired by existing literature but genuinely novel and creative thought, "
+    "and above all is just a genuinely superior scientific theory pursuant to the topic. "
+    "More novel and brilliant theories say something new and interesting, capturing something in the real world better "
+    "than existing thought. Ideally novel yet specific, testable, realistic, and brilliant/inspired such that top professors would admire it deeply; "
+    "a high standard requiring deep thought and consideration, worthy of evaluating frontier research theories."
 )
 
 
