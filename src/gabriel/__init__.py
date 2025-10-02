@@ -17,6 +17,7 @@ from .api import (
     merge,
     filter,
     debias,
+    ideate,
     whatever,
     view_coded_passages,
 )
@@ -41,6 +42,7 @@ __all__ = list(_tasks.__all__) + [
     "merge",
     "filter",
     "debias",
+    "ideate",
     "whatever",
     "view_coded_passages",
     "load_files",

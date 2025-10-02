@@ -36,6 +36,8 @@ _lazy_imports = {
     "FilterConfig": ".filter",
     "Whatever": ".whatever",
     "WhateverConfig": ".whatever",
+    "Ideate": ".ideate",
+    "IdeateConfig": ".ideate",
     "DebiasPipeline": ".debias",
     "DebiasConfig": ".debias",
     "DebiasResult": ".debias",
