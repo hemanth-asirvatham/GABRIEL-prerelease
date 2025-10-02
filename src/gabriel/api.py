@@ -31,6 +31,8 @@ from .tasks import (
     FilterConfig,
     Whatever,
     WhateverConfig,
+    Ideate,
+    IdeateConfig,
 )
 from .utils.openai_utils import get_all_responses
 from .utils.passage_viewer import view_coded_passages as _view_coded_passages
@@ -176,6 +178,81 @@ async def classify(
         circle_column_name=circle_column_name,
         square_column_name=square_column_name,
         reset_files=reset_files,
+    )
+
+
+async def ideate(
+    topic: str,
+    *,
+    save_dir: str,
+    file_name: str = "ideation.csv",
+    model: str = "gpt-5-mini",
+    ranking_model: Optional[str] = None,
+    n_ideas: int = 1000,
+    n_parallels: int = 750,
+    evaluation_mode: str = "recursive_rank",
+    attributes: Optional[Dict[str, str]] = None,
+    rank_attribute: Optional[str] = None,
+    recursive_fraction: float = 1.0 / 3.0,
+    recursive_min_remaining: int = 30,
+    recursive_final_round_multiplier: int = 3,
+    recursive_cut_side: str = "top",
+    recursive_rate_first_round: bool = True,
+    additional_instructions: Optional[str] = None,
+    web_search: bool = False,
+    use_dummy: bool = False,
+    reasoning_effort: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
+    reset_files: bool = False,
+    generation_kwargs: Optional[Dict[str, Any]] = None,
+    rank_config_updates: Optional[Dict[str, Any]] = None,
+    rank_run_kwargs: Optional[Dict[str, Any]] = None,
+    rate_config_updates: Optional[Dict[str, Any]] = None,
+    rate_run_kwargs: Optional[Dict[str, Any]] = None,
+    template_path: Optional[str] = None,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Ideate`."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+
+    cfg_kwargs: Dict[str, Any] = dict(
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        ranking_model=ranking_model,
+        n_parallels=n_parallels,
+        n_ideas=n_ideas,
+        evaluation_mode=evaluation_mode,
+        rank_attribute=rank_attribute,
+        recursive_fraction=recursive_fraction,
+        recursive_min_remaining=recursive_min_remaining,
+        recursive_final_round_multiplier=recursive_final_round_multiplier,
+        recursive_cut_side=recursive_cut_side,
+        recursive_rate_first_round=recursive_rate_first_round,
+        additional_instructions=additional_instructions,
+        web_search=web_search,
+        use_dummy=use_dummy,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+    )
+    if attributes is not None:
+        cfg_kwargs["attributes"] = attributes
+    cfg = IdeateConfig(**cfg_kwargs)
+
+    ideator = Ideate(cfg, template_path=template_path)
+    return await ideator.run(
+        topic,
+        additional_instructions=additional_instructions,
+        evaluation_mode=evaluation_mode,
+        attributes=attributes,
+        rank_attribute=rank_attribute,
+        reset_files=reset_files,
+        generation_kwargs=generation_kwargs,
+        rank_config_updates=rank_config_updates,
+        rank_run_kwargs=rank_run_kwargs,
+        rate_config_updates=rate_config_updates,
+        rate_run_kwargs=rate_run_kwargs,
     )
 
 
