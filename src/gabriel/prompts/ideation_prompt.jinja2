@@ -24,15 +24,15 @@ Don't hide behind a veil of complexity; be honest and clear about your theory an
 Be the ultimate scientific communicator: valuable, not patronizing, easy to B.S. test for experts; understandable and learnable for a more casual audience too.
 Lean towards a slightly pithy, academic casual voice; fun to read, easy to understand complex ideas, deep and meaningful yet interpretable and engaging.
 
-Structure your output as follows:
+Structure your output as follows (include the headings like "In a nutshell:" and the newlines in output):
 BEGIN OUTPUT FORMAT
-Title: <a concise, engaging, high quality, and fun title that captures your theory>
+Title: [a concise, engaging, high quality, and fun title that captures your theory]
 
-In a nutshell: <one pithy, efficient sentence that captures the core thrust of your theory; reading this one sentence should give readers a good sense of the deep idea you are getting at>
+In a nutshell: [one pithy, efficient sentence that captures the core thrust of your theory; reading this one sentence should give readers a good sense of the deep idea you are getting at]
 
-In one paragraph: <a single paragraph, like an abstract, that is concise but more thorough than the nutshell; captures the theory but also might touch on motivation/importance, where the theory is grounded, great examples/analogies that capture its empirical validity, etc>
+In one paragraph: [a single paragraph, like an abstract, that is concise but more thorough than the nutshell; captures the theory but also might touch on motivation/importance, where the theory is grounded, great examples/analogies that capture its empirical validity, how specifically it could be tested, etc]
 
-The full thinking: <a thorough research memo, covering the theory, the relevant literature, the motivation, the background/significance, relevant math/data/examples/models, what further empirical test could be run; a reader should deeply understand the theory, its grounding, its novelty and creativity and potential, and its limitations>
+The full thinking: [a thorough research memo, covering the theory, the relevant literature, the motivation, the background/significance, relevant math/data/examples/models, what further specific empirical tests could be run (detail experimental design); a reader should deeply understand the theory, its grounding, its novelty and creativity and potential, and its limitations]
 END OUTPUT FORMAT
 Output nothing but a report in the above format; no prefacing, no text outside of the core report.
 
@@ -41,3 +41,14 @@ Once more, the topic of focus to situate your novel, creative, and significant a
 BEGIN TOPIC
 {{ topic }}
 END TOPIC
+
+Think creatively, think new thoughts, go in new directions, think deeply about what is known and what needs to be known, aim for useful and testable discovery; think like a professor.
+
+{% if additional_instructions %}
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate your judgment).
+If they conflict with the other instructions, these user instructions take precedence.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
