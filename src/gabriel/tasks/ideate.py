@@ -128,6 +128,11 @@ class Ideate:
         )
         parsed_df = self._parse_reports(raw_df, topic)
 
+        topic_instruction = (
+            "Research field/topic the theories are situated in, and should be judged in the context of: "
+            f"{topic}"
+        )
+
         if mode == "none":
             parsed_df.to_csv(final_path, index=False)
             return parsed_df
@@ -137,6 +142,7 @@ class Ideate:
                 parsed_df,
                 attrs,
                 attr_key,
+                topic_instruction,
                 reset_files=reset_files,
                 config_updates=rate_cfg_updates,
                 run_kwargs=rate_run_kwargs,
@@ -147,6 +153,7 @@ class Ideate:
                 parsed_df,
                 attrs,
                 attr_key,
+                topic_instruction,
                 recursive=recursive,
                 reset_files=reset_files,
                 config_updates=rank_cfg_updates,
@@ -279,6 +286,7 @@ class Ideate:
         df: pd.DataFrame,
         attributes: Dict[str, str],
         attr_key: str,
+        topic_instruction: str,
         *,
         reset_files: bool,
         config_updates: Dict[str, Any],
@@ -298,6 +306,13 @@ class Ideate:
             reasoning_summary=self.cfg.reasoning_summary,
         )
         cfg_kwargs.update(config_updates)
+        existing_instruction = cfg_kwargs.get("additional_instructions")
+        if existing_instruction:
+            cfg_kwargs["additional_instructions"] = (
+                f"{existing_instruction.rstrip()}\n\n{topic_instruction}"
+            )
+        else:
+            cfg_kwargs["additional_instructions"] = topic_instruction
         rate_cfg = RateConfig(**cfg_kwargs)
         rate_task = Rate(rate_cfg)
         rate_run_opts = dict(run_kwargs)
@@ -315,6 +330,7 @@ class Ideate:
         df: pd.DataFrame,
         attributes: Dict[str, str],
         attr_key: str,
+        topic_instruction: str,
         *,
         recursive: bool,
         reset_files: bool,
@@ -343,6 +359,13 @@ class Ideate:
         if attr_key and cfg_kwargs.get("recursive"):
             cfg_kwargs.setdefault("recursive_cut_attr", attr_key)
         cfg_kwargs.update(config_updates)
+        existing_instruction = cfg_kwargs.get("additional_instructions")
+        if existing_instruction:
+            cfg_kwargs["additional_instructions"] = (
+                f"{existing_instruction.rstrip()}\n\n{topic_instruction}"
+            )
+        else:
+            cfg_kwargs["additional_instructions"] = topic_instruction
         rank_cfg = RankConfig(**cfg_kwargs)
         rank_task = Rank(rank_cfg)
         rank_run_opts = dict(run_kwargs)
