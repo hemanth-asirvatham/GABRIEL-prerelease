@@ -127,6 +127,7 @@ class Ideate:
             **gen_kwargs,
         )
         parsed_df = self._parse_reports(raw_df, topic)
+        self._print_random_previews(parsed_df)
 
         topic_instruction = (
             "Research field/topic the theories are situated in, and should be judged in the context of: "
@@ -160,6 +161,7 @@ class Ideate:
                 run_kwargs=rank_run_kwargs,
             )
 
+        self._print_rank_summaries(scored_df, attr_key)
         scored_df.to_csv(final_path, index=False)
         return scored_df
 
@@ -395,3 +397,66 @@ class Ideate:
                 counter += 1
         df_sorted[rank_col] = pd.Series(positions, dtype="Int64")
         return df_sorted
+
+    def _print_random_previews(self, df: pd.DataFrame, count: int = 5) -> None:
+        if df.empty:
+            return
+        preview_columns = ["summary_preview", "title", "in_a_nutshell", "in_one_paragraph"]
+        missing_columns = [col for col in preview_columns if col not in df.columns]
+        if missing_columns:
+            return
+        mask = df[preview_columns].notna().any(axis=1)
+        available = df[mask]
+        if available.empty:
+            return
+        sample_count = min(count, len(available))
+        print(f"[Ideate] Showing {sample_count} random generated ideas:")
+        samples = available.sample(n=sample_count, replace=False)
+        for idx, (_, row) in enumerate(samples.iterrows(), start=1):
+            preview = self._build_preview(row)
+            print(f"\n--- Random Idea {idx} ({row.get('idea_id', 'N/A')}) ---")
+            print(preview)
+
+    def _print_rank_summaries(
+        self, df: pd.DataFrame, attr_key: str, count: int = 5
+    ) -> None:
+        if attr_key not in df.columns or df.empty:
+            print("[Ideate] Skipping ranked summaries (missing score column or empty data).")
+            return
+        non_null = df[df[attr_key].notna()]
+        if non_null.empty:
+            print("[Ideate] Skipping ranked summaries (no scored entries available).")
+            return
+        top_count = min(count, len(non_null))
+        print(f"\n[Ideate] Top {top_count} ideas by '{attr_key}':")
+        for position, (_, row) in enumerate(non_null.head(top_count).iterrows(), start=1):
+            preview = self._build_preview(row)
+            score = row.get(attr_key, "N/A")
+            print(f"\n#{position} (Score: {score}) - {row.get('idea_id', 'N/A')}")
+            print(preview)
+
+        bottom_count = min(count, len(non_null))
+        print(f"\n[Ideate] Bottom {bottom_count} ideas by '{attr_key}':")
+        tail_rows = non_null.tail(bottom_count).iloc[::-1]
+        start_position = len(non_null) - bottom_count + 1
+        for offset, (_, row) in enumerate(tail_rows.iterrows()):
+            position = start_position + offset
+            preview = self._build_preview(row)
+            score = row.get(attr_key, "N/A")
+            print(f"\n#{position} (Score: {score}) - {row.get('idea_id', 'N/A')}")
+            print(preview)
+
+    def _build_preview(self, row: pd.Series) -> str:
+        parts: List[str] = []
+        if "summary_preview" in row and isinstance(row["summary_preview"], str):
+            return row["summary_preview"].strip()
+        title = row.get("title")
+        nutshell = row.get("in_a_nutshell")
+        paragraph = row.get("in_one_paragraph")
+        if title:
+            parts.append(f"Title: {title}")
+        if nutshell:
+            parts.append(f"In a nutshell: {nutshell}")
+        if paragraph:
+            parts.append(f"In one paragraph: {paragraph}")
+        return "\n\n".join(parts) if parts else "(No preview available)"
