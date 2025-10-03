@@ -78,6 +78,7 @@ try:
     from openai import (
         APIConnectionError,
         APIError,
+        APITimeoutError,
         AuthenticationError,
         BadRequestError,
         InvalidRequestError,
@@ -86,6 +87,7 @@ try:
 except Exception:
     APIConnectionError = Exception  # type: ignore
     APIError = Exception  # type: ignore
+    APITimeoutError = Exception  # type: ignore
     AuthenticationError = Exception  # type: ignore
     BadRequestError = Exception  # type: ignore
     InvalidRequestError = Exception  # type: ignore
@@ -112,6 +114,15 @@ def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
         kwargs: Dict[str, Any] = {}
         if url:
             kwargs["base_url"] = url
+        if httpx is not None:
+            try:
+                kwargs.setdefault(
+                    "timeout",
+                    httpx.Timeout(connect=10.0, read=None, write=None, pool=None),
+                )
+            except Exception:
+                # Fall back to the SDK default if constructing the timeout fails
+                pass
         client = openai.AsyncOpenAI(**kwargs)
         _clients_async[key] = client
     return client
@@ -1079,14 +1090,19 @@ async def get_response(
             for t in tasks:
                 t.cancel()
             raise
-        except asyncio.TimeoutError:
-            err = Exception(f"API call timed out after {timeout} s")
-            logger.error(f"[get_response] {err}")
-            raise err
+        except asyncio.TimeoutError as exc:
+            message = (
+                f"API call timed out after {timeout} s"
+                if timeout is not None
+                else "API call timed out"
+            )
+            logger.error(f"[get_response] {message}")
+            raise asyncio.TimeoutError(message) from exc
         except Exception as e:
-            err = Exception(f"API call resulted in exception: {e!r}")
-            logger.error(f"[get_response] {err}")
-            raise err
+            logger.error(
+                "[get_response] API call resulted in exception: %r", e, exc_info=True
+            )
+            raise
         texts = []
         for r in raw:
             msg = r.choices[0].message
@@ -1162,14 +1178,19 @@ async def get_response(
             for t in tasks:
                 t.cancel()
             raise
-        except asyncio.TimeoutError:
-            err = Exception(f"API call timed out after {timeout} s")
-            logger.error(f"[get_response] {err}")
-            raise err
+        except asyncio.TimeoutError as exc:
+            message = (
+                f"API call timed out after {timeout} s"
+                if timeout is not None
+                else "API call timed out"
+            )
+            logger.error(f"[get_response] {message}")
+            raise asyncio.TimeoutError(message) from exc
         except Exception as e:
-            err = Exception(f"API call resulted in exception: {e!r}")
-            logger.error(f"[get_response] {err}")
-            raise err
+            logger.error(
+                "[get_response] API call resulted in exception: %r", e, exc_info=True
+            )
+            raise
         # Extract ``output_text`` from the responses.  For Responses API
         # the SDK returns an object with an ``output_text`` attribute.
         texts = [r.output_text for r in raw]
@@ -1258,14 +1279,24 @@ async def get_embedding(
             **({"timeout": timeout} if timeout is not None else {}),
             **kwargs,
         )
-    except asyncio.TimeoutError:
-        err = Exception(f"API call timed out after {timeout} s")
-        logger.error(f"[get_embedding] {err}")
-        raise err
+    except asyncio.TimeoutError as exc:
+        message = (
+            f"API call timed out after {timeout} s"
+            if timeout is not None
+            else "API call timed out"
+        )
+        logger.error(f"[get_embedding] {message}")
+        raise asyncio.TimeoutError(message) from exc
+    except APITimeoutError as e:
+        logger.error(
+            "[get_embedding] API call resulted in client timeout: %r", e, exc_info=True
+        )
+        raise
     except Exception as e:
-        err = Exception(f"API call resulted in exception: {e!r}")
-        logger.error(f"[get_embedding] {err}")
-        raise err
+        logger.error(
+            "[get_embedding] API call resulted in exception: %r", e, exc_info=True
+        )
+        raise
 
     embed = raw.data[0].embedding
     duration = time.time() - start
@@ -1473,9 +1504,18 @@ async def get_all_embeddings(
                     with open(save_path, "wb") as f:
                         pickle.dump(embeddings, f)
                 pbar.update(1)
-            except asyncio.TimeoutError as e:
+            except (asyncio.TimeoutError, APITimeoutError) as e:
                 elapsed = time.time() - start
-                error_message = f"API call timed out after {elapsed:.2f} s"
+                if isinstance(e, APITimeoutError):
+                    error_message = (
+                        f"OpenAI client timed out after {elapsed:.2f} s; "
+                        "consider increasing the timeout or reducing concurrency."
+                    )
+                    detail = str(e)
+                    if detail:
+                        error_logs[ident].append(detail)
+                else:
+                    error_message = f"API call timed out after {elapsed:.2f} s"
                 error_logs[ident].append(error_message)
                 logger.warning(f"Timeout error for {ident}: {error_message}")
                 if attempts_left - 1 > 0:
@@ -2561,11 +2601,20 @@ async def get_all_responses(
     req_lim = AsyncLimiter(allowed_req_pm, 60)
     tok_lim = AsyncLimiter(allowed_tok_pm, 60)
     success_times: List[float] = []
+    timeout_initialized = False
     inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     call_count = 0
     samples_for_timeout = max(
-        1, int(0.90 * min(len(todo_pairs), max_parallel_ceiling))
+        1,
+        int(
+            0.90
+            * min(
+                len(todo_pairs),
+                max_parallel_ceiling,
+                requested_n_parallels,
+            )
+        ),
     )
     queue: asyncio.Queue[Tuple[str, str, int]] = asyncio.Queue()
     for item in todo_pairs:
@@ -2674,7 +2723,7 @@ async def get_all_responses(
             )
 
     async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout
+        nonlocal nonlocal_timeout, timeout_initialized
         if not dynamic_timeout:
             return
         if len(success_times) < samples_for_timeout:
@@ -2682,7 +2731,17 @@ async def get_all_responses(
         try:
             p90 = float(np.percentile(success_times, 90))
             new_timeout = min(max_timeout_val, timeout_factor * p90)
-            if math.isinf(nonlocal_timeout) or new_timeout > nonlocal_timeout:
+            if math.isinf(nonlocal_timeout):
+                nonlocal_timeout = new_timeout
+                if not timeout_initialized:
+                    msg = (
+                        "[dynamic timeout] Initialized timeout to "
+                        f"{nonlocal_timeout:.1f}s based on 90th percentile latency."
+                    )
+                    print(msg)
+                    logger.info(msg)
+                    timeout_initialized = True
+            elif new_timeout > nonlocal_timeout:
                 logger.debug(
                     f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 90th percentile latency."
                 )
@@ -2984,13 +3043,22 @@ async def get_all_responses(
                         await flush()
             except asyncio.CancelledError:
                 raise
-            except asyncio.TimeoutError as e:
+            except (asyncio.TimeoutError, APITimeoutError) as e:
                 status.num_timeout_errors += 1
                 elapsed = time.time() - start
-                error_message = f"API call timed out after {elapsed:.2f} s"
-                logger.warning(f"Timeout error for {ident}: {error_message}")
                 inflight.pop(ident, None)
                 await adjust_timeout()
+                if isinstance(e, APITimeoutError):
+                    error_message = (
+                        f"OpenAI client timed out after {elapsed:.2f} s; "
+                        "consider increasing max_timeout or reducing concurrency."
+                    )
+                    detail = str(e)
+                    if detail:
+                        error_logs[ident].append(detail)
+                else:
+                    error_message = f"API call timed out after {elapsed:.2f} s"
+                logger.warning(f"Timeout error for {ident}: {error_message}")
                 error_logs[ident].append(error_message)
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
