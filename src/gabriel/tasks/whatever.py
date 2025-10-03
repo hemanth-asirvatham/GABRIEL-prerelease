@@ -10,7 +10,8 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 import pandas as pd
 
 from ..utils import load_audio_inputs, load_image_inputs
-from ..utils.openai_utils import get_all_responses
+from ..utils.openai_utils import get_all_responses, response_to_text
+from ..utils.parsing import safe_json
 
 
 @dataclass
@@ -92,6 +93,32 @@ class Whatever:
         return [text] if text else []
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def extract_json(
+        df: pd.DataFrame,
+        *,
+        text_column: str = "Response",
+        target_column: str = "Response JSON",
+    ) -> pd.DataFrame:
+        """Return a copy of ``df`` with parsed JSON objects in ``target_column``."""
+
+        if text_column not in df.columns:
+            raise ValueError(
+                f"Column '{text_column}' not found in DataFrame; available columns: {list(df.columns)}"
+            )
+
+        out = df.copy()
+
+        def _parse(value: Any) -> Optional[Union[dict, list]]:
+            text = response_to_text(value)
+            if not text:
+                return None
+            parsed = safe_json(text)
+            return parsed if parsed else None
+
+        out[target_column] = out[text_column].apply(_parse)
+        return out
+
     async def run(
         self,
         data: Union[str, List[str], pd.DataFrame],
@@ -105,9 +132,20 @@ class Whatever:
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
         web_search_filters: Optional[Dict[str, Any]] = None,
         reset_files: bool = False,
+        parse_json: Optional[bool] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
-        """Normalise inputs and call :func:`get_all_responses`."""
+        """Normalise inputs and call :func:`get_all_responses`.
+
+        Parameters
+        ----------
+        parse_json:
+            When ``True`` (the default while ``json_mode`` is enabled) the
+            returned DataFrame will include a ``Response JSON`` column with the
+            parsed structure for each response.  Set to ``False`` to skip the
+            extra parsing step and keep the raw JSON text in the ``Response``
+            column.
+        """
 
         filters_spec: Dict[str, Any] = dict(
             web_search_filters
@@ -233,7 +271,7 @@ class Whatever:
             else bool(global_filters or df_filters)
         )
 
-        return await get_all_responses(
+        df_resp = await get_all_responses(
             prompts=prompts_list,
             identifiers=identifiers_list,
             prompt_images=images_payload,
@@ -252,3 +290,28 @@ class Whatever:
             reasoning_summary=self.cfg.reasoning_summary,
             **kwargs,
         )
+        if not isinstance(df_resp, pd.DataFrame):
+            raise RuntimeError("get_all_responses returned no DataFrame")
+
+        df_clean = df_resp.copy()
+        if "Response" in df_clean.columns:
+            df_clean["Response"] = df_clean["Response"].apply(response_to_text)
+
+        if self.cfg.json_mode:
+            auto_parse = parse_json if parse_json is not None else True
+            if auto_parse:
+                df_clean = self.extract_json(
+                    df_clean,
+                    text_column="Response",
+                    target_column="Response JSON",
+                )
+                print(
+                    "[Whatever] Parsed JSON output is available in the 'Response JSON' column."
+                )
+            else:
+                print(
+                    "[Whatever] JSON responses are stored as text in the 'Response' column. "
+                    "Call `Whatever.extract_json(df)` to parse them into structured objects."
+                )
+
+        return df_clean
