@@ -3032,6 +3032,7 @@ async def get_all_responses(
                     task,
                     call_timeout if call_timeout is not None else float("inf"),
                 )
+                response_ids: List[str] = []
                 try:
                     result = await task
                 except asyncio.CancelledError:
@@ -3056,7 +3057,6 @@ async def get_all_responses(
                 limiter_wait_durations.append(limiter_wait_time)
                 limiter_wait_ratios.append(limiter_wait_ratio)
                 total_input, total_output, total_reasoning = _aggregate_usage(raw)
-                response_ids = []
                 for item in _coerce_to_list(raw):
                     rid = _safe_get(item, "id")
                     if rid:
