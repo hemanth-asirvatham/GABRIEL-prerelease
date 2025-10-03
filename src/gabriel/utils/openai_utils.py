@@ -2149,7 +2149,7 @@ async def get_all_responses(
     # tool.
     n_parallels: int = 750,
     max_retries: int = 3,
-    timeout_factor: float = 2.50,
+    timeout_factor: float = 2.25,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
     background_mode: Optional[bool] = None,
@@ -2170,7 +2170,7 @@ async def get_all_responses(
     global_cooldown: int = 15,
     rate_limit_window: float = 30.0,
     token_sample_size: int = 20,
-    status_report_interval: Optional[float] = 300.0,
+    status_report_interval: Optional[float] = 120.0,
     logging_level: Union[str, int] = "warning",
     **get_response_kwargs: Any,
 ) -> pd.DataFrame:
