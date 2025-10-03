@@ -59,7 +59,8 @@ import openai
 import statistics
 import numpy as np
 import tiktoken
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
 
 logger = get_logger(__name__)
 
@@ -156,6 +157,106 @@ class StatusTracker:
     num_timeout_errors: int = 0
     num_other_errors: int = 0
     time_of_last_rate_limit_error: float = 0.0
+
+
+class BackgroundTimeoutError(asyncio.TimeoutError):
+    """Timeout raised while polling a background response."""
+
+    def __init__(self, response_id: Optional[str], last_response: Any, message: str):
+        super().__init__(message)
+        self.response_id = response_id
+        self.last_response = last_response
+
+
+@dataclass
+class PendingBackgroundResponse:
+    """Record of an in-flight background response that may finish later."""
+
+    signature: str
+    response_id: str
+    response_obj: Any
+    base_url: Optional[str]
+    poll_interval: float
+    created_at: float = field(default_factory=time.time)
+
+
+_pending_background_responses: Dict[str, Deque[PendingBackgroundResponse]] = defaultdict(deque)
+_pending_background_lock = asyncio.Lock()
+
+
+def _signature_json_default(obj: Any) -> Any:
+    """Helper for JSON hashing that tolerates common non-serializable objects."""
+
+    if isinstance(obj, (set, tuple)):
+        return list(obj)
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except Exception:
+            return obj.hex()
+    if hasattr(obj, "model_dump"):
+        try:
+            return obj.model_dump()
+        except Exception:
+            return str(obj)
+    if hasattr(obj, "dict"):
+        try:
+            return obj.dict()
+        except Exception:
+            return str(obj)
+    if hasattr(obj, "__dict__"):
+        try:
+            return vars(obj)
+        except Exception:
+            return str(obj)
+    return str(obj)
+
+
+def _make_request_signature(payload: Dict[str, Any], *, base_url: Optional[str], n: int) -> str:
+    """Create a stable hash for deduplicating logically identical requests."""
+
+    canonical = {
+        "base_url": base_url or "default",
+        "n": n,
+        "payload": payload,
+    }
+    blob = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_signature_json_default,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+async def _register_pending_response(pending: PendingBackgroundResponse) -> None:
+    """Store a background response for potential reuse in a later retry."""
+
+    if not pending.response_id:
+        return
+    async with _pending_background_lock:
+        dq = _pending_background_responses[pending.signature]
+        dq.append(pending)
+        while len(dq) > 10:
+            dq.popleft()
+
+
+async def _claim_pending_responses(signature: str, count: int) -> List[PendingBackgroundResponse]:
+    """Retrieve up to ``count`` pending responses matching ``signature``."""
+
+    if count <= 0:
+        return []
+    async with _pending_background_lock:
+        dq = _pending_background_responses.get(signature)
+        if not dq:
+            return []
+        claimed: List[PendingBackgroundResponse] = []
+        for _ in range(min(count, len(dq))):
+            claimed.append(dq.popleft())
+        if not dq:
+            _pending_background_responses.pop(signature, None)
+        return claimed
 
 
 def _get_tokenizer(model_name: str) -> tiktoken.Encoding:
@@ -1077,7 +1178,9 @@ async def get_response(
     elif background_mode is not None:
         effective_background = bool(background_mode)
     else:
-        effective_background = timeout is None
+        # Default to background mode so timed-out requests surface response IDs
+        # that can be reclaimed if they complete later.
+        effective_background = True
     background_argument: Optional[bool] = None
     if explicit_background is not None:
         background_argument = bool(explicit_background)
@@ -1103,7 +1206,13 @@ async def get_response(
         identifier = _safe_get(resp, "id")
         return f"Response {identifier or '<unknown>'} failed with status {status}."
 
-    async def _await_background_completion(response_obj: Any, start_time: float) -> Any:
+    async def _await_background_completion(
+        response_obj: Any,
+        start_time: float,
+        *,
+        poll: Optional[float] = None,
+        client: Optional[openai.AsyncOpenAI] = None,
+    ) -> Any:
         if not effective_background:
             return response_obj
         status = _safe_get(response_obj, "status")
@@ -1112,6 +1221,8 @@ async def get_response(
         response_id = _safe_get(response_obj, "id")
         if not response_id:
             return response_obj
+        poll_every = poll if poll is not None else poll_interval
+        local_client = client or client_async
         last = response_obj
         consecutive_errors = 0
         while True:
@@ -1127,24 +1238,28 @@ async def get_response(
                 elapsed = time.time() - start_time
                 remaining = timeout - elapsed
                 if remaining <= 0:
-                    raise asyncio.TimeoutError(
-                        f"Background response {response_id} exceeded timeout of {timeout} s"
+                    raise BackgroundTimeoutError(
+                        response_id,
+                        last,
+                        f"Background response {response_id} exceeded timeout of {timeout} s",
                     )
-                sleep_for = min(poll_interval, max(0.1, remaining))
+                sleep_for = min(poll_every, max(0.1, remaining))
             else:
-                sleep_for = poll_interval
+                sleep_for = poll_every
             await asyncio.sleep(sleep_for)
             retrieve_kwargs: Dict[str, Any] = {}
             if timeout is not None:
                 elapsed = time.time() - start_time
                 remaining = timeout - elapsed
                 if remaining <= 0:
-                    raise asyncio.TimeoutError(
-                        f"Background response {response_id} exceeded timeout of {timeout} s"
+                    raise BackgroundTimeoutError(
+                        response_id,
+                        last,
+                        f"Background response {response_id} exceeded timeout of {timeout} s",
                     )
                 retrieve_kwargs["timeout"] = max(1.0, min(30.0, remaining))
             try:
-                last = await client_async.responses.retrieve(response_id, **retrieve_kwargs)
+                last = await local_client.responses.retrieve(response_id, **retrieve_kwargs)
                 consecutive_errors = 0
             except asyncio.CancelledError:
                 raise
@@ -1157,8 +1272,10 @@ async def get_response(
                     exc,
                 )
                 if timeout is not None and (time.time() - start_time) >= timeout:
-                    raise asyncio.TimeoutError(
-                        f"Background response {response_id} exceeded timeout of {timeout} s"
+                    raise BackgroundTimeoutError(
+                        response_id,
+                        last,
+                        f"Background response {response_id} exceeded timeout of {timeout} s",
                     )
                 if consecutive_errors >= 5:
                     raise
@@ -1291,39 +1408,154 @@ async def get_response(
         )
         if background_argument is not None:
             params["background"] = background_argument
+        total_needed = max(n, 1)
+        signature: Optional[str] = None
+        claimed_pending: List[PendingBackgroundResponse] = []
+        if effective_background:
+            signature = _make_request_signature(params, base_url=base_url, n=total_needed)
+            claimed_pending = await _claim_pending_responses(signature, total_needed)
         start = time.time()
-        # Create parallel tasks for `n` completions
-        tasks = [
-            asyncio.create_task(
-                client_async.responses.create(
-                    **params, **({"timeout": timeout} if timeout is not None else {})
+        remaining_needed = max(0, total_needed - len(claimed_pending))
+        raw_new: List[Any] = []
+        new_tasks: List[asyncio.Task] = []
+        if remaining_needed > 0:
+            new_tasks = [
+                asyncio.create_task(
+                    client_async.responses.create(
+                        **params, **({"timeout": timeout} if timeout is not None else {})
+                    )
+                )
+                for _ in range(remaining_needed)
+            ]
+            try:
+                raw_new = await asyncio.gather(*new_tasks)
+            except asyncio.CancelledError:
+                for t in new_tasks:
+                    t.cancel()
+                raise
+            except asyncio.TimeoutError as exc:
+                message = (
+                    f"API call timed out after {timeout} s"
+                    if timeout is not None
+                    else "API call timed out"
+                )
+                logger.error(f"[get_response] {message}")
+                raise asyncio.TimeoutError(message) from exc
+            except Exception as e:
+                logger.error(
+                    "[get_response] API call resulted in exception: %r", e, exc_info=True
+                )
+                raise
+        watcher_tasks: List[asyncio.Task] = []
+        task_trackers: Dict[asyncio.Task, PendingBackgroundResponse] = {}
+        finished_watchers: Set[asyncio.Task] = set()
+        last_timeout_exc: Optional[BackgroundTimeoutError] = None
+
+        def _tracker_from_response(
+            response_obj: Any,
+            *,
+            base: Optional[str],
+            poll_every: float,
+            signature_override: Optional[str] = None,
+            created: Optional[float] = None,
+        ) -> Optional[PendingBackgroundResponse]:
+            if not effective_background:
+                return None
+            sig = signature_override or signature
+            if not sig:
+                return None
+            rid = _safe_get(response_obj, "id")
+            if not rid:
+                return None
+            return PendingBackgroundResponse(
+                signature=sig,
+                response_id=str(rid),
+                response_obj=response_obj,
+                base_url=base,
+                poll_interval=poll_every,
+                created_at=created if created is not None else time.time(),
+            )
+
+        # Watch previously timed-out background calls first
+        for pending_entry in claimed_pending:
+            client_override = client_async
+            if pending_entry.base_url is not None and pending_entry.base_url != base_url:
+                client_override = _get_client(pending_entry.base_url)
+            task = asyncio.create_task(
+                _await_background_completion(
+                    pending_entry.response_obj,
+                    time.time(),
+                    poll=pending_entry.poll_interval,
+                    client=client_override,
                 )
             )
-            for _ in range(max(n, 1))
-        ]
-        try:
-            raw = await asyncio.gather(*tasks)
-        except asyncio.CancelledError:
-            for t in tasks:
-                t.cancel()
-            raise
-        except asyncio.TimeoutError as exc:
-            message = (
-                f"API call timed out after {timeout} s"
-                if timeout is not None
-                else "API call timed out"
+            tracker = _tracker_from_response(
+                pending_entry.response_obj,
+                base=pending_entry.base_url,
+                poll_every=pending_entry.poll_interval,
+                signature_override=pending_entry.signature,
+                created=pending_entry.created_at,
             )
-            logger.error(f"[get_response] {message}")
-            raise asyncio.TimeoutError(message) from exc
-        except Exception as e:
-            logger.error(
-                "[get_response] API call resulted in exception: %r", e, exc_info=True
+            if tracker is not None:
+                task_trackers[task] = tracker
+            watcher_tasks.append(task)
+
+        # Watch brand new requests
+        for response_obj in raw_new:
+            task = asyncio.create_task(
+                _await_background_completion(response_obj, start)
             )
-            raise
-        completed_raw = []
-        for item in raw:
-            completed_raw.append(await _await_background_completion(item, start))
-        raw = completed_raw
+            tracker = _tracker_from_response(
+                response_obj,
+                base=base_url,
+                poll_every=poll_interval,
+            )
+            if tracker is not None:
+                task_trackers[task] = tracker
+            watcher_tasks.append(task)
+
+        completed_raw: List[Any] = []
+        if watcher_tasks:
+            try:
+                for task in asyncio.as_completed(watcher_tasks):
+                    try:
+                        result_obj = await task
+                        finished_watchers.add(task)
+                        tracker = task_trackers.pop(task, None)
+                        if tracker is not None:
+                            tracker.response_obj = result_obj
+                        completed_raw.append(result_obj)
+                        if len(completed_raw) >= total_needed:
+                            break
+                    except BackgroundTimeoutError as exc:
+                        finished_watchers.add(task)
+                        tracker = task_trackers.pop(task, None)
+                        if tracker is not None:
+                            tracker.response_obj = exc.last_response or tracker.response_obj
+                            await _register_pending_response(tracker)
+                        last_timeout_exc = exc
+                        continue
+            finally:
+                for task in watcher_tasks:
+                    if task in finished_watchers:
+                        continue
+                    tracker = task_trackers.pop(task, None)
+                    if tracker is not None:
+                        await _register_pending_response(tracker)
+                    if not task.done():
+                        task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, BackgroundTimeoutError):
+                        pass
+            raw = completed_raw
+        else:
+            raw = raw_new
+        if len(raw) < total_needed:
+            if last_timeout_exc is not None:
+                raise last_timeout_exc
+            raise asyncio.TimeoutError("Background responses did not complete")
+        raw = raw[:total_needed]
         # Extract ``output_text`` from the responses.  For Responses API
         # the SDK returns an object with an ``output_text`` attribute.
         texts = [r.output_text for r in raw]
