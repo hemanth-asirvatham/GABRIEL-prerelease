@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from gabriel.core.prompt_template import PromptTemplate
-from gabriel.utils.openai_utils import get_all_responses
+from gabriel.utils.openai_utils import get_all_responses, response_to_text
 from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.rate import Rate, RateConfig
 
@@ -212,12 +212,14 @@ class Ideate:
         df_resp = df_resp.copy()
         df_resp["idea_id"] = df_resp["Identifier"].astype(str)
         df_resp["topic"] = topic
-        df_resp["report_text"] = df_resp["Response"].astype(str).str.strip()
+        df_resp["report_text"] = df_resp["Response"].apply(response_to_text)
+        df_resp["report_text"] = df_resp["report_text"].astype(str).str.strip()
         return df_resp
 
     def _parse_reports(self, df: pd.DataFrame, topic: str) -> pd.DataFrame:
         print("[Ideate] Parsing structured sections from each report.")
         df_proc = df.copy()
+        df_proc["report_text"] = df_proc["report_text"].apply(response_to_text)
         df_proc["report_text"] = df_proc["report_text"].astype(str).str.strip()
 
         sections: Dict[str, List[Optional[str]]] = {
@@ -249,7 +251,41 @@ class Ideate:
             df_proc[key] = values
 
         df_proc["topic"] = topic
-        return df_proc
+        return self._clean_columns(df_proc)
+
+    def _clean_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Drop raw response metadata and present a consistent column order."""
+
+        raw_columns = {
+            "Identifier",
+            "Response",
+            "Time Taken",
+            "Input Tokens",
+            "Reasoning Tokens",
+            "Output Tokens",
+            "Reasoning Effort",
+            "Reasoning Summary",
+            "Successful",
+            "Error Log",
+            "Response IDs",
+            "Response ID",
+        }
+        cleaned = df.drop(columns=[col for col in raw_columns if col in df.columns])
+
+        preferred_order = [
+            "idea_id",
+            "topic",
+            "report_text",
+            "title",
+            "in_a_nutshell",
+            "in_one_paragraph",
+            "full_thinking",
+            "summary_preview",
+        ]
+
+        ordered = [col for col in preferred_order if col in cleaned.columns]
+        remaining = [col for col in cleaned.columns if col not in ordered]
+        return cleaned.loc[:, ordered + remaining]
 
     def _extract_sections(self, text: str) -> Dict[str, Optional[str]]:
         headers = {

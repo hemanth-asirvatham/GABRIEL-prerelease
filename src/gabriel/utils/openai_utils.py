@@ -1586,6 +1586,45 @@ def _de(x: Any) -> Any:
     return parsed if parsed else None
 
 
+def response_to_text(value: Any) -> str:
+    """Coerce a Response payload into plain text.
+
+    The OpenAI Responses API frequently wraps the textual output in one or
+    more layers of lists and dictionaries.  This helper mirrors the extraction
+    heuristics used when the responses are first collected, but in a reusable
+    form so downstream tasks can reliably access the human-readable text.
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, list):
+        for item in value:
+            text = response_to_text(item)
+            if text:
+                return text
+        return ""
+
+    if isinstance(value, dict):
+        for key in ("text", "content", "output_text"):
+            if key in value:
+                text = response_to_text(value.get(key))
+                if text:
+                    return text
+        return ""
+
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+
+    return str(value).strip()
+
+
 async def get_embedding(
     text: str,
     *,
