@@ -1423,17 +1423,25 @@ async def get_response(
             signature = _make_request_signature(params, base_url=base_url, n=total_needed)
             claimed_pending = await _claim_pending_responses(signature, total_needed)
         start = time.time()
-        remaining_needed = max(0, total_needed - len(claimed_pending))
+        # ``claimed_pending`` holds background responses from previous attempts
+        # that timed out.  When we retry we still want to spin up fresh requests
+        # immediately so progress is not gated on the old background call
+        # completing.  Launching new work in parallel mirrors the historic
+        # behaviour where a retry always issued another API call while we kept
+        # watching the in-flight request in case it eventually finished.
+        new_request_count = max(0, total_needed - len(claimed_pending))
+        if effective_background and claimed_pending:
+            new_request_count = total_needed
         raw_new: List[Any] = []
         new_tasks: List[asyncio.Task] = []
-        if remaining_needed > 0:
+        if new_request_count > 0:
             new_tasks = [
                 asyncio.create_task(
                     client_async.responses.create(
                         **params, **({"timeout": timeout} if timeout is not None else {})
                     )
                 )
-                for _ in range(remaining_needed)
+                for _ in range(new_request_count)
             ]
             try:
                 raw_new = await asyncio.gather(*new_tasks)
