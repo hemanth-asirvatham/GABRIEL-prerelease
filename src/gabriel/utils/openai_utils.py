@@ -552,16 +552,24 @@ def _print_usage_overview(
     verbose: bool = True,
     rate_headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
+    web_search_warning: Optional[str] = None,
+    web_search_parallel_note: Optional[str] = None,
 ) -> None:
     """Print a summary of usage limits, cost estimate and tier information.
 
     Optionally takes a pre‑fetched ``rate_headers`` dict to avoid calling
     ``_get_rate_limit_headers`` multiple times per job.  When ``rate_headers``
-    is ``None``, the helper will fetch the headers itself.
+    is ``None``, the helper will fetch the headers itself.  Optional web-search
+    warnings can be provided to display additional caveats alongside the
+    usage overview.
     """
     if not verbose:
         return
     print("\n===== OpenAI API usage summary =====")
+    if web_search_warning:
+        print(web_search_warning)
+    if web_search_parallel_note:
+        print(web_search_parallel_note)
     print(f"Number of prompts: {len(prompts)}")
     print(f"Total input words: {sum(len(str(p).split()) for p in prompts):,}")
     # Fetch fresh headers if not supplied.  Pass the model and base_url so the
@@ -2072,7 +2080,10 @@ async def get_all_responses(
     # represents a ceiling; the actual number of concurrent requests
     # will be adjusted downward based on your API rate limits and
     # average prompt length.  See `_print_usage_overview` for more
-    # details on how the concurrency cap is calculated.
+    # details on how the concurrency cap is calculated.  When web
+    # search is enabled the helper automatically lowers this ceiling to
+    # one-third of the requested value to avoid overwhelming the search
+    # tool.
     n_parallels: int = 750,
     max_retries: int = 3,
     timeout_factor: float = 2.50,
@@ -2132,6 +2143,15 @@ async def get_all_responses(
     before scaling down again so brief spikes do not trigger runaway
     throttling, while successful calls reset the counters and allow the pool to
     scale back up.
+
+    Because every prompt that uses web search fans out into additional tool
+    calls, the helper automatically lowers the requested ``n_parallels`` to one
+    third of its original value whenever ``web_search`` is enabled.  This guard
+    reduces the chance of exhausting the search tool’s own quotas and keeps the
+    Responses API from being flooded with the much longer prompts that web
+    search produces.  You can still request a smaller value manually if needed,
+    and the message printed at the start of each run explains the adjustment so
+    it can be revisited in the future if the limitation becomes unnecessary.
 
     Long‑running jobs can also emit periodic status updates.  The
     ``status_report_interval`` parameter controls how frequently the helper
@@ -2249,6 +2269,7 @@ async def get_all_responses(
     logging.getLogger("httpx").setLevel(logging.WARNING)
     status = StatusTracker()
     requested_n_parallels = max(1, n_parallels)
+    user_requested_n_parallels = requested_n_parallels
     tokenizer = _get_tokenizer(model)
     # Backwards compatibility for identifiers
     if identifiers is None:
@@ -2272,6 +2293,27 @@ async def get_all_responses(
         get_response_kwargs.setdefault("background_mode", background_mode)
     get_response_kwargs.setdefault("background_poll_interval", background_poll_interval)
     base_web_search_filters = get_response_kwargs.get("web_search_filters")
+    web_search_active = bool(get_response_kwargs.get("web_search"))
+    web_search_warning_text: Optional[str] = None
+    web_search_parallel_note: Optional[str] = None
+    if web_search_active:
+        web_search_warning_text = (
+            "⚠️ Web search is enabled: tool lookups incur extra fees and tokens beyond this estimate, "
+            "so actual costs may be significantly higher. Reduce `n_parallels` manually if tool errors occur."
+        )
+        logger.warning(web_search_warning_text)
+    if web_search_active and not use_batch:
+        reduced = max(1, requested_n_parallels // 3)
+        if reduced < requested_n_parallels:
+            requested_n_parallels = reduced
+            web_search_parallel_note = (
+                f"Web search mode automatically capped parallel workers at {requested_n_parallels} "
+                f"(requested {user_requested_n_parallels}) to reduce load on the search tool. "
+                "This safeguard helps avoid rate-limit and tool errors and may be relaxed in the future."
+            )
+            logger.info(web_search_parallel_note)
+    web_search_warning_displayed = False
+    web_search_note_displayed = False
     # Decide default cutoff once per job using cached rate headers
     # Fetch rate headers once to avoid multiple API calls
     # Retrieve rate‑limit headers for the chosen model.  Passing the model
@@ -2408,18 +2450,36 @@ async def get_all_responses(
                 verbose=verbose,
                 rate_headers=rate_headers,
                 base_url=base_url,
+                web_search_warning=web_search_warning_text,
+                web_search_parallel_note=web_search_parallel_note,
             )
+            if web_search_warning_text:
+                web_search_warning_displayed = True
+            if web_search_parallel_note:
+                web_search_note_displayed = True
         elif verbose:
             print(
                 "\n===== Job summary ====="
                 f"\nNumber of prompts: {len(prompt_list)}"
                 f"\nParallel workers (requested): {requested_n_parallels}"
             )
+            if web_search_warning_text:
+                print(web_search_warning_text)
+                web_search_warning_displayed = True
+            if web_search_parallel_note:
+                print(web_search_parallel_note)
+                web_search_note_displayed = True
             logger.info(
                 "Skipping OpenAI usage overview because a custom response_fn was supplied."
             )
         example_prompt, _ = todo_pairs[0]
         logger.warning(f"Example prompt: {example_prompt}")
+    if verbose and web_search_warning_text and not web_search_warning_displayed:
+        print(web_search_warning_text)
+        web_search_warning_displayed = True
+    if verbose and web_search_parallel_note and not web_search_note_displayed:
+        print(web_search_parallel_note)
+        web_search_note_displayed = True
     # Dynamically adjust the maximum number of parallel workers based on rate
     # limits.  We base the concurrency on your API’s per‑minute request and
     # token budgets and the average prompt length.  This calculation only
