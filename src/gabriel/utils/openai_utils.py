@@ -2072,6 +2072,21 @@ def _resolve_effective_timeout(
     return task_timeout
 
 
+def _should_cancel_inflight_task(
+    start_time: float,
+    now: float,
+    nonlocal_timeout: float,
+    task_timeout: float,
+    dynamic_timeout: bool,
+) -> bool:
+    """Determine whether an in-flight task should be cancelled for timeout."""
+
+    limit = _resolve_effective_timeout(nonlocal_timeout, task_timeout, dynamic_timeout)
+    if math.isinf(limit):
+        return False
+    return now - start_time > limit
+
+
 def _normalize_response_result(result: Any) -> Tuple[List[Any], Optional[float], List[Any]]:
     """Normalize outputs from ``response_fn`` into ``(responses, duration, raw)``."""
 
@@ -3741,12 +3756,26 @@ async def get_all_responses(
                 queue.task_done()
 
     async def timeout_watcher() -> None:
-        while True:
-            await asyncio.sleep(0.5)
-            now = time.time()
-            for ident, (start, task, t_out) in list(inflight.items()):
-                if now - start > t_out and not task.done():
-                    task.cancel()
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                if stop_event.is_set():
+                    break
+                now = time.time()
+                current_timeout = nonlocal_timeout
+                for ident, (start, task, t_out) in list(inflight.items()):
+                    if task.done():
+                        continue
+                    if _should_cancel_inflight_task(
+                        start,
+                        now,
+                        current_timeout,
+                        t_out,
+                        dynamic_timeout,
+                    ):
+                        task.cancel()
+        except asyncio.CancelledError:
+            pass
 
     async def status_reporter() -> None:
         if status_report_interval is None:
