@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -106,7 +107,9 @@ class Ideate:
         attrs = attributes or self.cfg.attributes
         if not attrs:
             raise ValueError("At least one attribute must be provided for scoring")
-        attr_key = rank_attribute or self.cfg.rank_attribute or next(iter(attrs))
+        attr_key = str(
+            rank_attribute or self.cfg.rank_attribute or next(iter(attrs))
+        ).strip()
 
         mode = (evaluation_mode or self.cfg.evaluation_mode or "none").lower()
         if mode not in {"recursive_rank", "rank", "rate", "none"}:
@@ -418,14 +421,21 @@ class Ideate:
         return self._sort_results(df_ranked, attr_key)
 
     def _sort_results(self, df: pd.DataFrame, attr_key: str) -> pd.DataFrame:
-        if attr_key not in df.columns:
+        resolved = self._resolve_attr_column(df, attr_key)
+        if resolved is None:
             return df.reset_index(drop=True)
-        df_sorted = df.sort_values(by=attr_key, ascending=False, na_position="last").copy()
+        df_sorted = df.copy()
+        if resolved != attr_key:
+            df_sorted = df_sorted.rename(columns={resolved: attr_key})
+            resolved = attr_key
+        if not pd.api.types.is_numeric_dtype(df_sorted[resolved]):
+            df_sorted[resolved] = pd.to_numeric(df_sorted[resolved], errors="coerce")
+        df_sorted = df_sorted.sort_values(by=resolved, ascending=False, na_position="last").copy()
         df_sorted.reset_index(drop=True, inplace=True)
         rank_col = f"{attr_key}_rank"
         positions: List[Optional[int]] = []
         counter = 1
-        for value in df_sorted[attr_key]:
+        for value in df_sorted[resolved]:
             if pd.isna(value):
                 positions.append(None)
             else:
@@ -456,10 +466,20 @@ class Ideate:
     def _print_rank_summaries(
         self, df: pd.DataFrame, attr_key: str, count: int = 5
     ) -> None:
-        if attr_key not in df.columns or df.empty:
+        if df.empty:
             print("[Ideate] Skipping ranked summaries (missing score column or empty data).")
             return
-        non_null = df[df[attr_key].notna()]
+        resolved = self._resolve_attr_column(df, attr_key)
+        if resolved is None:
+            print("[Ideate] Skipping ranked summaries (missing score column or empty data).")
+            return
+        df_local = df.copy()
+        if resolved != attr_key:
+            df_local = df_local.rename(columns={resolved: attr_key})
+            resolved = attr_key
+        if not pd.api.types.is_numeric_dtype(df_local[resolved]):
+            df_local[resolved] = pd.to_numeric(df_local[resolved], errors="coerce")
+        non_null = df_local[df_local[resolved].notna()]
         if non_null.empty:
             print("[Ideate] Skipping ranked summaries (no scored entries available).")
             return
@@ -467,7 +487,7 @@ class Ideate:
         print(f"\n[Ideate] Top {top_count} ideas by '{attr_key}':")
         for position, (_, row) in enumerate(non_null.head(top_count).iterrows(), start=1):
             preview = self._build_preview(row)
-            score = row.get(attr_key, "N/A")
+            score = row.get(attr_key, row.get(resolved, "N/A"))
             print(f"\n#{position} (Score: {score}) - {row.get('idea_id', 'N/A')}")
             print(preview)
 
@@ -478,9 +498,20 @@ class Ideate:
         for offset, (_, row) in enumerate(tail_rows.iterrows()):
             position = start_position + offset
             preview = self._build_preview(row)
-            score = row.get(attr_key, "N/A")
+            score = row.get(attr_key, row.get(resolved, "N/A"))
             print(f"\n#{position} (Score: {score}) - {row.get('idea_id', 'N/A')}")
             print(preview)
+
+    @staticmethod
+    def _normalize_label(label: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(label).lower())
+
+    def _resolve_attr_column(self, df: pd.DataFrame, attr_key: str) -> Optional[str]:
+        target = self._normalize_label(attr_key)
+        for column in df.columns:
+            if self._normalize_label(column) == target:
+                return column
+        return None
 
     def _build_preview(self, row: pd.Series) -> str:
         parts: List[str] = []
