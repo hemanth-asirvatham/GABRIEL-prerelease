@@ -1456,6 +1456,7 @@ async def get_response(
                 raise
         watcher_tasks: List[asyncio.Task] = []
         task_trackers: Dict[asyncio.Task, PendingBackgroundResponse] = {}
+        completion_durations: List[float] = []
         finished_watchers: Set[asyncio.Task] = set()
         last_timeout_exc: Optional[BackgroundTimeoutError] = None
 
@@ -1517,6 +1518,7 @@ async def get_response(
                 response_obj,
                 base=base_url,
                 poll_every=poll_interval,
+                created=start,
             )
             if tracker is not None:
                 task_trackers[task] = tracker
@@ -1530,8 +1532,16 @@ async def get_response(
                         result_obj = await task
                         finished_watchers.add(task)
                         tracker = task_trackers.pop(task, None)
+                        completion_time = time.time()
                         if tracker is not None:
                             tracker.response_obj = result_obj
+                            completion_durations.append(
+                                max(0.0, completion_time - tracker.created_at)
+                            )
+                        else:
+                            completion_durations.append(
+                                max(0.0, completion_time - start)
+                            )
                         completed_raw.append(result_obj)
                         if len(completed_raw) >= total_needed:
                             break
@@ -1568,6 +1578,8 @@ async def get_response(
         # the SDK returns an object with an ``output_text`` attribute.
         texts = [r.output_text for r in raw]
         duration = time.time() - start
+        if completion_durations:
+            duration = max(duration, max(completion_durations))
         if return_raw:
             return texts, duration, raw
         return texts, duration
@@ -3089,6 +3101,7 @@ async def get_all_responses(
     tok_lim = AsyncLimiter(allowed_tok_pm, 60)
     success_times: List[float] = []
     timeout_initialized = False
+    observed_latency_p90 = float("inf")
     inflight: Dict[str, Tuple[float, asyncio.Task, float]] = {}
     error_logs: Dict[str, List[str]] = defaultdict(list)
     call_count = 0
@@ -3210,27 +3223,40 @@ async def get_all_responses(
             )
 
     async def adjust_timeout() -> None:
-        nonlocal nonlocal_timeout, timeout_initialized
+        nonlocal nonlocal_timeout, timeout_initialized, observed_latency_p90
         if not dynamic_timeout:
             return
         if len(success_times) < samples_for_timeout:
             return
         try:
             p90 = float(np.percentile(success_times, 90))
+            observed_latency_p90 = p90
             new_timeout = min(max_timeout_val, timeout_factor * p90)
             if math.isinf(nonlocal_timeout):
                 nonlocal_timeout = new_timeout
                 if not timeout_initialized:
+                    timeout_display = (
+                        "inf"
+                        if math.isinf(nonlocal_timeout)
+                        else f"{nonlocal_timeout:.1f}s"
+                    )
+                    p90_display = (
+                        "inf" if math.isinf(p90) else f"{p90:.1f}s"
+                    )
                     msg = (
                         "[dynamic timeout] Initialized timeout to "
-                        f"{nonlocal_timeout:.1f}s based on 90th percentile latency."
+                        f"{timeout_display} (p90={p90_display}, factor={timeout_factor:.2f})."
                     )
                     print(msg)
                     logger.info(msg)
                     timeout_initialized = True
             elif new_timeout > nonlocal_timeout:
+                p90_display = "inf" if math.isinf(p90) else f"{p90:.1f}s"
                 logger.debug(
-                    f"[dynamic timeout] Updating timeout to {new_timeout:.1f}s based on 90th percentile latency."
+                    "[dynamic timeout] Updating timeout to %s (p90=%s, factor=%.2f).",
+                    "inf" if math.isinf(new_timeout) else f"{new_timeout:.1f}s",
+                    p90_display,
+                    timeout_factor,
                 )
                 nonlocal_timeout = new_timeout
             if not math.isinf(nonlocal_timeout):
