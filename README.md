@@ -173,7 +173,7 @@ Each helper is built on a `Config` dataclass and a `.run()` coroutine in `gabrie
 
 `gabriel.utils.openai_utils.get_response` and `get_all_responses` underpin every task and accept image/audio attachments alongside text prompts.  Provide base64-encoded inputs directly or leverage helper utilities (`encode_image`, `encode_audio`) to load local files.  Models such as `gpt-4o-mini-audio-preview` can transcribe audio, while multimodal GPT-5 variants can reason over images.
 
-For fact-finding prompts, pass `web_search=True` and optional `web_search_filters` (global) or `prompt_web_search_filters` (per prompt) to narrow results by geography, domain, or document type.  These controls are available through every top-level helper as keyword arguments.
+For fact-finding prompts, pass `web_search=True` and optional `web_search_filters` (global) or `prompt_web_search_filters` (per prompt) to narrow results by geography, domain, or document type.  Filters accept an `allowed_domains` iterable and location hints (`city`, `country`, `region`, `timezone`, and the location `type`, typically `"approximate"`).  These controls are available through every top-level helper as keyword arguments.
 
 ## Custom prompts and templates
 
