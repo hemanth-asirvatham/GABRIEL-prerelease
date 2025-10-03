@@ -2001,6 +2001,18 @@ def _safe_get(obj: Any, attr: str, default: Any = None) -> Any:
     return getattr(obj, attr, default)
 
 
+def _resolve_effective_timeout(
+    nonlocal_timeout: float, task_timeout: float, dynamic_timeout: bool
+) -> float:
+    """Return the timeout that should apply when evaluating in-flight tasks."""
+
+    if not dynamic_timeout:
+        return task_timeout
+    if math.isinf(task_timeout):
+        return nonlocal_timeout
+    return task_timeout
+
+
 def _normalize_response_result(result: Any) -> Tuple[List[Any], Optional[float], List[Any]]:
     """Normalize outputs from ``response_fn`` into ``(responses, duration, raw)``."""
 
@@ -3185,7 +3197,9 @@ async def get_all_responses(
             if not math.isinf(nonlocal_timeout):
                 now = time.time()
                 for ident, (start, task, t_out) in list(inflight.items()):
-                    limit = min(nonlocal_timeout, t_out) if dynamic_timeout else t_out
+                    limit = _resolve_effective_timeout(
+                        nonlocal_timeout, t_out, dynamic_timeout
+                    )
                     if now - start > limit and not task.done():
                         task.cancel()
         except Exception:
