@@ -71,6 +71,62 @@ def test_get_response_audio_dummy():
     assert responses and responses[0].startswith("DUMMY")
 
 
+def test_get_response_background_poll(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    openai_utils._clients_async.clear()
+
+    class DummyResponse:
+        def __init__(self, status: str, text: str = "", error: Optional[Dict[str, Any]] = None):
+            self.status = status
+            self.id = "resp-test"
+            self.output_text = text
+            self.usage = {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            }
+            self.output = []
+            self.error = error
+
+    class FakeResponses:
+        def __init__(self):
+            self._retrieve_calls = 0
+
+        async def create(self, **kwargs):
+            assert kwargs.get("background") is True
+            return DummyResponse("in_progress")
+
+        async def retrieve(self, response_id: str, **kwargs):
+            self._retrieve_calls += 1
+            if self._retrieve_calls < 2:
+                return DummyResponse("in_progress")
+            return DummyResponse("completed", text="final-answer")
+
+    class FakeClient:
+        def __init__(self):
+            self.responses = FakeResponses()
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(openai_utils, "_get_client", lambda base_url=None: fake_client)
+
+    async def _runner():
+        return await openai_utils.get_response(
+            "hello",
+            use_dummy=False,
+            timeout=None,
+            background_mode=True,
+            background_poll_interval=0.01,
+            return_raw=True,
+        )
+
+    texts, duration, raw = asyncio.run(_runner())
+
+    assert texts == ["final-answer"]
+    assert duration >= 0
+    assert raw and raw[0].status == "completed"
+    assert fake_client.responses._retrieve_calls >= 1
+
+
 def test_gpt_audio_modalities(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     openai_utils._clients_async.clear()

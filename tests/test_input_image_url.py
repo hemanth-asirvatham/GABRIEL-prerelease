@@ -28,7 +28,7 @@ def test_get_response_encodes_image(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     openai_utils.client_async = None
     dummy = DummyClient()
-    monkeypatch.setattr(openai, "AsyncOpenAI", lambda: dummy)
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **_: dummy)
     asyncio.run(openai_utils.get_response("Describe", images=["abc"], use_dummy=False))
     assert (
         DummyClient.captured["input"][0]["content"][1]["image_url"]

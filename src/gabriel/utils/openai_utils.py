@@ -942,6 +942,8 @@ async def get_response(
     audio: Optional[List[Dict[str, str]]] = None,
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
+    background_mode: Optional[bool] = None,
+    background_poll_interval: float = 2.0,
     **kwargs: Any,
 ):
     """Request one or more model completions from the OpenAI API.
@@ -1005,6 +1007,16 @@ async def get_response(
         extracted text and timing information.
     logging_level:
         Optional override for the module's log level.
+    background_mode:
+        When ``True`` the helper submits the request in background mode and
+        polls :meth:`openai.AsyncOpenAI.responses.retrieve` until completion.
+        When ``None`` (default) the helper automatically enables background
+        mode whenever ``timeout`` is ``None`` so long-running calls are resilient
+        to transient HTTP disconnects.  Set to ``False`` to force the legacy
+        behaviour of waiting on the initial HTTP response.
+    background_poll_interval:
+        How frequently (in seconds) to poll for background completion when
+        background mode is active.
     **kwargs:
         Any additional parameters understood by the OpenAI SDK are forwarded
         transparently.
@@ -1036,6 +1048,106 @@ async def get_response(
     _require_api_key()
     base_url = base_url or os.getenv("OPENAI_BASE_URL")
     client_async = _get_client(base_url)
+
+    try:
+        poll_interval = float(background_poll_interval)
+    except (TypeError, ValueError):
+        poll_interval = 2.0
+    if poll_interval <= 0:
+        poll_interval = 2.0
+
+    explicit_background = kwargs.pop("background", None)
+    if explicit_background is not None:
+        effective_background = bool(explicit_background)
+    elif background_mode is not None:
+        effective_background = bool(background_mode)
+    else:
+        effective_background = timeout is None
+    background_argument: Optional[bool] = None
+    if explicit_background is not None:
+        background_argument = bool(explicit_background)
+    elif effective_background:
+        background_argument = True
+
+    failure_statuses = {"failed", "cancelled", "expired"}
+
+    def _background_error_message(resp: Any) -> str:
+        err = _safe_get(resp, "error")
+        if isinstance(err, dict):
+            for key in ("message", "code", "type"):
+                val = err.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val
+            try:
+                return json.dumps(err, ensure_ascii=False)
+            except Exception:
+                return str(err)
+        if err:
+            return str(err)
+        status = _safe_get(resp, "status")
+        identifier = _safe_get(resp, "id")
+        return f"Response {identifier or '<unknown>'} failed with status {status}."
+
+    async def _await_background_completion(response_obj: Any, start_time: float) -> Any:
+        if not effective_background:
+            return response_obj
+        status = _safe_get(response_obj, "status")
+        if status in (None, "completed"):
+            return response_obj
+        response_id = _safe_get(response_obj, "id")
+        if not response_id:
+            return response_obj
+        last = response_obj
+        consecutive_errors = 0
+        while True:
+            status = _safe_get(last, "status")
+            if status == "completed":
+                return last
+            if status in failure_statuses or status == "requires_action":
+                message = _background_error_message(last)
+                raise APIError(message)
+            if status not in {"queued", "in_progress", "cancelling"}:
+                return last
+            if timeout is not None:
+                elapsed = time.time() - start_time
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(
+                        f"Background response {response_id} exceeded timeout of {timeout} s"
+                    )
+                sleep_for = min(poll_interval, max(0.1, remaining))
+            else:
+                sleep_for = poll_interval
+            await asyncio.sleep(sleep_for)
+            retrieve_kwargs: Dict[str, Any] = {}
+            if timeout is not None:
+                elapsed = time.time() - start_time
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(
+                        f"Background response {response_id} exceeded timeout of {timeout} s"
+                    )
+                retrieve_kwargs["timeout"] = max(1.0, min(30.0, remaining))
+            try:
+                last = await client_async.responses.retrieve(response_id, **retrieve_kwargs)
+                consecutive_errors = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                consecutive_errors += 1
+                logger.warning(
+                    "[get_response] Polling %s failed on attempt %d: %r",
+                    response_id,
+                    consecutive_errors,
+                    exc,
+                )
+                if timeout is not None and (time.time() - start_time) >= timeout:
+                    raise asyncio.TimeoutError(
+                        f"Background response {response_id} exceeded timeout of {timeout} s"
+                    )
+                if consecutive_errors >= 5:
+                    raise
+                continue
     # Derive the effective cutoff
     cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
     # Build system message only for non‑o series
@@ -1162,6 +1274,8 @@ async def get_response(
             reasoning_summary=reasoning_summary,
             **kwargs,
         )
+        if background_argument is not None:
+            params["background"] = background_argument
         start = time.time()
         # Create parallel tasks for `n` completions
         tasks = [
@@ -1191,6 +1305,10 @@ async def get_response(
                 "[get_response] API call resulted in exception: %r", e, exc_info=True
             )
             raise
+        completed_raw = []
+        for item in raw:
+            completed_raw.append(await _await_background_completion(item, start))
+        raw = completed_raw
         # Extract ``output_text`` from the responses.  For Responses API
         # the SDK returns an object with an ``output_text`` attribute.
         texts = [r.output_text for r in raw]
@@ -1713,6 +1831,8 @@ async def get_all_responses(
     timeout_factor: float = 2.00,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
+    background_mode: Optional[bool] = None,
+    background_poll_interval: float = 2.0,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
     # dynamic_rate_limit, or rate_limit_factor parameters.  Concurrency is
     # automatically determined from the OpenAI API’s rate‑limit headers and
@@ -1750,7 +1870,12 @@ async def get_all_responses(
     successful responses take and sets a timeout based on the 90th percentile of
     observed durations.  Subsequent calls use this timeout (capped by
     ``max_timeout``) and it is increased if later responses are slower.  Any
-    request exceeding the current limit is cancelled and retried.
+    request exceeding the current limit is cancelled and retried.  While the
+    timeout is unbounded the helper automatically submits requests in
+    background mode and polls for completion so that connections closed by the
+    server or networking layer do not strand in-flight prompts.  You can force
+    or disable this behaviour with ``background_mode`` and adjust the polling
+    cadence via ``background_poll_interval``.
 
     Concurrency adapts gently to sustained rate‑limit pressure.  A rolling
     window (``rate_limit_window``, default 30 seconds) tracks recent rate‑limit
@@ -1895,6 +2020,9 @@ async def get_all_responses(
     # Pass the chosen model through to get_response by default
     get_response_kwargs.setdefault("model", model)
     get_response_kwargs.setdefault("base_url", base_url)
+    if background_mode is not None:
+        get_response_kwargs.setdefault("background_mode", background_mode)
+    get_response_kwargs.setdefault("background_poll_interval", background_poll_interval)
     base_web_search_filters = get_response_kwargs.get("web_search_filters")
     # Decide default cutoff once per job using cached rate headers
     # Fetch rate headers once to avoid multiple API calls
@@ -2912,6 +3040,11 @@ async def get_all_responses(
                 limiter_wait_durations.append(limiter_wait_time)
                 limiter_wait_ratios.append(limiter_wait_ratio)
                 total_input, total_output, total_reasoning = _aggregate_usage(raw)
+                response_ids = []
+                for item in _coerce_to_list(raw):
+                    rid = _safe_get(item, "id")
+                    if rid:
+                        response_ids.append(rid)
                 summary_text = None
                 try:
                     for r in raw:
@@ -3028,6 +3161,8 @@ async def get_all_responses(
                         "Successful": True,
                         "Error Log": error_logs.get(ident, []),
                     }
+                    if response_ids:
+                        row["Response IDs"] = response_ids
                     if reasoning_summary is not None:
                         row["Reasoning Summary"] = summary_text
                     results.append(row)
@@ -3083,6 +3218,8 @@ async def get_all_responses(
                         "Successful": False,
                         "Error Log": error_logs.get(ident, []),
                     }
+                    if response_ids:
+                        row["Response IDs"] = response_ids
                     if reasoning_summary is not None:
                         row["Reasoning Summary"] = None
                     results.append(row)
@@ -3121,6 +3258,8 @@ async def get_all_responses(
                         "Successful": False,
                         "Error Log": error_logs.get(ident, []),
                     }
+                    if response_ids:
+                        row["Response IDs"] = response_ids
                     if reasoning_summary is not None:
                         row["Reasoning Summary"] = None
                     results.append(row)
@@ -3185,6 +3324,8 @@ async def get_all_responses(
                     "Successful": False,
                     "Error Log": error_logs.get(ident, []),
                 }
+                if response_ids:
+                    row["Response IDs"] = response_ids
                 if reasoning_summary is not None:
                     row["Reasoning Summary"] = None
                 results.append(row)
