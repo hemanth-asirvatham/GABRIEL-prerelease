@@ -920,6 +920,9 @@ async def whatever(
     Results are saved to ``save_dir/file_name``.  Web search features can be
     customised with ``web_search_filters`` and ``search_context_size`` (both of
     which map directly to :func:`gabriel.utils.openai_utils.get_all_responses`).
+    Filters accept ``allowed_domains`` plus optional location hints
+    (``city``, ``country``, ``region``, ``timezone`` and ``type`` – typically
+    ``"approximate"``) that are forwarded to the OpenAI Responses API.
     The ``web_search`` flag mirrors the OpenAI Python client.  Passing the
     legacy ``use_web_search`` keyword is still supported and will be coerced to
     ``web_search`` automatically.

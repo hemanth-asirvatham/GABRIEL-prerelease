@@ -723,14 +723,19 @@ def _decide_default_max_output_tokens(
 def _normalise_web_search_filters(
     filters: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """Convert a user-supplied mapping to the web-search filter schema.
+    """Convert caller-friendly web-search filters to the Responses schema.
 
-    ``filters`` may contain an ``"allowed_domains"`` list and/or keys
-    describing the user's location (``city``, ``country``, ``region``,
-    ``timezone`` and ``type``).  Only truthy values are propagated to the
-    resulting dictionary; everything else is dropped so the payload remains
-    compact.  The Responses API expects allowed domains under ``filters`` and
-    location hints under ``user_location``; this helper emits that shape.
+    ``filters`` mirrors the keyword arguments exposed by :func:`get_response`
+    and the higher-level task wrappers.  Callers can supply an
+    ``"allowed_domains"`` iterable together with optional location hints –
+    ``city``, ``country``, ``region``, ``timezone`` and ``type`` (currently the
+    API accepts ``"approximate"``).  Falsy values are stripped so the outgoing
+    payload stays compact.
+
+    The Responses API expects domain restrictions under ``filters`` and
+    geography hints under ``user_location``.  This helper reshapes the mapping
+    accordingly and ignores unknown keys to avoid forwarding unsupported
+    filters.
     """
 
     if not filters:
@@ -763,7 +768,14 @@ def _normalise_web_search_filters(
 def _merge_web_search_filters(
     base: Optional[Dict[str, Any]], override: Optional[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
-    """Combine global and per-prompt web search filter dictionaries."""
+    """Combine global and per-prompt web-search filter dictionaries.
+
+    Both inputs follow the caller-facing schema accepted by
+    :func:`get_all_responses`.  The override takes precedence, but falsy values
+    are skipped so callers can opt out of specific fields.  ``allowed_domains``
+    entries are normalised to a list of non-empty strings regardless of whether
+    they were supplied as comma-separated text, tuples, or lists.
+    """
 
     if not base and not override:
         return None
@@ -843,10 +855,12 @@ def _build_params(
         When ``True`` a built-in web search tool is appended to the tool list.
     web_search_filters:
         Optional mapping with keys ``allowed_domains`` and/or any of
-        ``city``, ``country``, ``region``, ``timezone`` and ``type``.
-        Allowed domains are placed under ``filters.allowed_domains`` and
-        location hints under ``user_location`` to match the Responses API
-        schema.  Keys with falsey values are ignored.
+        ``city``, ``country``, ``region``, ``timezone`` and ``type``.  ``type``
+        should match the Responses API expectation (currently ``"approximate"``
+        for geographic hints).  Allowed domains are placed under
+        ``filters.allowed_domains`` and location hints under ``user_location``
+        to match the Responses API schema.  Keys with falsey values are
+        ignored.
     search_context_size:
         Size of the search context when ``web_search`` is enabled.
     json_mode:
@@ -987,8 +1001,9 @@ async def get_response(
         Enable and configure the built-in web-search tool.
     web_search_filters:
         Optional mapping with ``allowed_domains`` and/or user location hints
-        (``city``, ``country``, ``region``, ``timezone`` and ``type``) to guide
-        search results when ``web_search`` is enabled.
+        (``city``, ``country``, ``region``, ``timezone`` and ``type`` – typically
+        ``"approximate"``) to guide search results when ``web_search`` is
+        enabled.
     reasoning_effort, reasoning_summary:
         Additional reasoning controls for ``o`` and ``gpt-5`` models.
     use_dummy:
@@ -1916,7 +1931,8 @@ async def get_all_responses(
     ``use_web_search`` flag is still accepted but ``web_search`` should be used
     going forward.  Additional web search options (allowed domains and user
     location hints such as ``city``, ``country``, ``region``, ``timezone`` and
-    ``type``) can be supplied together via ``web_search_filters``.  Per-identifier
+    ``type`` – usually ``"approximate"``) can be supplied together via
+    ``web_search_filters``.  Per-identifier
     overrides can be passed through ``prompt_web_search_filters`` where the
     mapping keys correspond to prompt identifiers and values follow the same
     schema as ``web_search_filters``.  These overrides are merged with the

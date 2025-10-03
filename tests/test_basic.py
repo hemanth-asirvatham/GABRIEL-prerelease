@@ -31,6 +31,46 @@ def test_decide_default_max_output_tokens_no_longer_caps_by_default():
     assert cutoff is None
 
 
+def test_normalise_web_search_filters_supports_location_type():
+    filters = {
+        "allowed_domains": {"news.com", "openai.com"},
+        "city": "London",
+        "timezone": "",  # Should be stripped
+        "type": "approximate",
+    }
+    normalised = openai_utils._normalise_web_search_filters(filters)
+    assert set(normalised["filters"]["allowed_domains"]) == {"news.com", "openai.com"}
+    assert normalised["user_location"] == {"city": "London", "type": "approximate"}
+
+
+def test_build_params_embeds_web_search_tool_payload():
+    params = openai_utils._build_params(
+        model="gpt-4o-mini",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        system_instruction="",
+        temperature=0.7,
+        tools=[{"type": "retrieval"}],
+        tool_choice=None,
+        web_search=True,
+        web_search_filters={
+            "allowed_domains": ["openai.com"],
+            "country": "GB",
+            "type": "approximate",
+        },
+        search_context_size="large",
+        json_mode=False,
+        expected_schema=None,
+        reasoning_effort=None,
+        reasoning_summary=None,
+    )
+    assert any(tool["type"] == "retrieval" for tool in params["tools"])
+    web_tool = next(tool for tool in params["tools"] if tool["type"] == "web_search")
+    assert web_tool["search_context_size"] == "large"
+    assert web_tool["filters"]["allowed_domains"] == ["openai.com"]
+    assert web_tool["user_location"] == {"country": "GB", "type": "approximate"}
+
+
 def test_prompt_template():
     tmpl = PromptTemplate.from_package("ratings_prompt.jinja2")
     text = tmpl.render(attributes=["a"], descriptions=["desc"], passage="x", object_category="obj", attribute_category="att", format="json")
