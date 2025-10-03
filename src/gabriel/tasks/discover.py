@@ -38,6 +38,7 @@ class DiscoverConfig:
     raw_term_definitions: bool = True
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    max_timeout: Optional[float] = None
 
 
 class Discover:
@@ -115,6 +116,7 @@ class Discover:
                 use_dummy=self.cfg.use_dummy,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
+                max_timeout=self.cfg.max_timeout,
             )
             coder = Codify(coder_cfg)
             codify_df = await coder.run(
@@ -148,7 +150,7 @@ class Discover:
                 model=self.cfg.model,
                 n_parallels=self.cfg.n_parallels,
                 use_dummy=self.cfg.use_dummy,
-                max_timeout=None,
+                max_timeout=self.cfg.max_timeout,
                 differentiate=self.cfg.differentiate,
                 additional_instructions=self.cfg.additional_instructions,
                 modality=self.cfg.modality,
@@ -198,6 +200,7 @@ class Discover:
                 raw_term_definitions=self.cfg.raw_term_definitions,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
+                max_timeout=self.cfg.max_timeout,
             )
             buck = Bucket(buck_cfg)
             bucket_df = await buck.run(
@@ -230,6 +233,7 @@ class Discover:
                 "n_attributes_per_run": 8,
                 "differentiate": True,
                 "additional_instructions": self.cfg.additional_instructions or "",
+                "max_timeout": self.cfg.max_timeout,
             }
 
             def swap_cs(text: str) -> str:
@@ -305,6 +309,7 @@ class Discover:
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
                 n_attributes_per_run=8,
+                max_timeout=self.cfg.max_timeout,
             )
             clf = Classify(clf_cfg)
             classify_result = await clf.run(

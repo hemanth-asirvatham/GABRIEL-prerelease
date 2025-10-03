@@ -132,6 +132,11 @@ class RankConfig:
     recursive_keep_stage_columns, recursive_add_stage_suffix:
         Control whether intermediate stage outputs are merged into the
         final results and whether their columns receive stage prefixes.
+    max_timeout:
+        Optional upper bound for individual API calls when retrieving
+        ranking judgements. ``None`` (default) lets the timeout be
+        derived dynamically from observed latencies in
+        :func:`gabriel.utils.openai_utils.get_all_responses`.
     initial_rating_pass:
         Enables a one-off :class:`Rate` pass before standard ranking
         rounds.  The centred scores from that pass seed the initial
@@ -159,6 +164,7 @@ class RankConfig:
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    max_timeout: Optional[float] = None
     # Recursive execution controls
     recursive: bool = False
     recursive_fraction: float = 1.0 / 3.0
@@ -259,15 +265,9 @@ class Rank:
         # 200 000, each item will only consider approximately 20 neighbours.
         self._MAX_CANDIDATE_PAIRS_PER_ROUND = 200_000
 
-        # maximum timeout in seconds for a batch of language model responses.
-        # not exposed publicly because changing it rarely benefits typical
-        # workloads; if a different timeout is required this can be
-        # modified here.
-        self._MAX_TIMEOUT = 90.0
-
-    # ------------------------------------------------------------------
-    # Public API for adding multiway rankings
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Public API for adding multiway rankings
+        # ------------------------------------------------------------------
     def add_multiway_ranking(self, attr: str, ranking: List[str]) -> None:
         """Record a multiway ranking for a given attribute.
 
@@ -325,6 +325,7 @@ class Rank:
             n_attributes_per_run=self.cfg.n_attributes_per_run,
             reasoning_effort=self.cfg.reasoning_effort,
             reasoning_summary=self.cfg.reasoning_summary,
+            max_timeout=self.cfg.max_timeout,
         )
         for key, value in cfg_overrides.items():
             setattr(rate_cfg, key, value)
@@ -918,7 +919,7 @@ class Rank:
                 save_path=round_path,
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
-                max_timeout=self._MAX_TIMEOUT,
+                max_timeout=self.cfg.max_timeout,
                 max_retries=1,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
@@ -1806,7 +1807,7 @@ class Rank:
                 save_path=round_path,
                 reset_files=reset_files,
                 use_dummy=self.cfg.use_dummy,
-                max_timeout=self._MAX_TIMEOUT,
+                max_timeout=self.cfg.max_timeout,
                 max_retries=1,
                 reasoning_effort=self.cfg.reasoning_effort,
                 reasoning_summary=self.cfg.reasoning_summary,
