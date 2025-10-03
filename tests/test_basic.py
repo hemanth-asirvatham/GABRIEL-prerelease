@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -165,6 +166,86 @@ def test_get_response_background_poll(monkeypatch):
     assert duration >= 0
     assert raw and raw[0].status == "completed"
     assert fake_client.responses._retrieve_calls >= 1
+
+
+def test_get_response_launches_new_calls_when_pending(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    openai_utils._clients_async.clear()
+
+    class DummyResponse:
+        def __init__(self, status: str, text: str, rid: str):
+            self.status = status
+            self.id = rid
+            self.output_text = text
+            self.output = []
+            self.error = None
+            self.usage = {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            }
+
+    class FakeResponses:
+        def __init__(self):
+            self.create_calls = 0
+            self.retrieve_calls = 0
+
+        async def create(self, **kwargs):
+            self.create_calls += 1
+            return DummyResponse("completed", "new-answer", "new-1")
+
+        async def retrieve(self, response_id: str, **kwargs):
+            self.retrieve_calls += 1
+            return DummyResponse("completed", "old-answer", response_id)
+
+    fake_responses = FakeResponses()
+    fake_client = type("FakeClient", (), {"responses": fake_responses})()
+    monkeypatch.setattr(openai_utils, "_get_client", lambda base_url=None: fake_client)
+
+    pending = openai_utils.PendingBackgroundResponse(
+        signature="sig",
+        response_id="pending-1",
+        response_obj=DummyResponse("in_progress", "", "pending-1"),
+        base_url=None,
+        poll_interval=0.01,
+        created_at=time.time(),
+    )
+
+    async def fake_claim(signature: str, count: int):
+        fake_claim.calls.append((signature, count))
+        return [pending]
+
+    fake_claim.calls = []
+
+    async def fake_register(record):
+        fake_register.records.append(record)
+
+    fake_register.records = []
+
+    monkeypatch.setattr(openai_utils, "_claim_pending_responses", fake_claim)
+    monkeypatch.setattr(openai_utils, "_register_pending_response", fake_register)
+    monkeypatch.setattr(
+        openai_utils,
+        "_make_request_signature",
+        lambda payload, base_url=None, n=1: "sig",
+    )
+
+    texts, duration, raw = asyncio.run(
+        openai_utils.get_response(
+            "hi",
+            use_dummy=False,
+            timeout=None,
+            background_mode=True,
+            background_poll_interval=0.01,
+            return_raw=True,
+        )
+    )
+
+    assert texts == ["new-answer"]
+    assert fake_responses.create_calls == 1
+    assert fake_claim.calls and fake_claim.calls[0][1] == 1
+    # The pending response should be stored again so future retries can reuse it.
+    assert fake_register.records and fake_register.records[0].response_id == "pending-1"
 
 
 def test_gpt_audio_modalities(monkeypatch):
