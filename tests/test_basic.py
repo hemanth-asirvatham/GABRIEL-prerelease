@@ -331,6 +331,22 @@ def test_usage_overview_reports_remaining_budget_reason(capsys):
     assert "Upgrading your tier" not in captured
 
 
+def test_web_search_warning_and_parallel_cap(tmp_path, capsys):
+    asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["search"],
+            identifiers=["1"],
+            save_path=str(tmp_path / "web.csv"),
+            use_dummy=True,
+            web_search=True,
+            n_parallels=12,
+        )
+    )
+    captured = capsys.readouterr().out
+    assert "Web search is enabled" in captured
+    assert "automatically capped parallel workers" in captured
+
+
 def test_get_all_responses_custom_usage(tmp_path):
     recorded_kwargs = []
 
