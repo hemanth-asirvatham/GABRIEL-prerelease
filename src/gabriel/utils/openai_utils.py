@@ -42,6 +42,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import tempfile
 import time
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
@@ -257,6 +258,30 @@ async def _claim_pending_responses(signature: str, count: int) -> List[PendingBa
         if not dq:
             _pending_background_responses.pop(signature, None)
         return claimed
+
+
+def _extract_retry_after_seconds(error: Exception) -> Optional[float]:
+    """Return a retry-after duration in seconds when available."""
+
+    for attr in ("retry_after", "retry_after_s", "retry_after_seconds"):
+        retry_value = getattr(error, attr, None)
+        if isinstance(retry_value, (int, float)) and retry_value > 0:
+            return float(retry_value)
+    retry_ms = getattr(error, "retry_after_ms", None)
+    if isinstance(retry_ms, (int, float)) and retry_ms > 0:
+        return float(retry_ms) / 1000.0
+    message = str(error)
+    if not message:
+        return None
+    match = re.search(r"after\s+([0-9]+(?:\.[0-9]+)?)\s*seconds", message)
+    if match:
+        try:
+            parsed = float(match.group(1))
+        except ValueError:
+            return None
+        if parsed > 0:
+            return parsed
+    return None
 
 
 def _get_tokenizer(model_name: str) -> tiktoken.Encoding:
@@ -1066,7 +1091,7 @@ async def get_response(
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
     background_mode: Optional[bool] = None,
-    background_poll_interval: float = 2.0,
+    background_poll_interval: float = 10.0,
     **kwargs: Any,
 ):
     """Request one or more model completions from the OpenAI API.
@@ -1140,7 +1165,8 @@ async def get_response(
         behaviour of waiting on the initial HTTP response.
     background_poll_interval:
         How frequently (in seconds) to poll for background completion when
-        background mode is active.
+        background mode is active. Defaults to 10 seconds and automatically
+        lengthens when rate-limit responses instruct a longer pause.
     **kwargs:
         Any additional parameters understood by the OpenAI SDK are forwarded
         transparently.
@@ -1176,9 +1202,9 @@ async def get_response(
     try:
         poll_interval = float(background_poll_interval)
     except (TypeError, ValueError):
-        poll_interval = 2.0
+        poll_interval = 10.0
     if poll_interval <= 0:
-        poll_interval = 2.0
+        poll_interval = 10.0
 
     explicit_background = kwargs.pop("background", None)
     if explicit_background is not None:
@@ -1233,6 +1259,7 @@ async def get_response(
         local_client = client or client_async
         last = response_obj
         consecutive_errors = 0
+        rate_limit_cooldown_until = 0.0
         while True:
             status = _safe_get(last, "status")
             if status == "completed":
@@ -1242,6 +1269,9 @@ async def get_response(
                 raise APIError(message)
             if status not in {"queued", "in_progress", "cancelling"}:
                 return last
+            now = time.time()
+            if rate_limit_cooldown_until > now:
+                await asyncio.sleep(rate_limit_cooldown_until - now)
             if timeout is not None:
                 elapsed = time.time() - start_time
                 remaining = timeout - elapsed
@@ -1269,8 +1299,23 @@ async def get_response(
             try:
                 last = await local_client.responses.retrieve(response_id, **retrieve_kwargs)
                 consecutive_errors = 0
+                rate_limit_cooldown_until = 0.0
             except asyncio.CancelledError:
                 raise
+            except RateLimitError as exc:
+                consecutive_errors = 0
+                retry_after = _extract_retry_after_seconds(exc)
+                if retry_after is None:
+                    retry_after = max(poll_every, 10.0)
+                rate_limit_cooldown_until = time.time() + retry_after
+                logger.warning(
+                    "[get_response] Polling %s hit rate limit; pausing for %.2f s (%s)",
+                    response_id,
+                    retry_after,
+                    exc,
+                )
+                await asyncio.sleep(retry_after)
+                continue
             except Exception as exc:
                 consecutive_errors += 1
                 logger.warning(
