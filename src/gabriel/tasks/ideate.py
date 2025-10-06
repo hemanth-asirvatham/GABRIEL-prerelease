@@ -4,7 +4,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -12,6 +12,7 @@ from gabriel.core.prompt_template import PromptTemplate
 from gabriel.utils.openai_utils import get_all_responses, response_to_text
 from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.rate import Rate, RateConfig
+from gabriel.tasks.seed import Seed, SeedConfig
 
 
 _DEF_ATTR_LABEL = "novel and brilliant"
@@ -56,6 +57,17 @@ class IdeateConfig:
     web_search: bool = False
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    use_seed_entities: bool = True
+    seed_model: Optional[str] = None
+    seed_n_parallels: Optional[int] = None
+    seed_num_entities: Optional[int] = None
+    seed_entities_per_generation: Optional[int] = None
+    seed_entity_batch_frac: Optional[float] = None
+    seed_existing_entities_cap: Optional[int] = None
+    seed_existing_sample_ratio: Optional[float] = None
+    seed_additional_instructions: Optional[str] = None
+    seed_use_dummy: Optional[bool] = None
+    seed_template_path: Optional[str] = None
 
 
 class Ideate:
@@ -93,6 +105,9 @@ class Ideate:
         rank_run_kwargs: Optional[Dict[str, Any]] = None,
         rate_config_updates: Optional[Dict[str, Any]] = None,
         rate_run_kwargs: Optional[Dict[str, Any]] = None,
+        use_seed_entities: Optional[bool] = None,
+        seed_config_updates: Optional[Dict[str, Any]] = None,
+        seed_run_kwargs: Optional[Dict[str, Any]] = None,
     ) -> pd.DataFrame:
         """Generate a large batch of theories and optionally score them."""
 
@@ -126,11 +141,18 @@ class Ideate:
         rate_cfg_updates = dict(rate_config_updates or {})
         rate_run_kwargs = dict(rate_run_kwargs or {})
 
-        raw_df = await self._generate_reports(
+        use_seed = (
+            self.cfg.use_seed_entities if use_seed_entities is None else use_seed_entities
+        )
+
+        raw_df, _ = await self._generate_reports(
             topic,
             additional_instructions or self.cfg.additional_instructions,
             reset_files=reset_files,
+            use_seed_entities=use_seed,
             **gen_kwargs,
+            seed_config_updates=seed_config_updates or {},
+            seed_run_kwargs=seed_run_kwargs or {},
         )
         parsed_df = self._parse_reports(raw_df, topic)
         self._print_random_previews(parsed_df)
@@ -177,22 +199,56 @@ class Ideate:
         additional_instructions: Optional[str],
         *,
         reset_files: bool,
+        use_seed_entities: bool,
+        seed_config_updates: Dict[str, Any],
+        seed_run_kwargs: Dict[str, Any],
         **generation_kwargs: Any,
-    ) -> pd.DataFrame:
+    ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
         base_name = os.path.splitext(self.cfg.file_name)[0]
         raw_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
         print(
             f"[Ideate] Generating {self.cfg.n_ideas} theories with model {self.cfg.model}."
         )
 
-        prompts = [
-            self.template.render(
-                topic=topic,
-                additional_instructions=additional_instructions or "",
+        seed_assignments: List[Optional[str]] = []
+        seed_df: Optional[pd.DataFrame] = None
+        seeds_enabled = use_seed_entities
+        if seeds_enabled:
+            seed_df = await self._generate_seed_entities(
+                topic,
+                additional_instructions,
+                reset_files=reset_files,
+                config_updates=seed_config_updates,
+                run_kwargs=seed_run_kwargs,
             )
-            for _ in range(self.cfg.n_ideas)
-        ]
-        identifiers = [f"idea-{i:05d}" for i in range(len(prompts))]
+            seed_assignments = (
+                seed_df["entity"].astype(str).str.strip().tolist() if seed_df is not None else []
+            )
+            seed_assignments = [s for s in seed_assignments if s]
+            if len(seed_assignments) < self.cfg.n_ideas:
+                print(
+                    "[Ideate] Warning: insufficient unique seeds; recycling to cover all prompts."
+                )
+                if not seed_assignments:
+                    seeds_enabled = False
+            if seeds_enabled:
+                while len(seed_assignments) < self.cfg.n_ideas:
+                    deficit = self.cfg.n_ideas - len(seed_assignments)
+                    seed_assignments.extend(seed_assignments[:deficit])
+                seed_assignments = seed_assignments[: self.cfg.n_ideas]
+
+        prompts: List[str] = []
+        identifiers: List[str] = []
+        for idx in range(self.cfg.n_ideas):
+            seed_text = seed_assignments[idx] if seeds_enabled and idx < len(seed_assignments) else None
+            prompts.append(
+                self.template.render(
+                    topic=topic,
+                    additional_instructions=additional_instructions or "",
+                    seed=seed_text,
+                )
+            )
+            identifiers.append(f"idea-{idx:05d}")
 
         kwargs = dict(
             model=self.cfg.model,
@@ -220,7 +276,69 @@ class Ideate:
         df_resp["topic"] = topic
         df_resp["report_text"] = df_resp["Response"].apply(response_to_text)
         df_resp["report_text"] = df_resp["report_text"].astype(str).str.strip()
-        return df_resp
+        if seeds_enabled:
+            df_resp["seed_text"] = seed_assignments[: len(df_resp)]
+        else:
+            df_resp["seed_text"] = None
+        return df_resp, seed_df
+
+    async def _generate_seed_entities(
+        self,
+        topic: str,
+        additional_instructions: Optional[str],
+        *,
+        reset_files: bool,
+        config_updates: Dict[str, Any],
+        run_kwargs: Dict[str, Any],
+    ) -> pd.DataFrame:
+        instructions = self._build_seed_instruction(topic, additional_instructions)
+        base_name = os.path.splitext(self.cfg.file_name)[0]
+        seed_save = os.path.join(self.cfg.save_dir, "seed")
+        cfg_kwargs: Dict[str, Any] = dict(
+            instructions=instructions,
+            save_dir=seed_save,
+            file_name=f"{base_name}_seed_entities.csv",
+            model=self.cfg.seed_model or self.cfg.model,
+            n_parallels=self.cfg.seed_n_parallels or self.cfg.n_parallels,
+            num_entities=self.cfg.seed_num_entities or self.cfg.n_ideas,
+            entities_per_generation=self.cfg.seed_entities_per_generation or 50,
+            entity_batch_frac=self.cfg.seed_entity_batch_frac or 0.2,
+            existing_entities_cap=self.cfg.seed_existing_entities_cap or 100,
+            existing_sample_ratio=self.cfg.seed_existing_sample_ratio or 0.5,
+            use_dummy=self.cfg.seed_use_dummy
+            if self.cfg.seed_use_dummy is not None
+            else self.cfg.use_dummy,
+            reasoning_effort=self.cfg.reasoning_effort,
+            reasoning_summary=self.cfg.reasoning_summary,
+        )
+        if self.cfg.seed_additional_instructions:
+            cfg_kwargs["instructions"] = (
+                f"{cfg_kwargs['instructions'].rstrip()}\n\nAdditional guidance:\n{self.cfg.seed_additional_instructions}"
+            )
+        cfg_kwargs.update(config_updates)
+        seed_cfg = SeedConfig(**cfg_kwargs)
+        seed_task = Seed(seed_cfg, template_path=self.cfg.seed_template_path)
+        run_opts = dict(run_kwargs)
+        seed_df = await seed_task.run(reset_files=reset_files, **run_opts)
+        if not isinstance(seed_df, pd.DataFrame):
+            raise RuntimeError("Seed generation did not return a DataFrame")
+        return seed_df
+
+    def _build_seed_instruction(
+        self, topic: str, additional_instructions: Optional[str]
+    ) -> str:
+        base_lines = [
+            "Generate concise, specific seed concepts that can anchor frontier scientific theories.",
+            "Each seed should describe a sharply defined angle, mechanism, dataset, or scenario, expressed in 1-2 sentences.",
+            "Seeds must be mutually unique, grounded in the topic, and varied across disciplines or empirical situations.",
+            "Do not draft the full theory—provide only the inspirational seed or scenario to explore.",
+        ]
+        base_lines.append("Primary topic focus:")
+        base_lines.append(topic.strip())
+        if additional_instructions:
+            base_lines.append("Contextual guidance from the user:")
+            base_lines.append(additional_instructions.strip())
+        return "\n".join(line for line in base_lines if line)
 
     def _parse_reports(self, df: pd.DataFrame, topic: str) -> pd.DataFrame:
         print("[Ideate] Parsing structured sections from each report.")
@@ -232,6 +350,8 @@ class Ideate:
             "title": [],
             "in_a_nutshell": [],
             "in_one_paragraph": [],
+            "illustrative_examples": [],
+            "testable_predictions": [],
             "full_thinking": [],
             "summary_preview": [],
         }
@@ -241,12 +361,16 @@ class Ideate:
             sections["title"].append(parsed.get("title"))
             sections["in_a_nutshell"].append(parsed.get("in_a_nutshell"))
             sections["in_one_paragraph"].append(parsed.get("in_one_paragraph"))
+            sections["illustrative_examples"].append(parsed.get("illustrative_examples"))
+            sections["testable_predictions"].append(parsed.get("testable_predictions"))
             sections["full_thinking"].append(parsed.get("full_thinking"))
             preview_parts: List[str] = []
             for key, label in [
                 ("title", "Title"),
                 ("in_a_nutshell", "In a nutshell"),
                 ("in_one_paragraph", "In one paragraph"),
+                ("illustrative_examples", "Illustrative examples"),
+                ("testable_predictions", "Testable predictions"),
             ]:
                 value = parsed.get(key)
                 if value:
@@ -281,10 +405,13 @@ class Ideate:
         preferred_order = [
             "idea_id",
             "topic",
+            "seed_text",
             "report_text",
             "title",
             "in_a_nutshell",
             "in_one_paragraph",
+            "illustrative_examples",
+            "testable_predictions",
             "full_thinking",
             "summary_preview",
         ]
@@ -298,6 +425,8 @@ class Ideate:
             "title": "title",
             "in a nutshell": "in_a_nutshell",
             "in one paragraph": "in_one_paragraph",
+            "illustrative examples": "illustrative_examples",
+            "testable predictions": "testable_predictions",
             "the full thinking": "full_thinking",
         }
         result: Dict[str, Optional[str]] = {v: None for v in headers.values()}
@@ -450,7 +579,14 @@ class Ideate:
     def _print_random_previews(self, df: pd.DataFrame, count: int = 5) -> None:
         if df.empty:
             return
-        preview_columns = ["summary_preview", "title", "in_a_nutshell", "in_one_paragraph"]
+        preview_columns = [
+            "summary_preview",
+            "title",
+            "in_a_nutshell",
+            "in_one_paragraph",
+            "illustrative_examples",
+            "testable_predictions",
+        ]
         missing_columns = [col for col in preview_columns if col not in df.columns]
         if missing_columns:
             return
@@ -482,7 +618,8 @@ class Ideate:
             resolved = attr_key
         if not pd.api.types.is_numeric_dtype(df_local[resolved]):
             df_local[resolved] = pd.to_numeric(df_local[resolved], errors="coerce")
-        non_null = df_local[df_local[resolved].notna()]
+        non_null = df_local[df_local[resolved].notna()].copy()
+        non_null = non_null.sort_values(by=resolved, ascending=False, na_position="last")
         if non_null.empty:
             print("[Ideate] Skipping ranked summaries (no scored entries available).")
             return
@@ -523,10 +660,19 @@ class Ideate:
         title = row.get("title")
         nutshell = row.get("in_a_nutshell")
         paragraph = row.get("in_one_paragraph")
+        examples = row.get("illustrative_examples")
+        predictions = row.get("testable_predictions")
+        seed = row.get("seed_text")
+        if seed:
+            parts.append(f"Seed: {seed}")
         if title:
             parts.append(f"Title: {title}")
         if nutshell:
             parts.append(f"In a nutshell: {nutshell}")
         if paragraph:
             parts.append(f"In one paragraph: {paragraph}")
+        if examples:
+            parts.append(f"Illustrative examples: {examples}")
+        if predictions:
+            parts.append(f"Testable predictions: {predictions}")
         return "\n\n".join(parts) if parts else "(No preview available)"

@@ -32,6 +32,8 @@ _lazy_imports = {
     "BucketConfig": ".bucket",
     "Discover": ".discover",
     "DiscoverConfig": ".discover",
+    "Seed": ".seed",
+    "SeedConfig": ".seed",
     "Filter": ".filter",
     "FilterConfig": ".filter",
     "Whatever": ".whatever",

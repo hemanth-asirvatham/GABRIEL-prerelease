@@ -27,6 +27,8 @@ from .tasks import (
     BucketConfig,
     Discover,
     DiscoverConfig,
+    Seed,
+    SeedConfig,
     Filter,
     FilterConfig,
     Whatever,
@@ -130,6 +132,56 @@ async def extract(
         types=types,
     )
 
+
+async def seed(
+    instructions: str,
+    *,
+    save_dir: str,
+    file_name: str = "seed_entities.csv",
+    model: str = "o3-mini",
+    n_parallels: int = 400,
+    num_entities: int = 1000,
+    entities_per_generation: int = 50,
+    entity_batch_frac: float = 0.2,
+    existing_entities_cap: int = 100,
+    existing_sample_ratio: float = 0.5,
+    use_dummy: bool = False,
+    reasoning_effort: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
+    max_timeout: Optional[float] = None,
+    template_path: Optional[str] = None,
+    existing_entities: Optional[List[str]] = None,
+    reset_files: bool = False,
+    **response_kwargs: Any,
+) -> pd.DataFrame:
+    """Convenience wrapper for :class:`gabriel.tasks.Seed`."""
+
+    save_dir = os.path.expandvars(os.path.expanduser(save_dir))
+    os.makedirs(save_dir, exist_ok=True)
+    cfg = SeedConfig(
+        instructions=instructions,
+        save_dir=save_dir,
+        file_name=file_name,
+        model=model,
+        n_parallels=n_parallels,
+        num_entities=num_entities,
+        entities_per_generation=entities_per_generation,
+        entity_batch_frac=entity_batch_frac,
+        existing_entities_cap=existing_entities_cap,
+        existing_sample_ratio=existing_sample_ratio,
+        use_dummy=use_dummy,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        max_timeout=max_timeout,
+    )
+    task = Seed(cfg, template_path=template_path)
+    return await task.run(
+        existing_entities=existing_entities,
+        reset_files=reset_files,
+        **response_kwargs,
+    )
+
+
 async def classify(
     df: pd.DataFrame,
     column_name: Optional[str] = None,
@@ -209,6 +261,9 @@ async def ideate(
     rank_run_kwargs: Optional[Dict[str, Any]] = None,
     rate_config_updates: Optional[Dict[str, Any]] = None,
     rate_run_kwargs: Optional[Dict[str, Any]] = None,
+    use_seed_entities: Optional[bool] = None,
+    seed_config_updates: Optional[Dict[str, Any]] = None,
+    seed_run_kwargs: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """Convenience wrapper for :class:`gabriel.tasks.Ideate`."""
@@ -253,6 +308,9 @@ async def ideate(
         rank_run_kwargs=rank_run_kwargs,
         rate_config_updates=rate_config_updates,
         rate_run_kwargs=rate_run_kwargs,
+        use_seed_entities=use_seed_entities,
+        seed_config_updates=seed_config_updates,
+        seed_run_kwargs=seed_run_kwargs,
     )
 
 
