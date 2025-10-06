@@ -22,7 +22,10 @@ _DEF_ATTR_DESCRIPTION = (
     "and above all is just a genuinely superior scientific theory pursuant to the topic. "
     "More novel and brilliant theories say something new and interesting, capturing something in the real world better "
     "than existing thought. Ideally novel yet specific, testable, realistic, and brilliant/inspired such that top professors would admire it deeply; "
-    "a high standard requiring deep thought and consideration, worthy of evaluating frontier research theories."
+    "a high standard requiring deep thought and consideration, worthy of evaluating frontier research theories. "
+    "Give low ratings to anything but a truly exceptional and novel theory; penalize uncreative and unambitious theories that largely repeat existing work, "
+    "while rewarding clearly new ideas that are clever, logically sensible, and explain important (NOT trivial and vague) things about the world that existing theories don't. "
+    "Default to low ratings unless you are fully convinced this is truly brilliant work deserving of research and publication."
 )
 
 
