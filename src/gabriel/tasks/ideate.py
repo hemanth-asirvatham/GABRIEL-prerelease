@@ -58,15 +58,11 @@ class IdeateConfig:
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
     use_seed_entities: bool = True
-    seed_model: Optional[str] = None
-    seed_n_parallels: Optional[int] = None
     seed_num_entities: Optional[int] = None
     seed_entities_per_generation: Optional[int] = None
     seed_entity_batch_frac: Optional[float] = None
     seed_existing_entities_cap: Optional[int] = None
-    seed_existing_sample_ratio: Optional[float] = None
     seed_additional_instructions: Optional[str] = None
-    seed_use_dummy: Optional[bool] = None
     seed_template_path: Optional[str] = None
 
 
@@ -291,23 +287,22 @@ class Ideate:
         config_updates: Dict[str, Any],
         run_kwargs: Dict[str, Any],
     ) -> pd.DataFrame:
+        config_updates = dict(config_updates)
         instructions = self._build_seed_instruction(topic, additional_instructions)
         base_name = os.path.splitext(self.cfg.file_name)[0]
         seed_save = os.path.join(self.cfg.save_dir, "seed")
+        template_override = config_updates.pop("template_path", None)
         cfg_kwargs: Dict[str, Any] = dict(
             instructions=instructions,
             save_dir=seed_save,
             file_name=f"{base_name}_seed_entities.csv",
-            model=self.cfg.seed_model or self.cfg.model,
-            n_parallels=self.cfg.seed_n_parallels or self.cfg.n_parallels,
+            model=self.cfg.model,
+            n_parallels=self.cfg.n_parallels,
             num_entities=self.cfg.seed_num_entities or self.cfg.n_ideas,
             entities_per_generation=self.cfg.seed_entities_per_generation or 10,
             entity_batch_frac=self.cfg.seed_entity_batch_frac or 0.1,
             existing_entities_cap=self.cfg.seed_existing_entities_cap or 250,
-            existing_sample_ratio=self.cfg.seed_existing_sample_ratio or 0.5,
-            use_dummy=self.cfg.seed_use_dummy
-            if self.cfg.seed_use_dummy is not None
-            else self.cfg.use_dummy,
+            use_dummy=self.cfg.use_dummy,
             reasoning_effort=self.cfg.reasoning_effort,
             reasoning_summary=self.cfg.reasoning_summary,
         )
@@ -317,7 +312,8 @@ class Ideate:
             )
         cfg_kwargs.update(config_updates)
         seed_cfg = SeedConfig(**cfg_kwargs)
-        seed_task = Seed(seed_cfg, template_path=self.cfg.seed_template_path)
+        template_path = template_override or self.cfg.seed_template_path
+        seed_task = Seed(seed_cfg, template_path=template_path)
         run_opts = dict(run_kwargs)
         seed_df = await seed_task.run(reset_files=reset_files, **run_opts)
         if not isinstance(seed_df, pd.DataFrame):
@@ -652,6 +648,17 @@ class Ideate:
         target = self._normalize_label(attr_key)
         for column in df.columns:
             if self._normalize_label(column) == target:
+                return column
+        prefixes = ["cumulative_", "final_"]
+        pattern = re.compile(r"^(stage\d+_|round\d+_)")
+        for column in df.columns:
+            stripped = column
+            for prefix in prefixes:
+                if stripped.startswith(prefix):
+                    stripped = stripped[len(prefix) :]
+                    break
+            stripped = pattern.sub("", stripped)
+            if self._normalize_label(stripped) == target:
                 return column
         return None
 

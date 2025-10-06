@@ -29,7 +29,6 @@ class SeedConfig:
     entities_per_generation: int = 50
     entity_batch_frac: float = 0.2
     existing_entities_cap: int = 100
-    existing_sample_ratio: float = 0.5
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     reasoning_effort: Optional[str] = None
@@ -55,10 +54,8 @@ class Seed:
             raise ValueError("entities_per_generation must be positive")
         if not 0 < cfg.entity_batch_frac <= 1:
             raise ValueError("entity_batch_frac must be between 0 and 1")
-        if cfg.existing_entities_cap <= 0:
-            raise ValueError("existing_entities_cap must be positive")
-        if not 0 <= cfg.existing_sample_ratio <= 1:
-            raise ValueError("existing_sample_ratio must be in [0, 1]")
+        if cfg.existing_entities_cap < 0:
+            raise ValueError("existing_entities_cap must be non-negative")
         if template is not None and template_path is not None:
             raise ValueError("Provide either template or template_path, not both")
         if template_path is not None:
@@ -92,7 +89,8 @@ class Seed:
         reset_next = reset_files
         while len(seen) < self.cfg.num_entities:
             remaining = self.cfg.num_entities - len(seen)
-            current_goal = max(batch_target, remaining)
+            current_goal = min(batch_target, remaining)
+            current_goal = max(current_goal, self.cfg.entities_per_generation)
             prompts, identifiers = self._build_prompts(
                 current_goal,
                 batch_index,
@@ -141,7 +139,7 @@ class Seed:
             )
             batch_index += 1
             reset_next = False
-            if added == 0 and not parsed:
+            if added == 0 and not any(parsed):
                 break
 
         ordered = [seen[norm] for norm in seen]
@@ -228,17 +226,12 @@ class Seed:
     def _sample_existing(self, seen_entities: Sequence[str]) -> List[str]:
         if not seen_entities:
             return []
-        if self.cfg.existing_sample_ratio <= 0:
+        cap = max(0, self.cfg.existing_entities_cap)
+        if cap == 0:
             return []
-        sample_size = max(
-            1,
-            min(
-                self.cfg.existing_entities_cap,
-                int(len(seen_entities) * self.cfg.existing_sample_ratio),
-            ),
-        )
-        sample_size = min(sample_size, len(seen_entities))
-        return random.sample(list(seen_entities), sample_size)
+        if len(seen_entities) <= cap:
+            return list(seen_entities)
+        return random.sample(list(seen_entities), cap)
 
     @staticmethod
     def _normalize_entity(text: str) -> str:
