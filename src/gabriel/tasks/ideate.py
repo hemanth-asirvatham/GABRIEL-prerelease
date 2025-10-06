@@ -301,9 +301,9 @@ class Ideate:
             model=self.cfg.seed_model or self.cfg.model,
             n_parallels=self.cfg.seed_n_parallels or self.cfg.n_parallels,
             num_entities=self.cfg.seed_num_entities or self.cfg.n_ideas,
-            entities_per_generation=self.cfg.seed_entities_per_generation or 50,
-            entity_batch_frac=self.cfg.seed_entity_batch_frac or 0.2,
-            existing_entities_cap=self.cfg.seed_existing_entities_cap or 100,
+            entities_per_generation=self.cfg.seed_entities_per_generation or 10,
+            entity_batch_frac=self.cfg.seed_entity_batch_frac or 0.1,
+            existing_entities_cap=self.cfg.seed_existing_entities_cap or 250,
             existing_sample_ratio=self.cfg.seed_existing_sample_ratio or 0.5,
             use_dummy=self.cfg.seed_use_dummy
             if self.cfg.seed_use_dummy is not None
@@ -329,9 +329,11 @@ class Ideate:
     ) -> str:
         base_lines = [
             "Generate concise, specific seed concepts that can anchor frontier scientific theories.",
-            "Each seed should describe a sharply defined angle, mechanism, dataset, or scenario, expressed in 1-2 sentences.",
+            "Each seed should describe a sharply defined angle, mechanism, dataset, or scenario, expressed in 1-3 specific sentences.",
             "Seeds must be mutually unique, grounded in the topic, and varied across disciplines or empirical situations.",
             "Do not draft the full theory—provide only the inspirational seed or scenario to explore.",
+            "Be genuinely novel and creative; think deeply about the topic and provide interesting seeds for frontier work that are clearly distinct from one another ",
+            "and would lead to completely different theories and ideas if fully explored."
         ]
         base_lines.append("Primary topic focus:")
         base_lines.append(topic.strip())
