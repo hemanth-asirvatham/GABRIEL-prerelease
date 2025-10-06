@@ -168,6 +168,66 @@ def test_get_response_background_poll(monkeypatch):
     assert fake_client.responses._retrieve_calls >= 1
 
 
+def test_get_response_background_poll_rate_limit_abort(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    openai_utils._clients_async.clear()
+
+    class DummyResponse:
+        def __init__(self, status: str, rid: str = "resp", text: str = ""):
+            self.status = status
+            self.id = rid
+            self.output_text = text
+            self.output = []
+            self.error = None
+            self.usage = {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            }
+
+    class DummyRateLimitError(Exception):
+        def __init__(self):
+            super().__init__("rate limited")
+            self.retry_after = 0.05
+
+    class FakeResponses:
+        def __init__(self):
+            self.retrieve_calls = 0
+
+        async def create(self, **kwargs):
+            assert kwargs.get("background") is True
+            return DummyResponse("in_progress", rid="resp-new")
+
+        async def retrieve(self, response_id: str, **kwargs):
+            self.retrieve_calls += 1
+            raise DummyRateLimitError()
+
+    class FakeClient:
+        def __init__(self):
+            self.responses = FakeResponses()
+
+    fake_client = FakeClient()
+
+    monkeypatch.setattr(openai_utils, "_get_client", lambda base_url=None: fake_client)
+    monkeypatch.setattr(openai_utils, "RateLimitError", DummyRateLimitError)
+
+    texts, duration, raw = asyncio.run(
+        openai_utils.get_response(
+            "hi",
+            use_dummy=False,
+            timeout=None,
+            background_mode=True,
+            background_poll_interval=0.01,
+            return_raw=True,
+        )
+    )
+
+    assert fake_client.responses.retrieve_calls == 1
+    assert texts and "rate limit" in texts[0]
+    assert raw and getattr(raw[0], "pending_response", None) is not None
+    assert duration >= 0
+
+
 def test_get_response_launches_new_calls_when_pending(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     openai_utils._clients_async.clear()
