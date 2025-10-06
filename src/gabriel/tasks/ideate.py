@@ -18,14 +18,16 @@ from gabriel.tasks.seed import Seed, SeedConfig
 _DEF_ATTR_LABEL = "novel and brilliant"
 _DEF_ATTR_DESCRIPTION = (
     "Measures how original, well-reasoned, and consequential the proposed theory is. "
-    "High scores correspond to ideas that introduce a specific new mechanism, twist, addendum, etc, "
-    "inspired by existing literature but genuinely novel and creative thought, "
-    "and above all is just a genuinely superior scientific theory pursuant to the topic. "
+    "High scores correspond to ideas that introduce novel and creative thought, "
+    "but above all are just genuinely superior scientific theory pursuant to the topic. "
+    "Use your best professor hat to judge 'novel and brilliant' just as a high quality journal would, seeing past basic tricks and rehashes to identify true brilliance and novel cleverness. "
     "More novel and brilliant theories say something new and interesting, capturing something in the real world better "
     "than existing thought. Ideally novel yet specific, testable, realistic, and brilliant/inspired such that top professors would admire it deeply; "
     "a high standard requiring deep thought and consideration, worthy of evaluating frontier research theories. "
     "Give low ratings to anything but a truly exceptional and novel theory; penalize uncreative and unambitious theories that largely repeat existing work, "
     "while rewarding clearly new ideas that are clever, logically sensible, and explain important (NOT trivial and vague) things about the world that existing theories don't. "
+    "Don't reward focus on niches and fads that don't really matter. Winning theories can be old school or new school, as long as they speak to something genuinely important in the topic and the world. "
+    "Reward interesting and important and clever, not just slapping old work onto something new like AI or quantum just for the sake of it. "
     "Default to low ratings unless you are fully convinced this is truly brilliant work deserving of research and publication."
 )
 
