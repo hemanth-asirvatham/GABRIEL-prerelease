@@ -324,12 +324,14 @@ class Ideate:
         self, topic: str, additional_instructions: Optional[str]
     ) -> str:
         base_lines = [
-            "Generate concise, specific seed concepts that can anchor frontier scientific theories.",
-            "Each seed should describe a sharply defined angle, mechanism, dataset, or scenario, expressed in 1-3 specific sentences.",
-            "Seeds must be mutually unique, grounded in the topic, and varied across disciplines or empirical situations.",
-            "Do not draft the full theory—provide only the inspirational seed or scenario to explore.",
+            "Generate concise, specific seed concepts that can anchor frontier scientific theories. ",
+            "Each seed should describe a sharply defined angle, mechanism, dataset, real world phenomena or scenario, expressed in 1-2 specific sentences. ",
+            "Seeds must be mutually unique and grounded in the topic. ",
+            "Do not draft the full theory—provide only the inspirational seed or scenario to explore. ",
             "Be genuinely novel and creative; think deeply about the topic and provide interesting seeds for frontier work that are clearly distinct from one another ",
-            "and would lead to completely different theories and ideas if fully explored."
+            "and would lead to completely different theories and ideas if fully explored. ",
+            "Again: don't describe a theory, just some details/a domain that would be interesting to pursue a novel theory. ",
+            "Each seed should touch on important, non-trivial specific subdomains for research; avoid niches, fads, etc that don't have real significance in the research field or the real world."
         ]
         base_lines.append("Primary topic focus:")
         base_lines.append(topic.strip())
