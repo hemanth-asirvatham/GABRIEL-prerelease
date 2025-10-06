@@ -333,7 +333,10 @@ class Ideate:
             "Be genuinely novel and creative; think deeply about the topic and provide interesting seeds for frontier work that are clearly distinct from one another ",
             "and would lead to completely different theories and ideas if fully explored. ",
             "Again: don't describe a theory, just some details/a domain that would be interesting to pursue a novel theory. ",
-            "Each seed should touch on important, non-trivial specific subdomains for research; avoid niches, fads, etc that don't have real significance in the research field or the real world."
+            "For each seed, just give some nudges towards a research focus, not the full theory. ",
+            "Each seed should touch on important, non-trivial specific subdomains for research; avoid niches, fads, etc that don't have real significance in the research field or the real world. "
+            "Don't obsess with recent events like AI or quantum or DeFi; can be old school too, not necessarily anything to do with current events. ",
+            "Can be anything, old events or more recent, wacky or traditional, as long as interesting research focus related to the topic."
         ]
         base_lines.append("Primary topic focus:")
         base_lines.append(topic.strip())
