@@ -28,7 +28,7 @@ _DEF_ATTR_DESCRIPTION = (
     "while rewarding clearly new ideas that are clever, logically sensible, and explain important (NOT trivial and vague) things about the world that existing theories don't. "
     "Don't reward focus on niches and fads that don't really matter. Winning theories can be old school or new school, as long as they speak to something genuinely important in the topic and the world. "
     "Reward interesting and important and clever, not just slapping old work onto something new like AI or quantum or smartphones just for the sake of it. "
-    "A major contribution to the literature MUST explain something big and significant, NOT tiny effects that don't really matter.
+    "A major contribution to the literature MUST explain something big and significant, NOT tiny effects that don't really matter. "
     "Default to low ratings unless you are fully convinced this is truly brilliant work deserving of research and publication."
 )
 
