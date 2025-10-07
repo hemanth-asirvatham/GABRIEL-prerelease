@@ -15,19 +15,20 @@ from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.seed import Seed, SeedConfig
 
 
-_DEF_ATTR_LABEL = "novel and brilliant"
+_DEF_ATTR_LABEL = "major new contribution to literature"
 _DEF_ATTR_DESCRIPTION = (
     "Measures how original, well-reasoned, and consequential the proposed theory is. "
     "High scores correspond to ideas that introduce novel and creative thought, "
     "but above all are just genuinely superior scientific theory pursuant to the topic. "
-    "Use your best professor hat to judge 'novel and brilliant' just as a high quality journal would, seeing past basic tricks and rehashes to identify true brilliance and novel cleverness. "
-    "More novel and brilliant theories say something new and interesting, capturing something in the real world better "
-    "than existing thought. Ideally novel yet specific, testable, realistic, and brilliant/inspired such that top professors would admire it deeply; "
+    "Use your best professor hat to judge 'major new contribution to literature' just as a high quality journal would, seeing past basic tricks and rehashes to identify true brilliance and novel cleverness. "
+    "Theories that contribute to the literature say something usefully new and interesting, capturing something in the real world better "
+    "than existing thought. Novel yet specific, testable, non-trivial, and brilliant/inspired such that top professors would admire it deeply; "
     "a high standard requiring deep thought and consideration, worthy of evaluating frontier research theories. "
-    "Give low ratings to anything but a truly exceptional and novel theory; penalize uncreative and unambitious theories that largely repeat existing work, "
+    "Give low ratings to anything but a truly exceptional new theory that goes beyond existing work; penalize uncreative and unambitious theories that parrot existing work, "
     "while rewarding clearly new ideas that are clever, logically sensible, and explain important (NOT trivial and vague) things about the world that existing theories don't. "
     "Don't reward focus on niches and fads that don't really matter. Winning theories can be old school or new school, as long as they speak to something genuinely important in the topic and the world. "
-    "Reward interesting and important and clever, not just slapping old work onto something new like AI or quantum just for the sake of it. "
+    "Reward interesting and important and clever, not just slapping old work onto something new like AI or quantum or smartphones just for the sake of it. "
+    "A major contribution to the literature MUST explain something big and significant, NOT tiny effects that don't really matter.
     "Default to low ratings unless you are fully convinced this is truly brilliant work deserving of research and publication."
 )
 
@@ -333,7 +334,7 @@ class Ideate:
             "Be genuinely novel and creative; think deeply about the topic and provide interesting seeds for frontier work that are clearly distinct from one another ",
             "and would lead to completely different theories and ideas if fully explored. ",
             "Again: don't describe a theory, just some details/a domain that would be interesting to pursue a novel theory. ",
-            "For each seed, just give some nudges towards a research focus, not the full theory. ",
+            "For each seed, just give some light nudges towards a research focus, NOT the full theory. ",
             "Each seed should touch on important, non-trivial specific subdomains for research; avoid niches, fads, etc that don't have real significance in the research field or the real world. "
             "Don't obsess with recent events like AI or quantum or DeFi; can be old school too, not necessarily anything to do with current events. ",
             "Can be anything, old events or more recent, wacky or traditional, as long as interesting research focus related to the topic."
