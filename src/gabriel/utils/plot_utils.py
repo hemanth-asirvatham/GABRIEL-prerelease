@@ -368,6 +368,15 @@ def _results_to_dict(
 
     params = res.params
     se = res.bse
+    try:
+        f_value = res.fvalue
+    except ValueError:
+        # Some statsmodels results (particularly with many fixed effects or
+        # clustered covariance options) raise ValueError when attempting to
+        # compute the model F-statistic.  Downstream logic expects a numeric
+        # entry, so fall back to NaN in these cases instead of bubbling up an
+        # exception that halts plotting entirely.
+        f_value = np.nan
     return {
         "coef": params,
         "se": se,
@@ -378,7 +387,7 @@ def _results_to_dict(
         "n": int(res.nobs),
         "k": len(params) - 1 if "Intercept" in params.index else len(params),
         "rse": np.sqrt(res.mse_resid) if hasattr(res, "mse_resid") else np.nan,
-        "F": getattr(res, "fvalue", np.nan),
+        "F": f_value,
         "resid": res.resid,
         "varnames": list(params.index),
         "display_varnames": display_varnames,
