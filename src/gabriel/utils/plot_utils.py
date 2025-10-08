@@ -721,7 +721,7 @@ def regression_plot(
     cluster: Optional[Union[str, Iterable[str]]] = None,
     include_intercept: Optional[bool] = None,
     use_formula: Optional[bool] = None,
-    latex_options: Optional[Dict[str, Any]] = None,
+    latex_options: Optional[Dict[str, Any]] = {},
     fixed_effect_min_share: float = 0.01,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Run OLS regressions for each combination of ``y`` and ``x`` variables.
