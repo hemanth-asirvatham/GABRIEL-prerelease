@@ -358,6 +358,27 @@ def _format_coefficient(coef: float, se: Optional[float], pval: Optional[float],
     return f"{coef_part} ({se_part}){stars}"
 
 
+def _cache_f_stat_failure(res: sm.regression.linear_model.RegressionResultsWrapper) -> None:
+    """Store NaN F-statistics on the statsmodels results cache."""
+
+    cache = getattr(res, "_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(res, "_cache", cache)
+    cache["fvalue"] = np.nan
+    cache["f_pvalue"] = np.nan
+
+
+def _safe_fvalue(res: sm.regression.linear_model.RegressionResultsWrapper) -> float:
+    """Return ``res.fvalue`` while gracefully handling statsmodels failures."""
+
+    try:
+        return float(res.fvalue)
+    except ValueError:
+        _cache_f_stat_failure(res)
+        return np.nan
+
+
 def _results_to_dict(
     res: sm.regression.linear_model.RegressionResultsWrapper,
     *,
@@ -368,15 +389,7 @@ def _results_to_dict(
 
     params = res.params
     se = res.bse
-    try:
-        f_value = res.fvalue
-    except ValueError:
-        # Some statsmodels results (particularly with many fixed effects or
-        # clustered covariance options) raise ValueError when attempting to
-        # compute the model F-statistic.  Downstream logic expects a numeric
-        # entry, so fall back to NaN in these cases instead of bubbling up an
-        # exception that halts plotting entirely.
-        f_value = np.nan
+    f_value = _safe_fvalue(res)
     return {
         "coef": params,
         "se": se,
@@ -794,7 +807,7 @@ def fit_ols(
     resid = res.resid
     df_resid = n - k_plus1
     rse = np.sqrt((resid @ resid) / df_resid) if df_resid > 0 else np.nan
-    F_stat = res.fvalue if k > 0 else np.nan
+    F_stat = _safe_fvalue(res) if k > 0 else np.nan
     display_names = varnames or list(params.index)
     return {
         "coef": params,
@@ -823,7 +836,9 @@ def _print_table(res: Dict[str, Any], *, tablefmt: str = "github") -> None:
     ordering of the coefficient vector.
     """
     # Print the full statsmodels summary for context
-    print(res["sm_results"].summary())
+    sm_results = res.get("sm_results")
+    if sm_results is not None and hasattr(sm_results, "summary"):
+        print(sm_results.summary())
     display_names = res.get("display_varnames") or list(res["coef"].index)
     lookup = res.get("param_lookup", {name: name for name in display_names})
     rows = []
