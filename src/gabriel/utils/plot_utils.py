@@ -208,6 +208,136 @@ def _apply_year_excess(
     return df_out, replacements
 
 
+def _build_default_joint_plan(
+    y_vars: Sequence[str],
+    x_vars: Sequence[str],
+    control_vars: Sequence[str],
+    entity_fixed_effects: Sequence[str],
+    time_fixed_effects: Sequence[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Return the default joint-regression plan used for LaTeX tables."""
+
+    plan: Dict[str, List[Dict[str, Any]]] = {}
+    fe_order = list(entity_fixed_effects) + list(time_fixed_effects)
+    for y_var in y_vars:
+        specs: List[Dict[str, Any]] = []
+        base_spec = {
+            "label": "All X" + (" + controls" if control_vars else ""),
+            "x": list(x_vars),
+            "controls": list(control_vars),
+            "entity_fe": [],
+            "time_fe": [],
+        }
+        specs.append(base_spec)
+        if fe_order:
+            first = fe_order[0]
+            specs.append(
+                {
+                    "label": f"All X + {first}",
+                    "x": list(x_vars),
+                    "controls": list(control_vars),
+                    "entity_fe": [first] if first in entity_fixed_effects else [],
+                    "time_fe": [first] if first in time_fixed_effects else [],
+                }
+            )
+            if len(fe_order) > 1:
+                specs.append(
+                    {
+                        "label": "All X + all FE",
+                        "x": list(x_vars),
+                        "controls": list(control_vars),
+                        "entity_fe": list(entity_fixed_effects),
+                        "time_fe": list(time_fixed_effects),
+                    }
+                )
+        plan[y_var] = specs
+    return plan
+
+
+def _normalise_joint_plan(
+    plan: Optional[Dict[str, Any]],
+    *,
+    default_plan: Dict[str, List[Dict[str, Any]]],
+    x_vars: Sequence[str],
+    control_vars: Sequence[str],
+    entity_fixed_effects: Sequence[str],
+    time_fixed_effects: Sequence[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Normalise user-provided LaTeX column plans."""
+
+    if plan is None:
+        return default_plan
+    normalised: Dict[str, List[Dict[str, Any]]] = {}
+    x_set = set(x_vars)
+    ctrl_set = set(control_vars)
+    entity_set = set(entity_fixed_effects)
+    time_set = set(time_fixed_effects)
+    for y_key, raw_specs in plan.items():
+        specs_iter: List[Any]
+        if isinstance(raw_specs, dict):
+            specs_iter = list(raw_specs.values())
+        else:
+            specs_iter = list(raw_specs or [])
+        if not specs_iter:
+            normalised[y_key] = default_plan.get(y_key, [])
+            continue
+        resolved: List[Dict[str, Any]] = []
+        for entry in specs_iter:
+            if isinstance(entry, dict):
+                vars_entry = entry.get("x") or entry.get("vars") or entry.get("independent")
+                controls_entry = entry.get("controls") or entry.get("control") or []
+                label = entry.get("label")
+                entity_entry = entry.get("entity_fe") or entry.get("entity_fixed_effects") or []
+                time_entry = entry.get("time_fe") or entry.get("time_fixed_effects") or []
+            else:
+                vars_entry = entry
+                controls_entry = []
+                label = None
+                entity_entry = []
+                time_entry = []
+            vars_list = _ensure_list(vars_entry)
+            controls_list = _ensure_list(controls_entry)
+            entity_list = _ensure_list(entity_entry)
+            time_list = _ensure_list(time_entry)
+            inferred_x: List[str] = []
+            inferred_ctrl: List[str] = []
+            inferred_entity = list(dict.fromkeys(entity_list))
+            inferred_time = list(dict.fromkeys(time_list))
+            if not vars_list and not inferred_entity and not inferred_time:
+                vars_list = list(x_vars)
+            for name in vars_list:
+                if name in x_set:
+                    inferred_x.append(name)
+                elif name in ctrl_set:
+                    inferred_ctrl.append(name)
+                elif name in entity_set:
+                    if name not in inferred_entity:
+                        inferred_entity.append(name)
+                elif name in time_set:
+                    if name not in inferred_time:
+                        inferred_time.append(name)
+                else:
+                    inferred_x.append(name)
+            for ctrl in controls_list:
+                if ctrl not in inferred_ctrl:
+                    inferred_ctrl.append(ctrl)
+            if not inferred_x:
+                raise ValueError("Each LaTeX column specification must include at least one regressor.")
+            resolved.append(
+                {
+                    "label": label,
+                    "x": inferred_x,
+                    "controls": inferred_ctrl,
+                    "entity_fe": inferred_entity,
+                    "time_fe": inferred_time,
+                }
+            )
+        normalised[y_key] = resolved
+    for y_var, specs in default_plan.items():
+        normalised.setdefault(y_var, specs)
+    return normalised
+
+
 def _format_coefficient(coef: float, se: Optional[float], pval: Optional[float], *, float_fmt: str) -> str:
     """Return a formatted coefficient string with standard error and stars."""
 
@@ -402,25 +532,44 @@ def build_regression_latex(
     if "label" not in options:
         options["label"] = "tab:regression_results"
     columns_spec = options.get("columns")
+    joint_meta = results.get("_joint_columns") if isinstance(results, dict) else None
     if not columns_spec:
         columns_spec = []
-        for (y_var, x_var), model_dict in results.items():
-            dep_label = rename_map.get(y_var, y_var)
-            indep_label = rename_map.get(x_var, x_var)
-            if model_dict.get("simple") is not None:
-                columns_spec.append({
-                    "key": (y_var, x_var),
-                    "model": "simple",
-                    "label": f"{dep_label} ~ {indep_label}",
-                    "dependent_label": dep_label,
-                })
-            if model_dict.get("with_controls") is not None:
-                columns_spec.append({
-                    "key": (y_var, x_var),
-                    "model": "with_controls",
-                    "label": f"{dep_label} ~ {indep_label} + controls",
-                    "dependent_label": dep_label,
-                })
+        if isinstance(joint_meta, dict) and joint_meta:
+            for entries in joint_meta.values():
+                for entry in entries:
+                    entry_spec = {
+                        "key": tuple(entry["key"]),
+                        "model": entry.get("model", "joint"),
+                        "label": entry.get("label"),
+                        "dependent_label": entry.get("dependent_label"),
+                    }
+                    columns_spec.append(entry_spec)
+        if not columns_spec:
+            for key, model_dict in results.items():
+                if (
+                    not isinstance(key, tuple)
+                    or len(key) != 2
+                    or not isinstance(model_dict, dict)
+                ):
+                    continue
+                y_var, x_var = key
+                dep_label = rename_map.get(y_var, y_var)
+                indep_label = rename_map.get(x_var, x_var)
+                if model_dict.get("simple") is not None:
+                    columns_spec.append({
+                        "key": (y_var, x_var),
+                        "model": "simple",
+                        "label": f"{dep_label} ~ {indep_label}",
+                        "dependent_label": dep_label,
+                    })
+                if model_dict.get("with_controls") is not None:
+                    columns_spec.append({
+                        "key": (y_var, x_var),
+                        "model": "with_controls",
+                        "label": f"{dep_label} ~ {indep_label} + controls",
+                        "dependent_label": dep_label,
+                    })
     models: List[Dict[str, Any]] = []
     for spec in columns_spec:
         key = tuple(spec.get("key", ()))
@@ -721,7 +870,8 @@ def regression_plot(
     cluster: Optional[Union[str, Iterable[str]]] = None,
     include_intercept: Optional[bool] = None,
     use_formula: Optional[bool] = None,
-    latex_options: Optional[Dict[str, Any]] = {},
+    latex_column_plan: Optional[Dict[str, Any]] = None,
+    latex_options: Union[bool, Dict[str, Any], None] = True,
     fixed_effect_min_share: float = 0.01,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Run OLS regressions for each combination of ``y`` and ``x`` variables.
@@ -756,15 +906,31 @@ def regression_plot(
     category.  ``cluster`` can provide columns for clustered standard errors.
     ``include_intercept`` overrides the automatic intercept handling when fixed
     effects are present, while ``use_formula`` forces the formula-based path even
-    without fixed effects.  ``latex_options``
-    controls LaTeX output: pass ``True`` (or ``{}``) for a ready-to-use table,
-    or supply a configuration dictionary (see :func:`build_regression_latex`
-    for the available keys and an end-to-end example).
+    without fixed effects.  ``latex_column_plan`` customises which joint
+    regressions populate the LaTeX table: by default, every dependent variable is
+    paired with (i) a specification containing all ``x`` variables (and
+    ``controls`` when provided), (ii) if fixed effects exist, a version with the
+    first available fixed effect, and (iii) a version with every supplied fixed
+    effect.  Supply a dictionary such as ``{"adoption lag": [["var_a", "var_b"],
+    ["var_a", "primary category"]]}`` to override those defaults.  Entries may be
+    either sequences of variable names (``x``/``controls``/fixed-effect
+    columns) or dictionaries with ``{"label": ..., "x": [...], "controls": [...],
+    "entity_fe": [...], "time_fe": [...]}``.
+
+    ``latex_options`` controls LaTeX output.  By default this is ``True``,
+    which means :func:`build_regression_latex` is run automatically and the
+    resulting string is stored under ``"latex_table"`` in the returned
+    dictionary (and printed unless ``{"print": False}`` is supplied).  Pass a
+    configuration dictionary to customise the table or ``False``/``None`` to
+    disable LaTeX creation entirely.
 
     Returns a dictionary keyed by ``(y_var, x_var)`` with entries ``'simple'``,
     ``'with_controls'``, and ``'binned_df'`` along with metadata for downstream
     table construction.  When controls are not provided, ``'with_controls'``
-    will be ``None``.
+    will be ``None``.  Additional joint specifications used in the LaTeX table
+    appear under keys of the form ``(y_var, 'joint_{i}')`` with a ``'joint'``
+    entry describing the combined regression.  ``results['_joint_columns']``
+    lists the default (or user-supplied) LaTeX column plan for reference.
 
     Examples
     --------
@@ -777,8 +943,8 @@ def regression_plot(
     ...     excess_window=2,
     ...     latex_options=True,
     ... )
-    >>> list(results.keys())  # doctest: +SKIP
-    [('outcome', 'treatment'), 'latex_table']
+    >>> sorted(results.keys())  # doctest: +SKIP
+    [('outcome', 'joint_0'), ('outcome', 'treatment'), 'latex_table']
     """
     x_vars = _ensure_list(x)
     y_vars = _ensure_list(y)
@@ -813,7 +979,50 @@ def regression_plot(
     x_actual = {var: replacements.get(var, var) for var in x_vars}
     y_actual = {var: replacements.get(var, var) for var in y_vars}
     controls_actual = {var: replacements.get(var, var) for var in control_vars}
+    processed_df = prepared_df.copy()
+    for original, actual in x_actual.items():
+        rename_map.setdefault(original, original)
+        rename_map.setdefault(actual, rename_map.get(original, actual))
+    for original, actual in y_actual.items():
+        rename_map.setdefault(original, original)
+        rename_map.setdefault(actual, rename_map.get(original, actual))
+    for original, actual in controls_actual.items():
+        rename_map.setdefault(original, original)
+        rename_map.setdefault(actual, rename_map.get(original, actual))
+    if zscore_x:
+        for var, actual in list(x_actual.items()):
+            numeric = pd.to_numeric(processed_df[actual], errors="coerce")
+            new_col = f"{actual}_z"
+            processed_df[new_col] = _z(numeric)
+            base_label = rename_map.get(var, var)
+            rename_map[new_col] = f"{base_label} (z)"
+            x_actual[var] = new_col
+    if zscore_y:
+        for var, actual in list(y_actual.items()):
+            numeric = pd.to_numeric(processed_df[actual], errors="coerce")
+            new_col = f"{actual}_z"
+            processed_df[new_col] = _z(numeric)
+            base_label = rename_map.get(var, var)
+            rename_map[new_col] = f"{base_label} (z)"
+            y_actual[var] = new_col
     results: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def _resolve_column(name: str) -> Tuple[str, str]:
+        """Return the actual dataframe column and display label for ``name``."""
+
+        if name in x_actual:
+            actual_col = x_actual[name]
+        elif name in controls_actual:
+            actual_col = controls_actual[name]
+        elif name in replacements:
+            actual_col = replacements[name]
+        else:
+            actual_col = name
+        if actual_col not in processed_df.columns:
+            raise KeyError(f"Column '{name}' (resolved to '{actual_col}') not found in dataframe.")
+        display = rename_map.get(actual_col, rename_map.get(name, name))
+        rename_map.setdefault(actual_col, display)
+        return actual_col, display
     fe_entity = list(dict.fromkeys(_ensure_list(entity_fixed_effects)))
     fe_time = list(dict.fromkeys(_ensure_list(time_fixed_effects)))
     cluster_cols = list(dict.fromkeys(_ensure_list(cluster)))
@@ -845,11 +1054,11 @@ def regression_plot(
         for x_var in x_vars:
             x_col = x_actual[x_var]
             # Create a copy for each pair to avoid side effects
-            data = prepared_df.copy()
+            data = processed_df.copy()
             # Pretty names for axes and tables
-            y_disp = rename_map.get(y_var, rename_map.get(y_col, y_var))
-            x_disp = rename_map.get(x_var, rename_map.get(x_col, x_var))
-            ctrl_disp = [rename_map.get(c, rename_map.get(controls_actual[c], c)) for c in control_vars]
+            y_disp = rename_map.get(y_col, rename_map.get(y_var, y_var))
+            x_disp = rename_map.get(x_col, rename_map.get(x_var, x_var))
+            ctrl_disp = [rename_map.get(controls_actual[c], rename_map.get(c, c)) for c in control_vars]
             # Ensure variables are numeric; non-numeric rows dropped
             numeric_needed = [x_col, y_col] + [controls_actual[c] for c in control_vars]
             data[numeric_needed] = data[numeric_needed].apply(pd.to_numeric, errors="coerce")
@@ -857,15 +1066,8 @@ def regression_plot(
             drop_subset.extend(fe_entity)
             drop_subset.extend(fe_time)
             data = data.dropna(subset=drop_subset)
-            # Optionally z‑score independent and dependent variables
-            x_use = f"{x_col}_z" if zscore_x else x_col
-            y_use = f"{y_col}_z" if zscore_y else y_col
-            if zscore_x:
-                data[x_use] = _z(data[x_col])
-                rename_map.setdefault(x_use, f"{x_disp} (z)")
-            if zscore_y:
-                data[y_use] = _z(data[y_col])
-                rename_map.setdefault(y_use, f"{y_disp} (z)")
+            x_use = x_col
+            y_use = y_col
             # Binned scatter plot
             data["_bin"] = pd.qcut(data[x_use], q=bins, duplicates="drop")
             grp = data.groupby("_bin", observed=True)
@@ -879,13 +1081,9 @@ def regression_plot(
                 colours = mpl.cm.get_cmap(cmap)(np.linspace(0, 1, len(xm)))
                 ax.scatter(xm, ym, c=colours, s=50, zorder=3)
                 title = f"{y_disp} vs. {x_disp}"
-                if zscore_x:
-                    title += " (z‑x)"
-                if zscore_y:
-                    title += " (z‑y)"
                 ax.set_title(textwrap.fill(title, wrap_width))
-                ax.set_xlabel(x_disp + (" (z)" if zscore_x else ""))
-                ax.set_ylabel(y_disp + (" (z)" if zscore_y else ""))
+                ax.set_xlabel(x_disp)
+                ax.set_ylabel(y_disp)
                 ax.grid(alpha=0.3)
                 if xlim is not None:
                     ax.set_xlim(xlim)
@@ -895,7 +1093,7 @@ def regression_plot(
             # Prepare design matrices and variable names
             y_arr = data[y_use].values
             # Simple model: intercept and primary x variable
-            varnames_simple = ["Intercept", x_disp if not zscore_x else f"{x_disp}_z"]
+            varnames_simple = ["Intercept", x_disp]
             ctrl_columns = [controls_actual[c] for c in control_vars]
             ctrl_display = ctrl_disp
             simple_res: Dict[str, Any]
@@ -930,7 +1128,7 @@ def regression_plot(
                     data,
                     y=y_use,
                     main_vars=[x_use],
-                    main_display=[x_disp if not zscore_x else f"{x_disp} (z)"],
+                    main_display=[x_disp],
                     controls=[],
                     control_display=[],
                     robust=robust,
@@ -959,7 +1157,7 @@ def regression_plot(
                         data,
                         y=y_use,
                         main_vars=[x_use],
-                        main_display=[x_disp if not zscore_x else f"{x_disp} (z)"],
+                        main_display=[x_disp],
                         controls=ctrl_columns,
                         control_display=ctrl_display,
                         robust=robust,
@@ -974,7 +1172,7 @@ def regression_plot(
                     for c in ctrl_columns:
                         arrays.append(data[c].values)
                     X_ctrl = np.column_stack(arrays)
-                    varnames_ctrl = ["Intercept", x_disp if not zscore_x else f"{x_disp}_z"] + ctrl_disp
+                    varnames_ctrl = ["Intercept", x_disp] + ctrl_disp
                     ctrl_res = fit_ols(y_arr, X_ctrl, robust=robust, varnames=varnames_ctrl)
                     ctrl_res["varnames"] = varnames_ctrl
                 if ctrl_res is not None:
@@ -998,6 +1196,140 @@ def regression_plot(
                 "binned_df": grp[[x_use, y_use]].mean(),
             }
             results[(y_var, x_var)]["metadata"] = metadata_base
+    default_joint_plan = _build_default_joint_plan(
+        y_vars,
+        x_vars,
+        control_vars,
+        fe_entity,
+        fe_time,
+    )
+    joint_plan = _normalise_joint_plan(
+        latex_column_plan,
+        default_plan=default_joint_plan,
+        x_vars=x_vars,
+        control_vars=control_vars,
+        entity_fixed_effects=fe_entity,
+        time_fixed_effects=fe_time,
+    )
+    joint_columns_meta: Dict[str, List[Dict[str, Any]]] = {}
+    joint_counter = 0
+    for y_var in y_vars:
+        y_col = y_actual[y_var]
+        y_disp = rename_map.get(y_col, rename_map.get(y_var, y_var))
+        specs = joint_plan.get(y_var, [])
+        column_entries: List[Dict[str, Any]] = []
+        for spec in specs:
+            spec_x_names = spec.get("x", [])
+            spec_ctrl_names = spec.get("controls", [])
+            entity_spec = [col for col in spec.get("entity_fe", []) if col in fe_entity]
+            time_spec = [col for col in spec.get("time_fe", []) if col in fe_time]
+            x_columns: List[str] = []
+            x_display: List[str] = []
+            for name in spec_x_names:
+                actual, disp = _resolve_column(name)
+                if actual not in x_columns:
+                    x_columns.append(actual)
+                    x_display.append(disp)
+            ctrl_columns_spec: List[str] = []
+            ctrl_display_spec: List[str] = []
+            for name in spec_ctrl_names:
+                actual, disp = _resolve_column(name)
+                if actual not in ctrl_columns_spec:
+                    ctrl_columns_spec.append(actual)
+                    ctrl_display_spec.append(disp)
+            if not x_columns:
+                continue
+            data = processed_df.copy()
+            numeric_needed = [y_col] + x_columns + ctrl_columns_spec
+            data[numeric_needed] = data[numeric_needed].apply(pd.to_numeric, errors="coerce")
+            drop_subset = list(numeric_needed)
+            drop_subset.extend(entity_spec)
+            drop_subset.extend(time_spec)
+            data = data.dropna(subset=drop_subset)
+            if data.empty:
+                continue
+            joint_use_formula = use_formula or bool(entity_spec) or bool(time_spec) or bool(cluster_cols)
+            joint_formula = None
+            if joint_use_formula:
+                joint_res, joint_formula = _fit_formula_model(
+                    data,
+                    y=y_col,
+                    main_vars=x_columns,
+                    main_display=x_display,
+                    controls=ctrl_columns_spec,
+                    control_display=ctrl_display_spec,
+                    robust=robust,
+                    entity_fe=entity_spec,
+                    time_fe=time_spec,
+                    interaction_terms=fe_interactions,
+                    include_intercept=include_intercept,
+                    cluster_cols=cluster_cols,
+                )
+            else:
+                y_arr = data[y_col].values
+                arrays = [np.ones(len(data))]
+                for col in x_columns:
+                    arrays.append(data[col].values)
+                for col in ctrl_columns_spec:
+                    arrays.append(data[col].values)
+                design = np.column_stack(arrays)
+                varnames = ["Intercept"] + x_display + ctrl_display_spec
+                joint_res = fit_ols(y_arr, design, robust=robust, varnames=varnames)
+                joint_res["varnames"] = varnames
+            joint_res.setdefault("metadata", {}).update(
+                {
+                    "y": y_var,
+                    "y_column": y_col,
+                    "y_display": y_disp,
+                    "x": list(spec_x_names),
+                    "x_columns": list(x_columns),
+                    "x_display": list(x_display),
+                    "controls": list(spec_ctrl_names),
+                    "control_columns": list(ctrl_columns_spec),
+                    "control_display": list(ctrl_display_spec),
+                    "controls_included": list(ctrl_columns_spec),
+                    "fixed_effects": {
+                        "entity": list(entity_spec),
+                        "time": list(time_spec),
+                        "cluster": list(cluster_cols),
+                        "include_intercept": include_intercept,
+                        "interaction_terms": fe_interactions,
+                        "min_share": fe_min_share if entity_spec or time_spec else None,
+                        "entity_base_levels": dict(entity_base_levels),
+                        "time_base_levels": dict(time_base_levels),
+                        "entity_rare_levels": {k: list(v) for k, v in entity_rare_levels.items()},
+                        "time_rare_levels": {k: list(v) for k, v in time_rare_levels.items()},
+                    },
+                    "model": "joint",
+                    "formula": joint_formula,
+                    "excess_replacements": replacements,
+                }
+            )
+            spec_label = spec.get("label")
+            if not spec_label:
+                pieces = [" + ".join(x_display)] if x_display else []
+                if ctrl_display_spec:
+                    pieces.append(" + ".join(ctrl_display_spec))
+                fe_bits = entity_spec + time_spec
+                if fe_bits:
+                    pieces.append(" + ".join(fe_bits))
+                spec_label = " | ".join(pieces) if pieces else f"Model {joint_counter + 1}"
+            joint_key = (y_var, f"joint_{joint_counter}")
+            joint_counter += 1
+            results[joint_key] = {"joint": joint_res}
+            results[joint_key]["metadata"] = joint_res.get("metadata", {})
+            column_entries.append(
+                {
+                    "key": joint_key,
+                    "model": "joint",
+                    "label": spec_label,
+                    "dependent_label": y_disp,
+                }
+            )
+        if column_entries:
+            joint_columns_meta[y_var] = column_entries
+    if joint_columns_meta:
+        results["_joint_columns"] = joint_columns_meta
     latex_opts: Optional[Dict[str, Any]]
     if isinstance(latex_options, bool):
         latex_opts = {} if latex_options else None
