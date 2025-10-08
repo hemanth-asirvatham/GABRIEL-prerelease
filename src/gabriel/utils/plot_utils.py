@@ -18,6 +18,7 @@ and additional features.  For Python 3.12 and SciPy 1.16+, use
 from __future__ import annotations
 
 import textwrap
+from collections import OrderedDict
 from itertools import combinations
 from typing import Iterable, Dict, Any, Optional, List, Tuple, Sequence, Union
 
@@ -509,6 +510,15 @@ def build_regression_latex(
         Whether the intercept should be shown (defaults to ``False``).
     ``float_format``
         Format string used for coefficients and summary statistics.
+    ``include_controls_row``
+        Toggle the summary row that indicates whether controls are present.
+    ``include_fe_rows``
+        When ``True`` (default) each supplied fixed-effect column is listed as its
+        own row labelled by the variable name.  Rows are omitted entirely when
+        no fixed effects are specified.
+    ``include_cluster_row``
+        Controls whether cluster indicators appear.  Each cluster column is
+        displayed on its own row when at least one model clusters on it.
     ``caption`` / ``label``
         Metadata for the LaTeX table environment.
     ``save_path``
@@ -630,6 +640,26 @@ def build_regression_latex(
     include_controls_row = options.get("include_controls_row", True)
     include_fe_rows = options.get("include_fe_rows", True)
     include_cluster_row = options.get("include_cluster_row", True)
+    # Track display labels for fixed effects and cluster columns that appear in
+    # any model so that we only emit rows for the variables that are actually
+    # specified.
+    fe_display_lookup: OrderedDict[str, str] = OrderedDict()
+    cluster_display_lookup: OrderedDict[str, str] = OrderedDict()
+    if include_fe_rows or include_cluster_row:
+        for model in models:
+            meta = model["result"].get("metadata", {})
+            fe_meta = meta.get("fixed_effects", {})
+            if include_fe_rows:
+                for key in ("entity", "time"):
+                    for fe_name in _ensure_list(fe_meta.get(key)):
+                        display = rename_map.get(fe_name, fe_name)
+                        if fe_name not in fe_display_lookup:
+                            fe_display_lookup[fe_name] = display
+            if include_cluster_row:
+                for cluster_name in _ensure_list(fe_meta.get("cluster")):
+                    display = rename_map.get(cluster_name, cluster_name)
+                    if cluster_name not in cluster_display_lookup:
+                        cluster_display_lookup[cluster_name] = display
     show_dependent = options.get("show_dependent", True)
     row_end = " " + "\\\\"
     lines = [r"\begin{table}[!htbp]", r"\centering", r"\begin{tabular}{l" + "c" * len(models) + "}", r"\toprule"]
@@ -693,23 +723,26 @@ def build_regression_latex(
             has_controls = bool(meta.get("controls_included"))
             ctrl_row.append(r"\checkmark" if has_controls else "-")
         lines.append(" & ".join(ctrl_row) + row_end)
-    if include_fe_rows:
-        entity_row = ["Entity FE"]
-        time_row = ["Time FE"]
-        for model in models:
-            meta = model["result"].get("metadata", {})
-            fe = meta.get("fixed_effects", {})
-            entity_row.append(r"\checkmark" if fe.get("entity") else "-")
-            time_row.append(r"\checkmark" if fe.get("time") else "-")
-        lines.append(" & ".join(entity_row) + row_end)
-        lines.append(" & ".join(time_row) + row_end)
-    if include_cluster_row:
-        cluster_row = ["Clustered SE"]
-        for model in models:
-            meta = model["result"].get("metadata", {})
-            fe = meta.get("fixed_effects", {})
-            cluster_row.append(r"\checkmark" if fe.get("cluster") else "-")
-        lines.append(" & ".join(cluster_row) + row_end)
+    if include_fe_rows and fe_display_lookup:
+        for fe_name, fe_display in fe_display_lookup.items():
+            row = [fe_display]
+            for model in models:
+                meta = model["result"].get("metadata", {})
+                fe_meta = meta.get("fixed_effects", {})
+                fe_values = set()
+                for key in ("entity", "time"):
+                    fe_values.update(_ensure_list(fe_meta.get(key)))
+                row.append(r"\checkmark" if fe_name in fe_values else "-")
+            lines.append(" & ".join(row) + row_end)
+    if include_cluster_row and cluster_display_lookup:
+        for cluster_name, cluster_display in cluster_display_lookup.items():
+            row = [cluster_display]
+            for model in models:
+                meta = model["result"].get("metadata", {})
+                fe_meta = meta.get("fixed_effects", {})
+                clusters = set(_ensure_list(fe_meta.get("cluster")))
+                row.append(r"\checkmark" if cluster_name in clusters else "-")
+            lines.append(" & ".join(row) + row_end)
     lines.append(r"\bottomrule")
     lines.append(r"\end{tabular}")
     lines.append(rf"\caption{{{caption}}}")
