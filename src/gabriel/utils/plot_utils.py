@@ -223,13 +223,23 @@ def _build_default_joint_plan(
     for y_var in y_vars:
         specs: List[Dict[str, Any]] = []
         base_spec = {
-            "label": "All X" + (" + controls" if control_vars else ""),
+            "label": "All X",
             "x": list(x_vars),
-            "controls": list(control_vars),
+            "controls": [],
             "entity_fe": [],
             "time_fe": [],
         }
         specs.append(base_spec)
+        if control_vars:
+            specs.append(
+                {
+                    "label": "All X + controls",
+                    "x": list(x_vars),
+                    "controls": list(control_vars),
+                    "entity_fe": [],
+                    "time_fe": [],
+                }
+            )
         if fe_order:
             first = fe_order[0]
             specs.append(
@@ -659,7 +669,7 @@ def build_regression_latex(
     label = options.get("label", "tab:regression_results")
     include_stats = options.get("include_stats", True)
     include_adj_r2 = options.get("include_adj_r2", False)
-    include_controls_row = options.get("include_controls_row", True)
+    include_controls_row = options.get("include_controls_row", False)
     include_fe_rows = options.get("include_fe_rows", True)
     include_cluster_row = options.get("include_cluster_row", True)
     # Track display labels for fixed effects and cluster columns that appear in
