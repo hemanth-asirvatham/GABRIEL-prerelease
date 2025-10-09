@@ -687,7 +687,9 @@ def build_regression_latex(
     show_model_labels = bool(options.get("show_model_labels", False))
     notes_text = options.get(
         "notes",
-        r"$^{*}$p$<0.1$; $^{**}$p$<0.05$; $^{***}$p$<0.01",
+        r"\textsuperscript{*} p\textless{}0.1; "
+        r"\textsuperscript{**} p\textless{}0.05; "
+        r"\textsuperscript{***} p\textless{}0.01",
     )
     max_width = options.get("max_width", r"\textwidth")
     column_spacing = options.get("column_spacing", 5)
