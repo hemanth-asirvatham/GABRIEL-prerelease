@@ -696,7 +696,7 @@ def build_regression_latex(
     lines = [
         r"\begin{table}[!htbp] \centering",
         rf"\begin{{adjustbox}}{{max width={max_width}}}",
-        rf"\begin{tabular}{{{column_spec}}}",
+        rf"\begin{{tabular}}{{{column_spec}}}",
         r"\\[-1.8ex]\hline \hline \\[-1.8ex]",
     ]
     if show_dependent:
