@@ -339,11 +339,17 @@ def _normalise_joint_plan(
     return normalised
 
 
-def _format_coefficient(coef: float, se: Optional[float], pval: Optional[float], *, float_fmt: str) -> str:
-    """Return a formatted coefficient string with standard error and stars."""
+def _format_coefficient(
+    coef: float,
+    se: Optional[float],
+    pval: Optional[float],
+    *,
+    float_fmt: str,
+) -> Tuple[str, str]:
+    """Return formatted coefficient and standard error strings with stars."""
 
-    if np.isnan(coef):
-        return "-"
+    if coef is None or (isinstance(coef, float) and np.isnan(coef)):
+        return "-", ""
     stars = ""
     if pval is not None:
         if pval < 0.01:
@@ -352,11 +358,11 @@ def _format_coefficient(coef: float, se: Optional[float], pval: Optional[float],
             stars = "**"
         elif pval < 0.1:
             stars = "*"
-    coef_part = float_fmt.format(coef)
-    if se is None or np.isnan(se):
-        return f"{coef_part}{stars}"
+    coef_part = f"{float_fmt.format(coef)}{stars}"
+    if se is None or (isinstance(se, float) and np.isnan(se)):
+        return coef_part, ""
     se_part = float_fmt.format(se)
-    return f"{coef_part} ({se_part}){stars}"
+    return coef_part, f"({se_part})"
 
 
 def _cache_f_stat_failure(res: sm.regression.linear_model.RegressionResultsWrapper) -> None:
@@ -519,6 +525,22 @@ def build_regression_latex(
     ``include_cluster_row``
         Controls whether cluster indicators appear.  Each cluster column is
         displayed on its own row when at least one model clusters on it.
+    ``include_model_numbers``
+        When ``True`` (default) a numbered header row ``(1)``, ``(2)``, … is
+        added above the coefficient block.
+    ``show_model_labels``
+        Display the human-readable labels for each model beneath the numbered
+        headers.  Useful when you still want descriptive titles in addition to
+        the standard numbering.
+    ``notes``
+        Text displayed in the footnote row.  Defaults to the conventional
+        significance legend.  Set to ``None`` or ``""`` to omit the row.
+    ``column_spacing``
+        Point value used in ``\\extracolsep`` to control column spacing
+        (default ``5``).
+    ``max_width``
+        Value inserted into the surrounding ``adjustbox`` environment to cap
+        the table width (default ``\textwidth``).
     ``caption`` / ``label``
         Metadata for the LaTeX table environment.
     ``save_path``
@@ -661,18 +683,51 @@ def build_regression_latex(
                     if cluster_name not in cluster_display_lookup:
                         cluster_display_lookup[cluster_name] = display
     show_dependent = options.get("show_dependent", True)
+    include_model_numbers = bool(options.get("include_model_numbers", True))
+    show_model_labels = bool(options.get("show_model_labels", False))
+    notes_text = options.get(
+        "notes",
+        r"$^{*}$p$<0.1$; $^{**}$p$<0.05$; $^{***}$p$<0.01",
+    )
+    max_width = options.get("max_width", r"\textwidth")
+    column_spacing = options.get("column_spacing", 5)
+    column_spec = f"@{{\\extracolsep{{{column_spacing}pt}}}}l" + "c" * len(models)
     row_end = " " + "\\\\"
-    lines = [r"\begin{table}[!htbp]", r"\centering", r"\begin{tabular}{l" + "c" * len(models) + "}", r"\toprule"]
-    header = " & " + " & ".join(model["label"] for model in models) + row_end
-    lines.append(header)
+    lines = [
+        r"\begin{table}[!htbp] \centering",
+        rf"\begin{adjustbox}{{max width={max_width}}}",
+        rf"\begin{tabular}{{{column_spec}}}",
+        r"\\[-1.8ex]\hline \hline \\[-1.8ex]",
+    ]
     if show_dependent:
-        dep_row = ["Dependent variable"] + [model["dependent"] for model in models]
-        lines.append(" & ".join(dep_row) + row_end)
-        lines.append(r"\midrule")
+        dependent_labels = {model["dependent"] for model in models}
+        if len(dependent_labels) == 1:
+            dep_label_text = next(iter(dependent_labels))
+        else:
+            dep_label_text = ", ".join(sorted(dependent_labels))
+        lines.append(
+            "& "
+            + rf"\multicolumn{{{len(models)}}}{{c}}{{\textit{{Dependent variable: {dep_label_text}}}}}"
+            + row_end
+        )
+        lines.append(r"\cline{2-" + str(len(models) + 1) + "}")
+    if include_model_numbers:
+        number_row = [f"({idx})" for idx in range(1, len(models) + 1)]
+        lines.append(r"\\[-1.8ex] & " + " & ".join(number_row) + row_end)
+    if show_model_labels:
+        label_cells = ["", *[model["label"] for model in models]]
+        if include_model_numbers:
+            lines.append(" & ".join(label_cells) + row_end)
+        else:
+            lines.append(r"\\[-1.8ex] " + " & ".join(label_cells) + row_end)
+    lines.append(r"\hline \\[-1.8ex]")
     for row in row_order:
         if not include_intercept and row == "Intercept":
             continue
-        row_entries = [row]
+        display_row = rename_map.get(row, row)
+        row_entries = [f" {display_row}"]
+        se_entries = ["  "]
+        show_se_row = False
         for model in models:
             res = model["result"]
             coef_series = res["coef"]
@@ -687,24 +742,31 @@ def build_regression_latex(
                 pvals = pd.Series(pvals, index=res.get("display_varnames"))
             key = lookup.get(row, row)
             if key in coef_series.index:
-                formatted = _format_coefficient(
-                    float(coef_series[key]),
-                    float(se_series[key]) if key in se_series.index else None,
-                    float(pvals[key]) if key in pvals.index else None,
+                coef_val = float(coef_series[key])
+                se_val = float(se_series[key]) if key in se_series.index else None
+                p_val = float(pvals[key]) if key in pvals.index else None
+                coef_text, se_text = _format_coefficient(
+                    coef_val,
+                    se_val,
+                    p_val,
                     float_fmt=float_fmt,
                 )
             else:
-                formatted = "-"
-            row_entries.append(formatted)
+                coef_text, se_text = "-", ""
+            row_entries.append(coef_text)
+            se_entries.append(se_text)
+            show_se_row = show_se_row or bool(se_text)
         lines.append(" & ".join(row_entries) + row_end)
+        if show_se_row:
+            lines.append(" & ".join(se_entries) + row_end)
     if include_stats or include_controls_row or include_fe_rows or include_cluster_row:
-        lines.append(r"\midrule")
+        lines.append(r"\hline \\[-1.8ex]")
     if include_stats:
         def _fmt_stat(val: Any) -> str:
             return float_fmt.format(val) if pd.notnull(val) else "-"
-        obs_row = ["Observations"]
-        r2_row = ["R-squared"]
-        adj_row = ["Adj. R-squared"]
+        obs_row = [" Observations"]
+        r2_row = [" $R^2$"]
+        adj_row = [" Adjusted $R^2$"]
         for model in models:
             res = model["result"]
             n_val = res.get("n", np.nan)
@@ -717,7 +779,7 @@ def build_regression_latex(
         if include_adj_r2:
             lines.append(" & ".join(adj_row) + row_end)
     if include_controls_row:
-        ctrl_row = ["Controls"]
+        ctrl_row = [" Controls"]
         for model in models:
             meta = model["result"].get("metadata", {})
             has_controls = bool(meta.get("controls_included"))
@@ -725,7 +787,7 @@ def build_regression_latex(
         lines.append(" & ".join(ctrl_row) + row_end)
     if include_fe_rows and fe_display_lookup:
         for fe_name, fe_display in fe_display_lookup.items():
-            row = [fe_display]
+            row = [f" {fe_display}"]
             for model in models:
                 meta = model["result"].get("metadata", {})
                 fe_meta = meta.get("fixed_effects", {})
@@ -736,15 +798,23 @@ def build_regression_latex(
             lines.append(" & ".join(row) + row_end)
     if include_cluster_row and cluster_display_lookup:
         for cluster_name, cluster_display in cluster_display_lookup.items():
-            row = [cluster_display]
+            row = [f" {cluster_display}"]
             for model in models:
                 meta = model["result"].get("metadata", {})
                 fe_meta = meta.get("fixed_effects", {})
                 clusters = set(_ensure_list(fe_meta.get("cluster")))
                 row.append(r"\checkmark" if cluster_name in clusters else "-")
             lines.append(" & ".join(row) + row_end)
-    lines.append(r"\bottomrule")
+    lines.append(r"\hline \hline \\[-1.8ex]")
+    if notes_text:
+        note_row = (
+            r"\textit{Note:} & "
+            + rf"\multicolumn{{{len(models)}}}{{r}}{{{notes_text}}}"
+            + row_end
+        )
+        lines.append(note_row)
     lines.append(r"\end{tabular}")
+    lines.append(r"\end{adjustbox}")
     lines.append(rf"\caption{{{caption}}}")
     lines.append(rf"\label{{{label}}}")
     lines.append(r"\end{table}")
