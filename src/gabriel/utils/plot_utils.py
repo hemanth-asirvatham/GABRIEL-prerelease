@@ -17,9 +17,12 @@ and additional features.  For Python 3.12 and SciPy 1.16+, use
 
 from __future__ import annotations
 
+import random
+import re
 import textwrap
 from collections import OrderedDict
 from itertools import combinations
+from pathlib import Path
 from typing import Iterable, Dict, Any, Optional, List, Tuple, Sequence, Union, Callable
 
 import numpy as np
@@ -1494,9 +1497,9 @@ def bar_plot(
     value_column: Optional[str] = None,
     value_agg: Union[str, Callable[[pd.Series], float]] = "mean",
     category_order: Optional[Iterable[str]] = None,
-    title: str = "Classification of Conversations",
-    x_label: str = "Classification",
-    y_label: str = "Number of Conversations",
+    title: str = "Bar Chart",
+    x_label: str = "Category",
+    y_label: str = "Value",
     as_percent: bool = False,
     cmap: str = "Reds",
     gradient_start: float = 0.3,
@@ -1515,6 +1518,7 @@ def bar_plot(
     precision: int = 3,
     value_axis_limits: Optional[Tuple[Optional[float], Optional[float]]] = None,
     orientation: str = "vertical",
+    series_labels: Optional[Iterable[str]] = None,
     auto_size: bool = True,
     size_per_category: float = 1.2,
     min_category_axis: float = 6.0,
@@ -1523,6 +1527,11 @@ def bar_plot(
     title_wrap_per_inch: float = 6.0,
     error_bars: Optional[Union[Iterable[float], Dict[str, Iterable[float]], str]] = None,
     error_bar_capsize: float = 4.0,
+    max_bars_per_plot: Optional[int] = 12,
+    sort_mode: Optional[str] = "descending",
+    save_path: Optional[Union[str, Path]] = None,
+    vertical_bar_width: float = 0.8,
+    horizontal_bar_height: float = 0.6,
     excess_year_col: Optional[str] = None,
     excess_window: Optional[int] = None,
     excess_mode: str = "difference",
@@ -1535,10 +1544,12 @@ def bar_plot(
     Parameters
     ----------
     categories, values : optional
-        Pre-computed category labels and bar values.  Provide these when the
-        data are already aggregated.  When omitted, ``data``/``category_column``
-        and ``value_column`` must be supplied so the function can aggregate the
-        bars automatically.
+        Pre-computed category labels and bar values.  ``values`` may be a
+        one-dimensional iterable for single-series plots or a sequence of
+        iterables (one per category) for grouped bars.  When omitted,
+        ``data``/``category_column`` and ``value_column`` must be supplied so
+        the function can aggregate the bars automatically.  ``value_column``
+        may likewise be a string or a sequence of strings for grouped bars.
     data : DataFrame, optional
         Raw data used to compute bar heights.  Requires ``category_column`` and
         ``value_column``.  When supplied, the ``value_column`` is aggregated by
@@ -1555,10 +1566,31 @@ def bar_plot(
     orientation : {"vertical", "horizontal"}, default "vertical"
         Direction of the bars.  Horizontal bars flip the axes and swap the role
         of ``x_label``/``y_label``.
+    series_labels : iterable of str, optional
+        Labels used in the legend when plotting grouped/multi-value bars.  When
+        omitted the column names (data) or ``Series i`` placeholders (values)
+        are used.
     auto_size : bool, default True
         Automatically scale the figure size along the categorical axis based on
         the number of bars.  ``size_per_category`` controls the growth rate and
         ``min_category_axis``/``max_category_axis`` bound the result.
+    max_bars_per_plot : int, optional
+        Maximum number of categories to display per figure.  Additional
+        categories are wrapped into subsequent plots.  When ``orientation`` is
+        ``"horizontal"`` the limit is doubled to account for the additional
+        vertical space.  Set to ``None`` or ``<= 0`` to disable batching.
+    sort_mode : {"descending", "ascending", "none", "random"}, optional
+        Determines the automatic ordering of categories when ``category_order``
+        is not provided.  Defaults to descending order of the aggregated bar
+        totals.  Pass ``"none"`` to preserve the existing order or ``"random"``
+        for a shuffled arrangement.
+    save_path : path-like, optional
+        Directory where generated figures should be saved.  When omitted, plots
+        are only displayed.  Files are named using the title plus a numerical
+        suffix when multiple panels are created.
+    vertical_bar_width, horizontal_bar_height : float, default (0.8, 0.6)
+        Width/height of each bar group for the respective orientations.  For
+        grouped bars the value is split evenly across the series.
     title_wrap, title_wrap_per_inch : optional
         Control the wrapping applied to the title.  When ``title_wrap`` is
         ``None`` the width is derived from the figure width using
@@ -1584,17 +1616,22 @@ def bar_plot(
         raise ValueError("orientation must be 'vertical' or 'horizontal'.")
 
     using_dataframe = data is not None or category_column is not None or value_column is not None
+    resolved_series_labels: Optional[List[str]] = list(series_labels) if series_labels is not None else None
+
     if using_dataframe:
         if data is None or category_column is None or value_column is None:
             raise ValueError(
                 "When supplying raw data you must also provide category_column and value_column."
             )
+        value_columns = _ensure_list(value_column)
+        if not value_columns:
+            raise ValueError("value_column must be provided when using data.")
         working_df = data.copy()
         replacements: Dict[str, str] = {}
         if excess_year_col is not None:
             columns = _ensure_list(excess_columns)
             if not columns:
-                columns = [value_column]
+                columns = value_columns
             if excess_window is None or int(excess_window) <= 0:
                 raise ValueError(
                     "excess_window must be a positive integer when excess_year_col is provided."
@@ -1608,19 +1645,23 @@ def bar_plot(
                 replace=bool(excess_replace),
                 prefix=excess_prefix,
             )
-        actual_value_col = replacements.get(value_column, value_column)
-        working_df = working_df[[category_column, actual_value_col]].copy()
-        working_df[actual_value_col] = pd.to_numeric(working_df[actual_value_col], errors="coerce")
-        working_df = working_df.dropna(subset=[category_column, actual_value_col])
-        grouped = working_df.groupby(category_column, observed=True)[actual_value_col]
+        resolved_columns = [replacements.get(col, col) for col in value_columns]
+        keep_columns = [category_column, *resolved_columns]
+        working_df = working_df[keep_columns].copy()
+        for col in resolved_columns:
+            working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
+        working_df = working_df.dropna(subset=[category_column] + resolved_columns, how="any")
+        grouped = working_df.groupby(category_column, observed=True)[resolved_columns]
         try:
-            summary_series = grouped.aggregate(value_agg)
+            aggregated = grouped.aggregate(value_agg)
         except TypeError as exc:
             raise TypeError("Failed to aggregate value_column with the provided value_agg.") from exc
-        summary_series = summary_series.dropna()
-        aggregated_map: "OrderedDict[str, float]" = OrderedDict()
-        for key, val in summary_series.items():
-            aggregated_map[str(key)] = float(val)
+        if isinstance(aggregated, pd.Series):
+            aggregated = aggregated.to_frame(name=resolved_columns[0])
+        aggregated = aggregated.dropna(how="all")
+        aggregated_map: "OrderedDict[str, List[float]]" = OrderedDict()
+        for key, row in aggregated.iterrows():
+            aggregated_map[str(key)] = [float(row[col]) for col in aggregated.columns]
         if not aggregated_map:
             raise ValueError("Aggregation produced no bars to plot.")
         if category_order is not None and categories is not None:
@@ -1632,15 +1673,15 @@ def bar_plot(
         else:
             desired_order = list(aggregated_map.keys())
         category_keys: List[str] = []
-        bar_values: List[float] = []
+        bar_matrix: List[List[float]] = []
         for cat in desired_order:
             if cat not in aggregated_map:
                 raise KeyError(f"Category '{cat}' not present in aggregated data.")
             category_keys.append(cat)
-            bar_values.append(aggregated_map[cat])
+            bar_matrix.append(aggregated_map[cat])
 
         def _compute_error_from_string(kind: str) -> List[float]:
-            mode = kind.strip().lower()
+            mode = (kind or "").strip().lower()
             if mode == "std":
                 series = grouped.std(ddof=1)
             elif mode == "sem":
@@ -1659,41 +1700,70 @@ def bar_plot(
                 raise ValueError(
                     "String error_bars must be one of 'std', 'sem', 'ci90', 'ci95', or 'ci99'."
                 )
+            reference_column = aggregated.columns[0]
+            if isinstance(series, pd.DataFrame):
+                series = series[reference_column]
             result_map = {str(idx): float(val) if pd.notna(val) else float("nan") for idx, val in series.items()}
             return [abs(result_map.get(cat, float("nan"))) for cat in category_keys]
 
         error_array: Optional[np.ndarray]
         if error_bars is None:
             error_array = None
-        elif isinstance(error_bars, str):
-            error_array = np.asarray(_compute_error_from_string(error_bars), dtype=float)
-        elif isinstance(error_bars, dict):
-            lower = list(error_bars.get("lower", []))
-            upper = list(error_bars.get("upper", []))
-            if len(lower) != len(category_keys) or len(upper) != len(category_keys):
-                raise ValueError("Asymmetric error bars must provide 'lower' and 'upper' lists matching the bar count.")
-            error_array = np.vstack([
-                np.abs(np.asarray(lower, dtype=float)),
-                np.abs(np.asarray(upper, dtype=float)),
-            ])
         else:
-            array = np.asarray(list(error_bars), dtype=float)
-            if array.shape[0] != len(category_keys):
-                raise ValueError("error_bars iterable length must match the number of categories.")
-            error_array = np.abs(array)
+            if len(aggregated.columns) > 1:
+                raise ValueError("error_bars are currently only supported for single-series bar plots.")
+            if isinstance(error_bars, str):
+                error_array = np.asarray(_compute_error_from_string(error_bars), dtype=float)
+            elif isinstance(error_bars, dict):
+                lower = list(error_bars.get("lower", []))
+                upper = list(error_bars.get("upper", []))
+                if len(lower) != len(category_keys) or len(upper) != len(category_keys):
+                    raise ValueError(
+                        "Asymmetric error bars must provide 'lower' and 'upper' lists matching the bar count."
+                    )
+                error_array = np.vstack([
+                    np.abs(np.asarray(lower, dtype=float)),
+                    np.abs(np.asarray(upper, dtype=float)),
+                ])
+            else:
+                array = np.asarray(list(error_bars), dtype=float)
+                if array.shape[0] != len(category_keys):
+                    raise ValueError("error_bars iterable length must match the number of categories.")
+                error_array = np.abs(array)
+        if resolved_series_labels is None:
+            resolved_series_labels = list(aggregated.columns)
     else:
         if categories is None or values is None:
             raise ValueError("categories and values must be provided when data is not supplied.")
         category_keys = [str(cat) for cat in categories]
-        bar_values = [float(val) for val in values]
-        if len(category_keys) != len(bar_values):
+        raw_values = list(values)
+        if len(category_keys) != len(raw_values):
             raise ValueError("categories and values must be the same length.")
-        if not bar_values:
+        if not raw_values:
             raise ValueError("No bars to plot.")
+        bar_matrix = []
+        for val in raw_values:
+            if isinstance(val, Sequence) and not isinstance(val, (str, bytes)):
+                bar_matrix.append([float(v) for v in val])
+            else:
+                bar_matrix.append([float(val)])
+        n_series = len(bar_matrix[0]) if bar_matrix else 0
+        for row in bar_matrix:
+            if len(row) != n_series:
+                raise ValueError("Each category must provide the same number of series values.")
+        if category_order is not None:
+            desired = [str(cat) for cat in category_order]
+            missing = [cat for cat in desired if cat not in category_keys]
+            if missing:
+                raise KeyError(f"Categories {missing} not present in provided data.")
+            index_map = {cat: idx for idx, cat in enumerate(category_keys)}
+            ordered_indices = [index_map[cat] for cat in desired]
+            category_keys = [category_keys[idx] for idx in ordered_indices]
+            bar_matrix = [bar_matrix[idx] for idx in ordered_indices]
         if isinstance(error_bars, dict):
             lower = list(error_bars.get("lower", []))
             upper = list(error_bars.get("upper", []))
-            if len(lower) != len(bar_values) or len(upper) != len(bar_values):
+            if len(lower) != len(bar_matrix) or len(upper) != len(bar_matrix):
                 raise ValueError("Asymmetric error bars must match the number of bars.")
             error_array = np.vstack([
                 np.abs(np.asarray(lower, dtype=float)),
@@ -1703,11 +1773,49 @@ def bar_plot(
             error_array = None
         else:
             array = np.asarray(list(error_bars), dtype=float)
-            if array.shape[0] != len(bar_values):
+            if array.shape[0] != len(bar_matrix):
                 raise ValueError("error_bars iterable length must match the number of bars.")
             error_array = np.abs(array)
+        if resolved_series_labels is None and n_series > 1:
+            resolved_series_labels = [f"Series {idx + 1}" for idx in range(n_series)]
 
     display_categories = ["other" if key.strip().lower() == "none" else key for key in category_keys]
+
+    bar_array = np.asarray(bar_matrix, dtype=float)
+    if bar_array.size == 0:
+        raise ValueError("No bars to plot.")
+    if bar_array.ndim == 1:
+        bar_array = bar_array[:, np.newaxis]
+    n_categories, n_series = bar_array.shape
+    if error_array is not None and n_series > 1:
+        raise ValueError("error_bars are only supported for single-series bar plots.")
+    if resolved_series_labels is None and n_series == 1:
+        resolved_series_labels = []
+    elif resolved_series_labels is None:
+        resolved_series_labels = [f"Series {idx + 1}" for idx in range(n_series)]
+    elif len(resolved_series_labels) != n_series:
+        raise ValueError("Number of series_labels must match the number of value series.")
+
+    if category_order is None and sort_mode:
+        mode = sort_mode.strip().lower() if isinstance(sort_mode, str) else ""
+        indices = list(range(n_categories))
+        if mode in {"descending", "ascending"}:
+            totals = bar_array.sum(axis=1)
+            reverse = mode == "descending"
+            indices.sort(key=lambda idx: totals[idx], reverse=reverse)
+        elif mode == "random":
+            random.shuffle(indices)
+        elif mode in {"none", ""}:
+            indices = list(range(n_categories))
+        else:
+            raise ValueError("sort_mode must be 'descending', 'ascending', 'none', or 'random'.")
+        bar_array = bar_array[indices]
+        display_categories = [display_categories[idx] for idx in indices]
+        if error_array is not None:
+            if error_array.ndim == 1:
+                error_array = np.asarray(error_array)[indices]
+            else:
+                error_array = np.asarray(error_array)[:, indices]
 
     def fmt(val: float) -> str:
         if as_percent:
@@ -1725,113 +1833,209 @@ def bar_plot(
         base_width, base_height = (16.0, 7.0)
     else:
         base_width, base_height = figsize
-    n_bars = max(len(bar_values), 1)
-    if auto_size:
-        axis_span = min(max_category_axis, max(min_category_axis, size_per_category * n_bars))
-        if orientation == "vertical":
-            fig_width, fig_height = axis_span, base_height
-        else:
-            fig_width, fig_height = base_width, axis_span
-    else:
-        fig_width, fig_height = base_width, base_height
-
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=dpi)
-    ax.set_facecolor(background_color)
-    fig.patch.set_facecolor(background_color)
-
-    wrap_labels = []
     if wrap_width and wrap_width > 0:
         wrap_labels = [textwrap.fill(label, width=wrap_width) for label in display_categories]
     else:
         wrap_labels = display_categories
 
-    colours = plt.cm.get_cmap(cmap)(np.linspace(gradient_start, gradient_end, len(bar_values)))
-
-    bar_container: mpl.container.BarContainer
-    if orientation == "vertical":
-        bar_container = ax.bar(
-            wrap_labels,
-            bar_values,
-            color=colours,
-            edgecolor="black",
-            yerr=error_array if error_array is not None else None,
-            capsize=error_bar_capsize if error_array is not None else None,
-        )
+    if max_bars_per_plot is None or int(max_bars_per_plot) <= 0:
+        effective_limit = n_categories
     else:
-        bar_container = ax.barh(
-            wrap_labels,
-            bar_values,
-            color=colours,
-            edgecolor="black",
-            xerr=error_array if error_array is not None else None,
-            capsize=error_bar_capsize if error_array is not None else None,
-        )
+        base_limit = max(int(max_bars_per_plot), 1)
+        effective_limit = base_limit * (2 if orientation == "horizontal" else 1)
+        effective_limit = max(effective_limit, 1)
+    total_chunks = (n_categories + effective_limit - 1) // effective_limit
 
-    for bar, val in zip(bar_container, bar_values):
+    output_dir: Optional[Path]
+    if save_path is None:
+        output_dir = None
+    else:
+        output_dir = Path(save_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        safe_title = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_") or "bar_plot"
+
+    figures: List[Tuple[plt.Figure, plt.Axes]] = []
+
+    for chunk_idx, start in enumerate(range(0, n_categories, effective_limit)):
+        end = min(start + effective_limit, n_categories)
+        chunk_values = bar_array[start:end]
+        chunk_labels = wrap_labels[start:end]
+        if error_array is None:
+            chunk_error = None
+        else:
+            if error_array.ndim == 1:
+                chunk_error = error_array[start:end]
+            else:
+                chunk_error = error_array[:, start:end]
+
+        chunk_count = chunk_values.shape[0]
+        if auto_size:
+            axis_span = min(max_category_axis, max(min_category_axis, size_per_category * chunk_count))
+            if orientation == "vertical":
+                fig_width, fig_height = axis_span, base_height
+            else:
+                fig_width, fig_height = base_width, axis_span
+        else:
+            fig_width, fig_height = base_width, base_height
+
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=dpi)
+        ax.set_facecolor(background_color)
+        fig.patch.set_facecolor(background_color)
+
+        indices = np.arange(chunk_count, dtype=float)
+        bar_containers: List[mpl.container.BarContainer] = []
+        if n_series == 1:
+            colours = plt.cm.get_cmap(cmap)(np.linspace(gradient_start, gradient_end, chunk_count))
+            values_slice = chunk_values[:, 0]
+            if orientation == "vertical":
+                container = ax.bar(
+                    indices,
+                    values_slice,
+                    width=vertical_bar_width,
+                    color=colours,
+                    edgecolor="black",
+                    yerr=chunk_error if chunk_error is not None else None,
+                    capsize=error_bar_capsize if chunk_error is not None else None,
+                )
+                bar_containers.append(container)
+            else:
+                container = ax.barh(
+                    indices,
+                    values_slice,
+                    height=horizontal_bar_height,
+                    color=colours,
+                    edgecolor="black",
+                    xerr=chunk_error if chunk_error is not None else None,
+                    capsize=error_bar_capsize if chunk_error is not None else None,
+                )
+                bar_containers.append(container)
+        else:
+            cmap_obj = plt.cm.get_cmap(cmap)
+            series_colours = cmap_obj(np.linspace(gradient_start, gradient_end, n_series))
+            if orientation == "vertical":
+                group_width = vertical_bar_width
+                bar_width = group_width / n_series
+                offsets = (np.arange(n_series) - (n_series - 1) / 2.0) * bar_width
+                for series_idx in range(n_series):
+                    container = ax.bar(
+                        indices + offsets[series_idx],
+                        chunk_values[:, series_idx],
+                        width=bar_width,
+                        color=series_colours[series_idx],
+                        edgecolor="black",
+                        label=resolved_series_labels[series_idx] if resolved_series_labels else None,
+                    )
+                    bar_containers.append(container)
+            else:
+                group_height = horizontal_bar_height
+                bar_height = group_height / n_series
+                offsets = (np.arange(n_series) - (n_series - 1) / 2.0) * bar_height
+                for series_idx in range(n_series):
+                    container = ax.barh(
+                        indices + offsets[series_idx],
+                        chunk_values[:, series_idx],
+                        height=bar_height,
+                        color=series_colours[series_idx],
+                        edgecolor="black",
+                        label=resolved_series_labels[series_idx] if resolved_series_labels else None,
+                    )
+                    bar_containers.append(container)
+
+        for series_idx, container in enumerate(bar_containers):
+            series_col = series_idx if n_series > 1 else 0
+            for bar, value in zip(container, chunk_values[:, series_col]):
+                if orientation == "vertical":
+                    height = bar.get_height()
+                    offset = 3 if height >= 0 else -3
+                    ax.annotate(
+                        fmt(value),
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, offset),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom" if height >= 0 else "top",
+                        fontsize=annotation_font_size,
+                        fontweight=annotation_fontweight,
+                    )
+                else:
+                    width_val = bar.get_width()
+                    offset = 3 if width_val >= 0 else -3
+                    ax.annotate(
+                        fmt(value),
+                        xy=(width_val, bar.get_y() + bar.get_height() / 2),
+                        xytext=(offset, 0),
+                        textcoords="offset points",
+                        ha="left" if width_val >= 0 else "right",
+                        va="center",
+                        fontsize=annotation_font_size,
+                        fontweight=annotation_fontweight,
+                    )
+
         if orientation == "vertical":
-            height = bar.get_height()
-            offset = 3 if height >= 0 else -3
-            ax.annotate(
-                fmt(val),
-                xy=(bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, offset),
-                textcoords="offset points",
-                ha="center",
-                va="bottom" if height >= 0 else "top",
-                fontsize=annotation_font_size,
-                fontweight=annotation_fontweight,
-            )
+            ax.set_xticks(indices)
+            ax.set_xticklabels(chunk_labels, rotation=45 if rotate_xlabels else 0, ha="right" if rotate_xlabels else "center")
+            ax.set_xlabel(x_label, fontsize=label_font_size, fontweight="bold")
+            ax.set_ylabel(y_label, fontsize=label_font_size, fontweight="bold")
+            ax.tick_params(axis="x", labelsize=x_label_font_size)
+            if value_axis_limits is not None:
+                lower, upper = value_axis_limits
+                current_lower, current_upper = ax.get_ylim()
+                ax.set_ylim(
+                    current_lower if lower is None else lower,
+                    current_upper if upper is None else upper,
+                )
         else:
-            width = bar.get_width()
-            offset = 3 if width >= 0 else -3
-            ax.annotate(
-                fmt(val),
-                xy=(width, bar.get_y() + bar.get_height() / 2),
-                xytext=(offset, 0),
-                textcoords="offset points",
-                ha="left" if width >= 0 else "right",
-                va="center",
-                fontsize=annotation_font_size,
-                fontweight=annotation_fontweight,
-            )
+            ax.set_yticks(indices)
+            ax.set_yticklabels(chunk_labels)
+            ax.set_ylabel(x_label, fontsize=label_font_size, fontweight="bold")
+            ax.set_xlabel(y_label, fontsize=label_font_size, fontweight="bold")
+            ax.tick_params(axis="y", labelsize=x_label_font_size)
+            if value_axis_limits is not None:
+                lower, upper = value_axis_limits
+                current_lower, current_upper = ax.get_xlim()
+                ax.set_xlim(
+                    current_lower if lower is None else lower,
+                    current_upper if upper is None else upper,
+                )
+            if chunk_count > 0:
+                group_span = horizontal_bar_height
+                pad = group_span / 2.0
+                lower_bound = indices[0] - pad
+                upper_bound = indices[-1] + pad
+                ax.set_ylim(lower_bound, upper_bound)
+            ax.margins(y=0)
 
-    if title_wrap is None:
-        computed_wrap = int(round(fig.get_figwidth() * max(title_wrap_per_inch, 0)))
-        title_width = max(computed_wrap, 1)
-    else:
-        title_width = max(int(title_wrap), 1)
-    title_text = textwrap.fill(title, width=title_width) if title_width > 0 else title
-    ax.set_title(title_text, fontsize=title_font_size, fontweight="bold")
+        if resolved_series_labels:
+            handles = []
+            labels = []
+            for container, label in zip(bar_containers, resolved_series_labels):
+                if label is None:
+                    continue
+                handles.append(container.patches[0] if container.patches else container)
+                labels.append(label)
+            if handles:
+                ax.legend(handles, labels, frameon=False)
 
-    if orientation == "vertical":
-        ax.set_xlabel(x_label, fontsize=label_font_size, fontweight="bold")
-        ax.set_ylabel(y_label, fontsize=label_font_size, fontweight="bold")
-        if rotate_xlabels:
-            plt.xticks(rotation=45, ha="right")
+        if title_wrap is None:
+            computed_wrap = int(round(fig.get_figwidth() * max(title_wrap_per_inch, 0)))
+            title_width = max(computed_wrap, 1)
         else:
-            plt.xticks(rotation=0, ha="center")
-        ax.tick_params(axis="x", labelsize=x_label_font_size)
-        if value_axis_limits is not None:
-            lower, upper = value_axis_limits
-            current_lower, current_upper = ax.get_ylim()
-            ax.set_ylim(
-                current_lower if lower is None else lower,
-                current_upper if upper is None else upper,
-            )
-    else:
-        ax.set_ylabel(x_label, fontsize=label_font_size, fontweight="bold")
-        ax.set_xlabel(y_label, fontsize=label_font_size, fontweight="bold")
-        ax.tick_params(axis="y", labelsize=x_label_font_size)
-        if value_axis_limits is not None:
-            lower, upper = value_axis_limits
-            current_lower, current_upper = ax.get_xlim()
-            ax.set_xlim(
-                current_lower if lower is None else lower,
-                current_upper if upper is None else upper,
-            )
+            title_width = max(int(title_wrap), 1)
+        title_text = textwrap.fill(title, width=title_width) if title_width > 0 else title
+        if total_chunks > 1:
+            title_text = f"{title_text} (Part {chunk_idx + 1}/{total_chunks})"
+        ax.set_title(title_text, fontsize=title_font_size, fontweight="bold")
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        figures.append((fig, ax))
+
+        if output_dir is not None:
+            suffix = f"_{chunk_idx + 1:02d}" if total_chunks > 1 else ""
+            file_name = f"{safe_title or 'bar_plot'}{suffix}.png"
+            fig.savefig(output_dir / file_name, bbox_inches="tight")
+
+    if figures:
+        plt.show()
 
 
 def box_plot(
