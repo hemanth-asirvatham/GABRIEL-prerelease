@@ -17,6 +17,7 @@ and additional features.  For Python 3.12 and SciPy 1.16+, use
 
 from __future__ import annotations
 
+import math
 import random
 import re
 import textwrap
@@ -1513,7 +1514,7 @@ def bar_plot(
     wrap_width: Optional[int] = 16,
     wrap_auto_scale: bool = True,
     wrap_scale_reference: Optional[float] = 6.0,
-    wrap_scale_limits: Tuple[float, float] = (0.4, 3.0),
+    wrap_scale_limits: Tuple[float, float] = (0.25, 3.0),
     rotate_xlabels: bool = False,
     x_label_font_size: int = 12,
     annotation_font_size: int = 10,
@@ -1536,9 +1537,9 @@ def bar_plot(
     max_bars_per_plot: Optional[int] = 12,
     sort_mode: Optional[str] = "descending",
     save_path: Optional[Union[str, Path]] = None,
-    vertical_bar_width: float = 0.8,
-    horizontal_bar_height: float = 0.5,
-    category_axis_padding: float = 0.08,
+    vertical_bar_width: float = 0.92,
+    horizontal_bar_height: float = 0.7,
+    category_axis_padding: float = 0.05,
     excess_year_col: Optional[str] = None,
     excess_window: Optional[int] = None,
     excess_mode: str = "difference",
@@ -1600,7 +1601,7 @@ def bar_plot(
     wrap_scale_reference, wrap_scale_limits : optional
         Control the reference bar count and minimum/maximum scaling factor for
         automatic label wrapping.  ``wrap_scale_reference`` defaults to ``6``
-        bars and ``wrap_scale_limits`` to ``(0.4, 3.0)``; ``None`` for the
+        bars and ``wrap_scale_limits`` to ``(0.25, 3.0)``; ``None`` for the
         reference falls back to the per-plot bar limit.
     title_wrap_auto_scale : bool, default True
         Apply the same scaling logic as ``wrap_auto_scale`` to the title when
@@ -1610,7 +1611,7 @@ def bar_plot(
         ``title_wrap_auto_scale``.  The defaults are ``8`` bars and ``(0.5, 1.5)``
         for a gentler adjustment; ``None`` again falls back to the effective
         per-plot limit.
-    category_axis_padding : float, default 0.08
+    category_axis_padding : float, default 0.05
         Extra whitespace (as a fraction of the bar height/width) retained at the
         start and end of the categorical axis.  ``0`` removes the padding while
         larger values add more breathing room.
@@ -1623,7 +1624,7 @@ def bar_plot(
         Directory where generated figures should be saved.  When omitted, plots
         are only displayed.  Files are named using the title plus a numerical
         suffix when multiple panels are created.
-    vertical_bar_width, horizontal_bar_height : float, default (0.8, 0.5)
+    vertical_bar_width, horizontal_bar_height : float, default (0.92, 0.7)
         Width/height of each bar group for the respective orientations.  For
         grouped bars the value is split evenly across the series.
     title_wrap, title_wrap_per_inch : optional
@@ -1938,6 +1939,21 @@ def bar_plot(
             base_wrap_width = wrap_width if wrap_width and wrap_width > 0 else 16
             if wrap_auto_scale and orientation == "vertical":
                 wrap_scale = _wrap_scale(chunk_count, wrap_scale_reference, wrap_scale_limits)
+                reference_val = wrap_scale_reference if wrap_scale_reference and wrap_scale_reference > 0 else effective_limit
+                if reference_val and reference_val > 0:
+                    crowding = chunk_count / float(reference_val)
+                    if crowding > 1:
+                        wrap_scale /= math.sqrt(crowding)
+                longest_label = max((len(label) for label in raw_labels), default=0)
+                if base_wrap_width > 0 and longest_label > 0:
+                    length_ratio = longest_label / float(base_wrap_width)
+                    if length_ratio > 1:
+                        wrap_scale /= math.sqrt(length_ratio)
+                lower_limit = max(wrap_scale_limits[0], 0.0)
+                upper_limit = wrap_scale_limits[1] if wrap_scale_limits[1] > 0 else max(lower_limit, 1.0)
+                if upper_limit < lower_limit:
+                    lower_limit, upper_limit = upper_limit, lower_limit
+                wrap_scale = max(lower_limit, min(upper_limit, wrap_scale))
             else:
                 wrap_scale = 1.0
             effective_wrap_width = max(int(round(base_wrap_width * wrap_scale)), 1)
@@ -2056,7 +2072,9 @@ def bar_plot(
             ax.set_ylabel(y_label, fontsize=label_font_size, fontweight="bold")
             ax.tick_params(axis="x", labelsize=x_label_font_size)
             if chunk_count > 0 and axis_padding:
-                ax.margins(x=axis_padding * 0.75)
+                ax.margins(x=axis_padding * 0.5)
+            for tick_label in ax.get_xticklabels():
+                tick_label.set_multialignment("center")
             if value_axis_limits is not None:
                 lower, upper = value_axis_limits
                 current_lower, current_upper = ax.get_ylim()
@@ -2080,7 +2098,7 @@ def bar_plot(
             if chunk_count > 0:
                 group_span = horizontal_bar_height
                 pad = group_span / 2.0
-                extra = group_span * (axis_padding + 0.15)
+                extra = group_span * (axis_padding + 0.08)
                 lower_bound = indices[0] - pad - extra
                 upper_bound = indices[-1] + pad + extra
                 ax.set_ylim(lower_bound, upper_bound)
