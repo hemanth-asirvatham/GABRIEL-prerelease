@@ -1537,7 +1537,7 @@ def bar_plot(
     sort_mode: Optional[str] = "descending",
     save_path: Optional[Union[str, Path]] = None,
     vertical_bar_width: float = 0.8,
-    horizontal_bar_height: float = 0.6,
+    horizontal_bar_height: float = 0.5,
     category_axis_padding: float = 0.08,
     excess_year_col: Optional[str] = None,
     excess_window: Optional[int] = None,
@@ -1594,7 +1594,9 @@ def bar_plot(
         When ``True`` the category labels are wrapped more aggressively as the
         number of bars increases and relaxed when there are only a few.  The
         ``wrap_width`` parameter acts as the base width and the optional
-        ``wrap_scale_reference``/``wrap_scale_limits`` tweak the scaling.
+        ``wrap_scale_reference``/``wrap_scale_limits`` tweak the scaling.  The
+        automatic scaling only applies to vertical plots where long labels risk
+        colliding.
     wrap_scale_reference, wrap_scale_limits : optional
         Control the reference bar count and minimum/maximum scaling factor for
         automatic label wrapping.  ``wrap_scale_reference`` defaults to ``6``
@@ -1621,7 +1623,7 @@ def bar_plot(
         Directory where generated figures should be saved.  When omitted, plots
         are only displayed.  Files are named using the title plus a numerical
         suffix when multiple panels are created.
-    vertical_bar_width, horizontal_bar_height : float, default (0.8, 0.6)
+    vertical_bar_width, horizontal_bar_height : float, default (0.8, 0.5)
         Width/height of each bar group for the respective orientations.  For
         grouped bars the value is split evenly across the series.
     title_wrap, title_wrap_per_inch : optional
@@ -1934,7 +1936,7 @@ def bar_plot(
             chunk_labels = raw_labels
         else:
             base_wrap_width = wrap_width if wrap_width and wrap_width > 0 else 16
-            if wrap_auto_scale:
+            if wrap_auto_scale and orientation == "vertical":
                 wrap_scale = _wrap_scale(chunk_count, wrap_scale_reference, wrap_scale_limits)
             else:
                 wrap_scale = 1.0
@@ -2054,7 +2056,7 @@ def bar_plot(
             ax.set_ylabel(y_label, fontsize=label_font_size, fontweight="bold")
             ax.tick_params(axis="x", labelsize=x_label_font_size)
             if chunk_count > 0 and axis_padding:
-                ax.margins(x=axis_padding)
+                ax.margins(x=axis_padding * 0.75)
             if value_axis_limits is not None:
                 lower, upper = value_axis_limits
                 current_lower, current_upper = ax.get_ylim()
@@ -2078,13 +2080,17 @@ def bar_plot(
             if chunk_count > 0:
                 group_span = horizontal_bar_height
                 pad = group_span / 2.0
-                extra = group_span * axis_padding
+                extra = group_span * (axis_padding + 0.15)
                 lower_bound = indices[0] - pad - extra
                 upper_bound = indices[-1] + pad + extra
                 ax.set_ylim(lower_bound, upper_bound)
             else:
                 ax.margins(y=axis_padding)
-            ax.margins(x=0)
+            if value_axis_limits is None:
+                if chunk_count > 0:
+                    ax.margins(x=0.04)
+                else:
+                    ax.margins(x=0.04, y=axis_padding)
 
         if resolved_series_labels and n_series > 1:
             handles = []
@@ -2108,8 +2114,6 @@ def bar_plot(
         else:
             title_width = max(int(title_wrap), 1)
         title_text = textwrap.fill(title, width=title_width) if title_width > 0 else title
-        if total_chunks > 1:
-            title_text = f"{title_text} (Part {chunk_idx + 1}/{total_chunks})"
         ax.set_title(title_text, fontsize=title_font_size, fontweight="bold")
 
         plt.tight_layout()
