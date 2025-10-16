@@ -1144,6 +1144,24 @@ def regression_plot(
             base_label = rename_map.get(var, var)
             rename_map[new_col] = f"{base_label} (z)"
             y_actual[var] = new_col
+    fe_entity = list(dict.fromkeys(_ensure_list(entity_fixed_effects)))
+    fe_time = list(dict.fromkeys(_ensure_list(time_fixed_effects)))
+    cluster_cols = list(dict.fromkeys(_ensure_list(cluster)))
+    fe_min_share = max(float(fixed_effect_min_share or 0.0), 0.0)
+    fe_min_share = min(fe_min_share, 1.0)
+    entity_base_levels: Dict[str, Any] = {}
+    entity_rare_levels: Dict[str, List[Any]] = {}
+    time_base_levels: Dict[str, Any] = {}
+    time_rare_levels: Dict[str, List[Any]] = {}
+    if fe_entity:
+        entity_base_levels, entity_rare_levels = _prepare_fixed_effect_columns(
+            processed_df, fe_entity, min_share=fe_min_share
+        )
+    if fe_time:
+        time_base_levels, time_rare_levels = _prepare_fixed_effect_columns(
+            processed_df, fe_time, min_share=fe_min_share
+        )
+
     results: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     def _resolve_column(name: str) -> Tuple[str, str]:
@@ -1162,23 +1180,6 @@ def regression_plot(
         display = rename_map.get(actual_col, rename_map.get(name, name))
         rename_map.setdefault(actual_col, display)
         return actual_col, display
-    fe_entity = list(dict.fromkeys(_ensure_list(entity_fixed_effects)))
-    fe_time = list(dict.fromkeys(_ensure_list(time_fixed_effects)))
-    cluster_cols = list(dict.fromkeys(_ensure_list(cluster)))
-    fe_min_share = max(float(fixed_effect_min_share or 0.0), 0.0)
-    fe_min_share = min(fe_min_share, 1.0)
-    entity_base_levels: Dict[str, Any] = {}
-    entity_rare_levels: Dict[str, List[Any]] = {}
-    time_base_levels: Dict[str, Any] = {}
-    time_rare_levels: Dict[str, List[Any]] = {}
-    if fe_entity:
-        entity_base_levels, entity_rare_levels = _prepare_fixed_effect_columns(
-            prepared_df, fe_entity, min_share=fe_min_share
-        )
-    if fe_time:
-        time_base_levels, time_rare_levels = _prepare_fixed_effect_columns(
-            prepared_df, fe_time, min_share=fe_min_share
-        )
     if include_intercept is None:
         include_intercept = True
     else:
