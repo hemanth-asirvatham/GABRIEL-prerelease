@@ -162,8 +162,9 @@ def _apply_year_excess(
         Number of years on each side used when computing the rolling mean.
     columns : Sequence[str]
         Variables for which to compute excess or ratios.
-    mode : {"difference", "ratio"}
-        Whether to subtract (excess) or divide (ratio) by the window mean.
+    mode : {"difference", "ratio", "percent"}
+        Whether to subtract (excess), divide (ratio), or express the
+        percent change relative to the window mean.
     replace : bool, default True
         If True, the returned mapping replaces each original column name with
         the derived excess/ratio column in downstream analyses.
@@ -181,8 +182,10 @@ def _apply_year_excess(
 
     if year_col not in df.columns:
         raise KeyError(f"Year column '{year_col}' not found in dataframe.")
-    if mode not in {"difference", "ratio"}:
-        raise ValueError("mode must be 'difference' or 'ratio'.")
+    resolved_mode = (mode or "difference").lower()
+    valid_modes = {"difference", "ratio", "percent"}
+    if resolved_mode not in valid_modes:
+        raise ValueError("mode must be 'difference', 'ratio', or 'percent'.")
     df_out = df.copy()
     missing = [col for col in columns if col not in df_out.columns]
     if missing:
@@ -203,11 +206,19 @@ def _apply_year_excess(
     for col in columns:
         mean_col = f"{prefix}{col}__year_mean"
         df_out[mean_col] = df_out[year_col].map(means[col])
-        new_col = f"{prefix}{col}_{'excess' if mode == 'difference' else 'ratio'}"
-        if mode == "difference":
+        suffix = {
+            "difference": "excess",
+            "ratio": "ratio",
+            "percent": "percent",
+        }[resolved_mode]
+        new_col = f"{prefix}{col}_{suffix}"
+        if resolved_mode == "difference":
             df_out[new_col] = df_out[col] - df_out[mean_col]
-        else:
+        elif resolved_mode == "ratio":
             df_out[new_col] = df_out[col] / df_out[mean_col]
+        else:
+            ratio = df_out[col] / df_out[mean_col]
+            df_out[new_col] = (ratio - 1.0) * 100.0
         if replace:
             replacements[col] = new_col
     return df_out, replacements
@@ -1033,7 +1044,8 @@ def regression_plot(
     used when computing the rolling mean.  By default every dependent variable
     in ``y`` is adjusted; override with ``excess_columns`` if you also want the
     adjustment applied to other variables.  ``excess_mode`` switches between the
-    default difference-from-mean and a ratio-to-mean calculation, while
+    default difference-from-mean, a ratio-to-mean calculation, or a
+    percent-change-from-mean transformation, while
     ``excess_replace`` controls whether the adjusted columns are automatically
     used in the regression.  ``excess_prefix`` can be used to disambiguate the
     derived columns when running several specifications in succession.
@@ -1532,7 +1544,7 @@ def bar_plot(
     title_wrap_auto_scale: bool = True,
     title_wrap_reference: Optional[float] = 8.0,
     title_wrap_scale_limits: Tuple[float, float] = (0.5, 1.5),
-    error_bars: Optional[Union[Iterable[float], Dict[str, Iterable[float]], str]] = None,
+    error_bars: Optional[Union[Iterable[float], Dict[str, Iterable[float]], str, bool]] = None,
     error_bar_capsize: float = 4.0,
     max_bars_per_plot: Optional[int] = 12,
     sort_mode: Optional[str] = "descending",
@@ -1631,14 +1643,17 @@ def bar_plot(
         Control the wrapping applied to the title.  When ``title_wrap`` is
         ``None`` the width is derived from the figure width using
         ``title_wrap_per_inch``.
-    error_bars : iterable, dict or str, optional
+    error_bars : iterable, dict, str or bool, optional
         Adds error bars to each bar.  Provide a sequence of symmetric error
         magnitudes, a mapping with ``{"lower": ..., "upper": ...}`` for
-        asymmetric bars, or a string (``"std"``, ``"sem"``, ``"ci90"``,
-        ``"ci95"``, ``"ci99"``) to compute errors from ``data``.
+        asymmetric bars, a string (``"std"``, ``"sem"``, ``"ci90"``,
+        ``"ci95"``, ``"ci99"``) to compute errors from ``data``, or pass
+        ``True`` to automatically display 95% confidence intervals when
+        ``data`` is supplied.
     excess_* : optional
         Match the ``regression_plot`` excess arguments, enabling automated
-        rolling-difference/ratio calculations before aggregating the bars.
+        rolling difference/ratio/percent-change calculations before
+        aggregating the bars.
 
     Notes
     -----
@@ -1653,6 +1668,14 @@ def bar_plot(
 
     using_dataframe = data is not None or category_column is not None or value_column is not None
     resolved_series_labels: Optional[List[str]] = list(series_labels) if series_labels is not None else None
+
+    if isinstance(error_bars, bool):
+        if error_bars:
+            if not using_dataframe:
+                raise ValueError("error_bars=True requires supplying `data` so confidence intervals can be computed.")
+            error_bars = "ci95"
+        else:
+            error_bars = None
 
     if using_dataframe:
         if data is None or category_column is None or value_column is None:
@@ -2033,33 +2056,60 @@ def bar_plot(
                     )
                     bar_containers.append(container)
 
+        positive_errors: Optional[np.ndarray]
+        negative_errors: Optional[np.ndarray]
+        if chunk_error is not None and n_series == 1:
+            chunk_err_arr = np.asarray(chunk_error, dtype=float)
+            if chunk_err_arr.ndim == 1:
+                positive_errors = np.nan_to_num(chunk_err_arr.astype(float), nan=0.0)
+                negative_errors = positive_errors
+            elif chunk_err_arr.ndim == 2 and chunk_err_arr.shape[0] == 2:
+                negative_errors = np.nan_to_num(chunk_err_arr[0].astype(float), nan=0.0)
+                positive_errors = np.nan_to_num(chunk_err_arr[1].astype(float), nan=0.0)
+            else:
+                flat = np.nan_to_num(np.atleast_1d(chunk_err_arr.squeeze()).astype(float), nan=0.0)
+                positive_errors = flat
+                negative_errors = flat
+        else:
+            positive_errors = None
+            negative_errors = None
+
+        point_offset = 6 if chunk_error is not None and n_series == 1 else 3
+        annotation_size = annotation_font_size + (1 if chunk_error is not None and n_series == 1 else 0)
+
         for series_idx, container in enumerate(bar_containers):
             series_col = series_idx if n_series > 1 else 0
-            for bar, value in zip(container, chunk_values[:, series_col]):
+            for bar_idx, (bar, value) in enumerate(zip(container, chunk_values[:, series_col])):
                 if orientation == "vertical":
                     height = bar.get_height()
-                    offset = 3 if height >= 0 else -3
+                    err_up = float(positive_errors[bar_idx]) if positive_errors is not None else 0.0
+                    err_down = float(negative_errors[bar_idx]) if negative_errors is not None else 0.0
+                    base_height = height + err_up if height >= 0 else height - err_down
+                    offset = point_offset if height >= 0 else -point_offset
                     ax.annotate(
                         fmt(value),
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xy=(bar.get_x() + bar.get_width() / 2, base_height),
                         xytext=(0, offset),
                         textcoords="offset points",
                         ha="center",
                         va="bottom" if height >= 0 else "top",
-                        fontsize=annotation_font_size,
+                        fontsize=annotation_size,
                         fontweight=annotation_fontweight,
                     )
                 else:
                     width_val = bar.get_width()
-                    offset = 3 if width_val >= 0 else -3
+                    err_up = float(positive_errors[bar_idx]) if positive_errors is not None else 0.0
+                    err_down = float(negative_errors[bar_idx]) if negative_errors is not None else 0.0
+                    base_width = width_val + err_up if width_val >= 0 else width_val - err_down
+                    offset = point_offset if width_val >= 0 else -point_offset
                     ax.annotate(
                         fmt(value),
-                        xy=(width_val, bar.get_y() + bar.get_height() / 2),
+                        xy=(base_width, bar.get_y() + bar.get_height() / 2),
                         xytext=(offset, 0),
                         textcoords="offset points",
                         ha="left" if width_val >= 0 else "right",
                         va="center",
-                        fontsize=annotation_font_size,
+                        fontsize=annotation_size,
                         fontweight=annotation_fontweight,
                     )
 
