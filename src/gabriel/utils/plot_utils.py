@@ -1553,6 +1553,7 @@ def bar_plot(
     horizontal_bar_height: float = 0.7,
     category_axis_padding: float = 0.05,
     min_category_fraction: float = 0.0,
+    category_cap: Optional[int] = 12,
     excess_year_col: Optional[str] = None,
     excess_window: Optional[int] = None,
     excess_mode: str = "difference",
@@ -1568,9 +1569,10 @@ def bar_plot(
         Pre-computed category labels and bar values.  ``values`` may be a
         one-dimensional iterable for single-series plots or a sequence of
         iterables (one per category) for grouped bars.  When omitted,
-        ``data``/``category_column`` and ``value_column`` must be supplied so
-        the function can aggregate the bars automatically.  ``value_column``
-        may likewise be a string or a sequence of strings for grouped bars.
+        ``data``/``category_column`` are used to aggregate the bars
+        automatically: provide ``value_column`` for standard aggregations or
+        omit it to plot category counts directly.  ``value_column`` may be a
+        string or a sequence of strings for grouped bars.
     data : DataFrame, optional
         Raw data used to compute bar heights.  Requires ``category_column`` and
         ``value_column``.  When supplied, the ``value_column`` is aggregated by
@@ -1600,6 +1602,10 @@ def bar_plot(
         categories are wrapped into subsequent plots.  When ``orientation`` is
         ``"horizontal"`` the limit is doubled to account for the additional
         vertical space.  Set to ``None`` or ``<= 0`` to disable batching.
+    category_cap : int, optional
+        When counting categories (``value_column`` omitted), retain only the
+        ``category_cap`` most frequent categories by default.  Set to ``None``
+        or ``<= 0`` to disable the cap.
     wrap_width : int, optional
         Base width (in characters) used when wrapping category labels.  Values
         ``<= 0`` disable wrapping entirely.  When ``None`` a default width of
@@ -1680,72 +1686,99 @@ def bar_plot(
 
     if isinstance(error_bars, bool):
         if error_bars:
-            if not using_dataframe:
-                raise ValueError("error_bars=True requires supplying `data` so confidence intervals can be computed.")
+            if not using_dataframe or value_column is None:
+                raise ValueError(
+                    "error_bars=True requires supplying `data` with a value_column so confidence intervals can be computed."
+                )
             error_bars = "ci95"
         else:
             error_bars = None
 
     if using_dataframe:
-        if data is None or category_column is None or value_column is None:
-            raise ValueError(
-                "When supplying raw data you must also provide category_column and value_column."
-            )
-        value_columns = _ensure_list(value_column)
-        if not value_columns:
-            raise ValueError("value_column must be provided when using data.")
+        if data is None or category_column is None:
+            raise ValueError("When supplying raw data you must also provide data and category_column.")
         working_df = data.copy()
-        replacements: Dict[str, str] = {}
-        if excess_year_col is not None:
-            columns = _ensure_list(excess_columns)
-            if not columns:
-                columns = value_columns
-            if excess_window is None or int(excess_window) <= 0:
-                raise ValueError(
-                    "excess_window must be a positive integer when excess_year_col is provided."
+        working_df = working_df.dropna(subset=[category_column])
+        if working_df.empty:
+            raise ValueError("No rows remain after dropping missing category values.")
+        aggregated_map: "OrderedDict[str, List[float]]"
+        error_array: Optional[np.ndarray] = None
+        counting_categories = value_column is None
+        if counting_categories:
+            if error_bars not in (None, False):
+                raise ValueError("error_bars are not supported when plotting category counts.")
+            category_series = working_df[category_column].astype(str)
+            overall_total = float(len(category_series))
+            counts = category_series.value_counts()
+            if min_category_fraction > 0.0 and overall_total > 0.0:
+                counts = counts[(counts / overall_total) >= min_category_fraction]
+            if counts.empty:
+                raise ValueError("No categories remain after applying min_category_fraction.")
+            counts = counts.sort_values(ascending=False)
+            if category_order is None and categories is None:
+                if category_cap is not None and int(category_cap) > 0:
+                    counts = counts.iloc[: int(category_cap)]
+            aggregated_map = OrderedDict((str(idx), [float(count)]) for idx, count in counts.items())
+            if as_percent and overall_total > 0.0:
+                for key, values in aggregated_map.items():
+                    values[0] = values[0] / overall_total * 100.0
+            default_series_labels: List[str] = []
+        else:
+            value_columns = _ensure_list(value_column)
+            if not value_columns:
+                raise ValueError("value_column must be provided when using data.")
+            replacements: Dict[str, str] = {}
+            if excess_year_col is not None:
+                columns = _ensure_list(excess_columns)
+                if not columns:
+                    columns = value_columns
+                if excess_window is None or int(excess_window) <= 0:
+                    raise ValueError(
+                        "excess_window must be a positive integer when excess_year_col is provided."
+                    )
+                working_df, replacements = _apply_year_excess(
+                    working_df,
+                    year_col=excess_year_col,
+                    window=int(excess_window),
+                    columns=columns,
+                    mode=(excess_mode or "difference").lower(),
+                    replace=bool(excess_replace),
+                    prefix=excess_prefix,
                 )
-            working_df, replacements = _apply_year_excess(
-                working_df,
-                year_col=excess_year_col,
-                window=int(excess_window),
-                columns=columns,
-                mode=(excess_mode or "difference").lower(),
-                replace=bool(excess_replace),
-                prefix=excess_prefix,
-            )
-        resolved_columns = [replacements.get(col, col) for col in value_columns]
-        keep_columns = [category_column, *resolved_columns]
-        working_df = working_df[keep_columns].copy()
-        for col in resolved_columns:
-            working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
-        working_df = working_df.dropna(subset=[category_column] + resolved_columns, how="any")
-        grouped = working_df.groupby(category_column, observed=True)[resolved_columns]
-        group_sizes = grouped.size()
-        total_group_size = float(group_sizes.sum())
-        try:
-            aggregated = grouped.aggregate(value_agg)
-        except TypeError as exc:
-            raise TypeError("Failed to aggregate value_column with the provided value_agg.") from exc
-        if isinstance(aggregated, pd.Series):
-            aggregated = aggregated.to_frame(name=resolved_columns[0])
-        aggregated = aggregated.dropna(how="all")
-        aggregated_map: "OrderedDict[str, List[float]]" = OrderedDict()
-        for key, row in aggregated.iterrows():
-            aggregated_map[str(key)] = [float(row[col]) for col in aggregated.columns]
-        if min_category_fraction > 0.0 and total_group_size > 0.0:
-            frequency_map = {
-                str(idx): float(count) / total_group_size
-                for idx, count in group_sizes.items()
-                if str(idx) in aggregated_map
-            }
-            filtered_map: "OrderedDict[str, List[float]]" = OrderedDict(
-                (cat, values)
-                for cat, values in aggregated_map.items()
-                if frequency_map.get(cat, 0.0) >= min_category_fraction
-            )
-            aggregated_map = filtered_map
-        if not aggregated_map:
-            raise ValueError("Aggregation produced no bars to plot.")
+            resolved_columns = [replacements.get(col, col) for col in value_columns]
+            keep_columns = [category_column, *resolved_columns]
+            working_df = working_df[keep_columns].copy()
+            for col in resolved_columns:
+                working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
+            working_df = working_df.dropna(subset=[category_column] + resolved_columns, how="any")
+            grouped = working_df.groupby(category_column, observed=True)[resolved_columns]
+            group_sizes = grouped.size()
+            total_group_size = float(group_sizes.sum())
+            try:
+                aggregated = grouped.aggregate(value_agg)
+            except TypeError as exc:
+                raise TypeError("Failed to aggregate value_column with the provided value_agg.") from exc
+            if isinstance(aggregated, pd.Series):
+                aggregated = aggregated.to_frame(name=resolved_columns[0])
+            aggregated = aggregated.dropna(how="all")
+            aggregated_map = OrderedDict()
+            for key, row in aggregated.iterrows():
+                aggregated_map[str(key)] = [float(row[col]) for col in aggregated.columns]
+            if min_category_fraction > 0.0 and total_group_size > 0.0:
+                frequency_map = {
+                    str(idx): float(count) / total_group_size
+                    for idx, count in group_sizes.items()
+                    if str(idx) in aggregated_map
+                }
+                filtered_map: "OrderedDict[str, List[float]]" = OrderedDict(
+                    (cat, values)
+                    for cat, values in aggregated_map.items()
+                    if frequency_map.get(cat, 0.0) >= min_category_fraction
+                )
+                aggregated_map = filtered_map
+            if not aggregated_map:
+                raise ValueError("Aggregation produced no bars to plot.")
+            default_series_labels = list(aggregated.columns)
         if category_order is not None and categories is not None:
             raise ValueError("Provide at most one of categories or category_order when aggregating from data.")
         if category_order is not None:
@@ -1768,58 +1801,63 @@ def bar_plot(
                 "No categories remain after applying min_category_fraction and desired ordering."
             )
 
-        def _compute_error_from_string(kind: str) -> List[float]:
-            mode = (kind or "").strip().lower()
-            if mode == "std":
-                series = grouped.std(ddof=1)
-            elif mode == "sem":
-                series = grouped.apply(lambda s: sem(s, nan_policy="omit"))
-            elif mode.startswith("ci"):
-                digits = mode[2:] or "95"
-                try:
-                    level = float(digits) / 100.0
-                except ValueError as exc:
-                    raise ValueError("ci error bars must be followed by a percentage, e.g. 'ci95'.") from exc
-                level = max(0.0, min(level, 0.999))
-                z_score = norm.ppf(0.5 + level / 2.0)
-                sem_series = grouped.apply(lambda s: sem(s, nan_policy="omit"))
-                series = sem_series * z_score
-            else:
-                raise ValueError(
-                    "String error_bars must be one of 'std', 'sem', 'ci90', 'ci95', or 'ci99'."
-                )
-            reference_column = aggregated.columns[0]
-            if isinstance(series, pd.DataFrame):
-                series = series[reference_column]
-            result_map = {str(idx): float(val) if pd.notna(val) else float("nan") for idx, val in series.items()}
-            return [abs(result_map.get(cat, float("nan"))) for cat in category_keys]
-
-        error_array: Optional[np.ndarray]
-        if error_bars is None:
-            error_array = None
-        else:
-            if len(aggregated.columns) > 1:
-                raise ValueError("error_bars are currently only supported for single-series bar plots.")
-            if isinstance(error_bars, str):
-                error_array = np.asarray(_compute_error_from_string(error_bars), dtype=float)
-            elif isinstance(error_bars, dict):
-                lower = list(error_bars.get("lower", []))
-                upper = list(error_bars.get("upper", []))
-                if len(lower) != len(category_keys) or len(upper) != len(category_keys):
+        if not counting_categories:
+            def _compute_error_from_string(kind: str) -> List[float]:
+                mode = (kind or "").strip().lower()
+                if mode == "std":
+                    series = grouped.std(ddof=1)
+                elif mode == "sem":
+                    series = grouped.apply(lambda s: sem(s, nan_policy="omit"))
+                elif mode.startswith("ci"):
+                    digits = mode[2:] or "95"
+                    try:
+                        level = float(digits) / 100.0
+                    except ValueError as exc:
+                        raise ValueError("ci error bars must be followed by a percentage, e.g. 'ci95'.") from exc
+                    level = max(0.0, min(level, 0.999))
+                    z_score = norm.ppf(0.5 + level / 2.0)
+                    sem_series = grouped.apply(lambda s: sem(s, nan_policy="omit"))
+                    series = sem_series * z_score
+                else:
                     raise ValueError(
-                        "Asymmetric error bars must provide 'lower' and 'upper' lists matching the bar count."
+                        "String error_bars must be one of 'std', 'sem', 'ci90', 'ci95', or 'ci99'."
                     )
-                error_array = np.vstack([
-                    np.abs(np.asarray(lower, dtype=float)),
-                    np.abs(np.asarray(upper, dtype=float)),
-                ])
+                reference_column = aggregated.columns[0]
+                if isinstance(series, pd.DataFrame):
+                    series = series[reference_column]
+                result_map = {
+                    str(idx): float(val) if pd.notna(val) else float("nan") for idx, val in series.items()
+                }
+                return [abs(result_map.get(cat, float("nan"))) for cat in category_keys]
+
+            if error_bars is None:
+                error_array = None
             else:
-                array = np.asarray(list(error_bars), dtype=float)
-                if array.shape[0] != len(category_keys):
-                    raise ValueError("error_bars iterable length must match the number of categories.")
-                error_array = np.abs(array)
-        if resolved_series_labels is None:
-            resolved_series_labels = list(aggregated.columns)
+                if len(aggregated.columns) > 1:
+                    raise ValueError("error_bars are currently only supported for single-series bar plots.")
+                if isinstance(error_bars, str):
+                    error_array = np.asarray(_compute_error_from_string(error_bars), dtype=float)
+                elif isinstance(error_bars, dict):
+                    lower = list(error_bars.get("lower", []))
+                    upper = list(error_bars.get("upper", []))
+                    if len(lower) != len(category_keys) or len(upper) != len(category_keys):
+                        raise ValueError(
+                            "Asymmetric error bars must provide 'lower' and 'upper' lists matching the bar count."
+                        )
+                    error_array = np.vstack([
+                        np.abs(np.asarray(lower, dtype=float)),
+                        np.abs(np.asarray(upper, dtype=float)),
+                    ])
+                else:
+                    array = np.asarray(list(error_bars), dtype=float)
+                    if array.shape[0] != len(category_keys):
+                        raise ValueError("error_bars iterable length must match the number of categories.")
+                    error_array = np.abs(array)
+            if resolved_series_labels is None:
+                resolved_series_labels = default_series_labels
+        else:
+            if resolved_series_labels is None:
+                resolved_series_labels = default_series_labels
     else:
         if categories is None or values is None:
             raise ValueError("categories and values must be provided when data is not supplied.")
