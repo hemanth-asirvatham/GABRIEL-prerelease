@@ -1919,8 +1919,12 @@ def bar_plot(
         resolved_series_labels = []
     elif resolved_series_labels is None:
         resolved_series_labels = [f"Series {idx + 1}" for idx in range(n_series)]
-    elif len(resolved_series_labels) != n_series:
-        raise ValueError("Number of series_labels must match the number of value series.")
+    else:
+        resolved_series_labels = list(resolved_series_labels)
+        if n_series > 1 and len(resolved_series_labels) != n_series:
+            raise ValueError("Number of series_labels must match the number of value series.")
+        if n_series == 1 and len(resolved_series_labels) not in (0, 1):
+            raise ValueError("Single-series bar plots accept at most one series label.")
 
     if category_order is None and sort_mode:
         mode = sort_mode.strip().lower() if isinstance(sort_mode, str) else ""
