@@ -1552,6 +1552,7 @@ def bar_plot(
     vertical_bar_width: float = 0.92,
     horizontal_bar_height: float = 0.7,
     category_axis_padding: float = 0.05,
+    min_category_fraction: float = 0.0,
     excess_year_col: Optional[str] = None,
     excess_window: Optional[int] = None,
     excess_mode: str = "difference",
@@ -1627,6 +1628,11 @@ def bar_plot(
         Extra whitespace (as a fraction of the bar height/width) retained at the
         start and end of the categorical axis.  ``0`` removes the padding while
         larger values add more breathing room.
+    min_category_fraction : float, default 0.0
+        Minimum share of the underlying observations required for a category to
+        be included when aggregating directly from ``data``.  Categories with a
+        relative frequency below this threshold are dropped before plotting.
+        Set to ``0`` to keep all categories.
     sort_mode : {"descending", "ascending", "none", "random"}, optional
         Determines the automatic ordering of categories when ``category_order``
         is not provided.  Defaults to descending order of the aggregated bar
@@ -1667,6 +1673,9 @@ def bar_plot(
         raise ValueError("orientation must be 'vertical' or 'horizontal'.")
 
     using_dataframe = data is not None or category_column is not None or value_column is not None
+    min_category_fraction = 0.0 if min_category_fraction is None else float(min_category_fraction)
+    if min_category_fraction < 0.0:
+        raise ValueError("min_category_fraction must be greater than or equal to 0.")
     resolved_series_labels: Optional[List[str]] = list(series_labels) if series_labels is not None else None
 
     if isinstance(error_bars, bool):
@@ -1711,6 +1720,8 @@ def bar_plot(
             working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
         working_df = working_df.dropna(subset=[category_column] + resolved_columns, how="any")
         grouped = working_df.groupby(category_column, observed=True)[resolved_columns]
+        group_sizes = grouped.size()
+        total_group_size = float(group_sizes.sum())
         try:
             aggregated = grouped.aggregate(value_agg)
         except TypeError as exc:
@@ -1721,6 +1732,18 @@ def bar_plot(
         aggregated_map: "OrderedDict[str, List[float]]" = OrderedDict()
         for key, row in aggregated.iterrows():
             aggregated_map[str(key)] = [float(row[col]) for col in aggregated.columns]
+        if min_category_fraction > 0.0 and total_group_size > 0.0:
+            frequency_map = {
+                str(idx): float(count) / total_group_size
+                for idx, count in group_sizes.items()
+                if str(idx) in aggregated_map
+            }
+            filtered_map: "OrderedDict[str, List[float]]" = OrderedDict(
+                (cat, values)
+                for cat, values in aggregated_map.items()
+                if frequency_map.get(cat, 0.0) >= min_category_fraction
+            )
+            aggregated_map = filtered_map
         if not aggregated_map:
             raise ValueError("Aggregation produced no bars to plot.")
         if category_order is not None and categories is not None:
@@ -1735,9 +1758,15 @@ def bar_plot(
         bar_matrix: List[List[float]] = []
         for cat in desired_order:
             if cat not in aggregated_map:
+                if min_category_fraction > 0.0:
+                    continue
                 raise KeyError(f"Category '{cat}' not present in aggregated data.")
             category_keys.append(cat)
             bar_matrix.append(aggregated_map[cat])
+        if not category_keys:
+            raise ValueError(
+                "No categories remain after applying min_category_fraction and desired ordering."
+            )
 
         def _compute_error_from_string(kind: str) -> List[float]:
             mode = (kind or "").strip().lower()
