@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
@@ -559,8 +560,17 @@ class DebiasPipeline:
         revised_name = f"{column_name} ({self.cfg.removal_attribute} stripped paraphrase)"
         instructions = kwargs.pop("instructions", None) or self._build_paraphrase_instructions()
         response_kwargs: Dict[str, Any] = {}
-        if "completion_max_rounds" in kwargs:
-            response_kwargs["completion_max_rounds"] = kwargs.pop("completion_max_rounds")
+        if "n_rounds" in kwargs:
+            response_kwargs["n_rounds"] = kwargs.pop("n_rounds")
+        if "completion_max_rounds" in kwargs and "n_rounds" not in response_kwargs:
+            replacement = kwargs.pop("completion_max_rounds")
+            warnings.warn(
+                "completion_max_rounds is deprecated; use n_rounds instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if replacement is not None:
+                response_kwargs["n_rounds"] = replacement
         cfg = ParaphraseConfig(
             instructions=instructions,
             revised_column_name=revised_name,

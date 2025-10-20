@@ -4,7 +4,7 @@ from gabriel.tasks.codify import Codify, CodifyConfig
 
 
 def test_completion_loop_respects_round_limit(monkeypatch, tmp_path):
-    cfg = CodifyConfig(save_dir=str(tmp_path), completion_max_rounds=2)
+    cfg = CodifyConfig(save_dir=str(tmp_path), n_rounds=2)
     codify = Codify(cfg)
 
     aggregated = {0: {"cat": []}}
@@ -62,7 +62,7 @@ def test_completion_loop_respects_round_limit(monkeypatch, tmp_path):
 
 
 def test_completion_loop_skips_when_single_round(monkeypatch, tmp_path):
-    cfg = CodifyConfig(save_dir=str(tmp_path), completion_max_rounds=1)
+    cfg = CodifyConfig(save_dir=str(tmp_path), n_rounds=1)
     codify = Codify(cfg)
 
     aggregated = {0: {"cat": []}}

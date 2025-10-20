@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, InitVar
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -40,9 +41,26 @@ class CodifyConfig:
     modality: str = "text"
     json_mode: bool = True
     max_timeout: Optional[float] = None
-    completion_check: bool = True
-    completion_max_rounds: int = 2  # Total Codify passes including the initial run
+    n_rounds: int = 2  # Total Codify passes including the initial run; set to 1 to skip completion sweeps
     completion_classifier_instructions: Optional[str] = None
+    completion_max_rounds: InitVar[Optional[int]] = None
+
+    def __post_init__(self, completion_max_rounds: Optional[int]) -> None:
+        if completion_max_rounds is not None:
+            warnings.warn(
+                "completion_max_rounds is deprecated; use n_rounds instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.n_rounds = completion_max_rounds
+
+        try:
+            rounds = int(self.n_rounds)
+        except (TypeError, ValueError):
+            rounds = 1
+        if rounds < 1:
+            rounds = 1
+        self.n_rounds = rounds
 
 
 @dataclass
@@ -861,7 +879,7 @@ class Codify:
         reset_files: bool,
         **kwargs: Any,
     ) -> Dict[int, Dict[str, List[str]]]:
-        total_rounds = max(1, int(self.cfg.completion_max_rounds))
+        total_rounds = max(1, int(self.cfg.n_rounds))
         completion_iterations = max(0, total_rounds - 1)
 
         for depth in range(1, completion_iterations + 1):
@@ -946,7 +964,7 @@ class Codify:
         )
         self._merge_snippet_results(aggregated, initial_results)
 
-        if self.cfg.completion_check and not dynamic_mode and categories_dict:
+        if not dynamic_mode and categories_dict and self.cfg.n_rounds > 1:
             aggregated = await self._completion_loop(
                 aggregated,
                 original_texts,

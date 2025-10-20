@@ -1,4 +1,5 @@
 import os
+import warnings
 import pandas as pd
 from typing import Callable, Dict, Optional, Union, Any, List
 
@@ -461,15 +462,39 @@ async def codify(
     modality: str = "text",
     json_mode: bool = True,
     max_timeout: Optional[float] = None,
-    completion_check: bool = True,
-    completion_max_rounds: int = 2,
+    n_rounds: int = 2,
     completion_classifier_instructions: Optional[str] = None,
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
+    """Convenience wrapper for :class:`gabriel.tasks.Codify`.
+
+    ``n_rounds`` controls the total number of Codify passes, including the
+    initial run. Set ``n_rounds=1`` to skip the follow-up completion sweep, which
+    mirrors the previous ``completion_check=False`` behaviour.
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
+    cfg_kwargs = dict(cfg_kwargs)
+    if "completion_check" in cfg_kwargs:
+        completion_flag = bool(cfg_kwargs.pop("completion_check"))
+        warnings.warn(
+            "completion_check is deprecated; set n_rounds to 1 to disable "
+            "completion passes.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not completion_flag:
+            n_rounds = 1
+    if "completion_max_rounds" in cfg_kwargs:
+        replacement = cfg_kwargs.pop("completion_max_rounds")
+        warnings.warn(
+            "completion_max_rounds is deprecated; use n_rounds instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if replacement is not None:
+            n_rounds = replacement
     cfg = CodifyConfig(
         save_dir=save_dir,
         file_name=file_name,
@@ -484,8 +509,7 @@ async def codify(
         modality=modality,
         json_mode=json_mode,
         max_timeout=max_timeout,
-        completion_check=completion_check,
-        completion_max_rounds=completion_max_rounds,
+        n_rounds=n_rounds,
         completion_classifier_instructions=completion_classifier_instructions,
         **cfg_kwargs,
     )
@@ -888,7 +912,7 @@ async def debias(
     measurement_kwargs: Optional[Dict[str, Any]] = None,
     removal_kwargs: Optional[Dict[str, Any]] = None,
     max_words_per_call: Optional[int] = 1000,
-    completion_max_rounds: Optional[int] = 3,
+    n_rounds: Optional[int] = 3,
     use_dummy: bool = False,
     robust_regression: bool = True,
     random_seed: int = 12345,
@@ -906,11 +930,11 @@ async def debias(
         measurement attribute when it exists in ``signal_dictionary`` or
         otherwise the first key from ``signal_dictionary``.  When defaults are
         inferred a notice is printed if ``verbose`` is ``True``.
-    max_words_per_call, completion_max_rounds:
+    max_words_per_call, n_rounds:
         Convenience passthroughs for the removal stage.  ``max_words_per_call``
-        configures the codify task's chunk size, while
-        ``completion_max_rounds`` is forwarded to codify and to the underlying
-        paraphrase API calls.
+        configures the codify task's chunk size, while ``n_rounds`` controls the
+        number of completion passes run by codify and any downstream
+        paraphrasing steps.
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -919,8 +943,17 @@ async def debias(
 
     if removal_method == "codify" and max_words_per_call is not None:
         removal_kwargs.setdefault("max_words_per_call", max_words_per_call)
-    if completion_max_rounds is not None:
-        removal_kwargs.setdefault("completion_max_rounds", completion_max_rounds)
+    if "completion_max_rounds" in removal_kwargs and "n_rounds" not in removal_kwargs:
+        replacement = removal_kwargs.pop("completion_max_rounds")
+        warnings.warn(
+            "completion_max_rounds in removal_kwargs is deprecated; use n_rounds instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if replacement is not None:
+            removal_kwargs.setdefault("n_rounds", replacement)
+    if n_rounds is not None:
+        removal_kwargs.setdefault("n_rounds", n_rounds)
 
     cfg = DebiasConfig(
         mode=mode,

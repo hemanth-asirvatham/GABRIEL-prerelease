@@ -570,7 +570,7 @@ _COLAB_STYLE = """
     gap: 12px;
 }
 .gabriel-codify-viewer .gabriel-legend-item {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
@@ -578,6 +578,24 @@ _COLAB_STYLE = """
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.08);
     font-size: 13px;
+    color: rgba(255, 255, 255, 0.88);
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+    text-decoration: none;
+    font: inherit;
+    line-height: 1.2;
+}
+.gabriel-codify-viewer .gabriel-legend-item:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.18);
+    transform: translateY(-1px);
+}
+.gabriel-codify-viewer .gabriel-legend-item:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.65);
+}
+.gabriel-codify-viewer .gabriel-legend-item span {
+    pointer-events: none;
 }
 .gabriel-codify-viewer .gabriel-legend-color {
     width: 16px;
@@ -587,7 +605,7 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer .gabriel-legend-label {
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.88);
+    color: inherit;
 }
 .gabriel-codify-viewer .gabriel-legend-count {
     font-size: 11px;
@@ -634,10 +652,38 @@ _COLAB_STYLE = """
     margin: 0 0 1em 0;
 }
 .gabriel-codify-viewer .gabriel-snippet {
+    position: relative;
     border-radius: 6px;
     padding: 1px 5px;
     font-weight: 600;
     color: #0d1014;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.gabriel-codify-viewer .gabriel-snippet::after {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    bottom: 100%;
+    transform: translateY(-6px);
+    background: rgba(8, 11, 17, 0.92);
+    color: #f8fafc;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    z-index: 5;
+}
+.gabriel-codify-viewer .gabriel-snippet:hover::after {
+    opacity: 1;
+    transform: translateY(-10px);
+}
+.gabriel-codify-viewer .gabriel-snippet-active {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8), 0 0 18px rgba(255, 255, 255, 0.35);
 }
 .gabriel-codify-viewer .gabriel-empty {
     font-style: italic;
@@ -672,6 +718,14 @@ _COLAB_STYLE = """
     .gabriel-codify-viewer .gabriel-legend-item {
         background: rgba(15, 23, 42, 0.06);
         border-color: rgba(15, 23, 42, 0.12);
+        color: rgba(15, 23, 42, 0.82);
+    }
+    .gabriel-codify-viewer .gabriel-legend-item:hover {
+        background: rgba(15, 23, 42, 0.1);
+        border-color: rgba(15, 23, 42, 0.18);
+    }
+    .gabriel-codify-viewer .gabriel-legend-item:focus-visible {
+        box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.4);
     }
     .gabriel-codify-viewer .gabriel-legend-count {
         background: rgba(15, 23, 42, 0.1);
@@ -680,8 +734,109 @@ _COLAB_STYLE = """
     .gabriel-codify-viewer .gabriel-empty {
         color: rgba(15, 23, 42, 0.55);
     }
+    .gabriel-codify-viewer .gabriel-snippet::after {
+        background: rgba(15, 23, 42, 0.92);
+        color: #f8fafc;
+    }
+    .gabriel-codify-viewer .gabriel-snippet-active {
+        box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.28), 0 0 18px rgba(15, 23, 42, 0.3);
+    }
 }
 </style>
+<script>
+(function () {
+    if (window.__gabrielPassageViewerEnhancer) {
+        return;
+    }
+    window.__gabrielPassageViewerEnhancer = true;
+
+    const stateMap = new WeakMap();
+
+    function ensureState(container, token) {
+        let record = stateMap.get(container);
+        if (!record || record.token !== token) {
+            record = { token: token, indices: {} };
+            stateMap.set(container, record);
+        }
+        return record;
+    }
+
+    function escapeSelector(value) {
+        if (window.CSS && typeof window.CSS.escape === 'function') {
+            return window.CSS.escape(value);
+        }
+        return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+    }
+
+    function bindLegendItem(item) {
+        if (!(item instanceof Element) || item.dataset.gabrielBound === '1') {
+            return;
+        }
+        const legend = item.closest('.gabriel-legend');
+        const container = item.closest('.gabriel-codify-viewer');
+        if (!legend || !container) {
+            return;
+        }
+        const category = item.getAttribute('data-category');
+        if (!category) {
+            return;
+        }
+        const token = legend.getAttribute('data-legend-token') || '';
+        const state = ensureState(container, token);
+        item.dataset.gabrielBound = '1';
+        item.addEventListener('click', function (event) {
+            event.preventDefault();
+            const selector = '.gabriel-snippet[data-category="' + escapeSelector(category) + '"]';
+            const snippets = container.querySelectorAll(selector);
+            if (!snippets.length) {
+                return;
+            }
+            const nextIndex = state.indices[category] || 0;
+            const target = snippets[nextIndex % snippets.length];
+            state.indices[category] = (nextIndex + 1) % snippets.length;
+            container.querySelectorAll('.gabriel-snippet.gabriel-snippet-active').forEach(function (el) {
+                if (el !== target) {
+                    el.classList.remove('gabriel-snippet-active');
+                }
+            });
+            target.classList.add('gabriel-snippet-active');
+            if (typeof target.scrollIntoView === 'function') {
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            window.setTimeout(function () {
+                target.classList.remove('gabriel-snippet-active');
+            }, 1600);
+        });
+    }
+
+    function scan(root) {
+        if (!(root instanceof Element)) {
+            return;
+        }
+        root.querySelectorAll('.gabriel-legend-item').forEach(bindLegendItem);
+    }
+
+    const observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+                if (!(node instanceof Element)) {
+                    return;
+                }
+                if (node.classList.contains('gabriel-legend-item')) {
+                    bindLegendItem(node);
+                } else {
+                    scan(node);
+                }
+            });
+        });
+    });
+
+    if (document && document.body) {
+        observer.observe(document.body, { childList: true, subtree: true });
+        scan(document.body);
+    }
+})();
+</script>
 """
 
 
@@ -772,13 +927,26 @@ def _build_highlighted_text(
 
     pieces: List[str] = []
     cursor = 0
+    snippet_indices: Dict[str, int] = {}
     for start, end, category in merged:
         pieces.append(html.escape(text[cursor:start]).replace("\n", "<br/>"))
         snippet_html = html.escape(text[start:end]).replace("\n", "<br/>")
-        label = html.escape(category.replace("_", " ").title())
-        color = category_colors.get(category, "#ffd54f")
+        category_key = str(category)
+        label = html.escape(category_key.replace("_", " ").title())
+        color = category_colors.get(category_key, "#ffd54f")
+        safe_color = html.escape(color, quote=True)
+        safe_category = html.escape(category_key, quote=True)
+        index = snippet_indices.get(category_key, 0)
+        snippet_indices[category_key] = index + 1
+        slug = re.sub(r"[^0-9a-zA-Z_-]+", "-", category_key).strip("-")
+        if not slug:
+            slug = "category"
+        element_id = f"gabriel-snippet-{slug}-{index}"
         pieces.append(
-            f"<span class='gabriel-snippet' style='background-color:{color}' title='{label}'>"
+            "<span class='gabriel-snippet' "
+            f"data-category='{safe_category}' data-index='{index}' "
+            f"data-label='{label}' id='{element_id}' "
+            f"style='background-color:{safe_color}' title='{label}'>"
             f"{snippet_html}</span>"
         )
         cursor = end
@@ -819,6 +987,7 @@ def _build_header_html(
 def _build_legend_html(
     category_colors: Dict[str, str],
     category_counts: Dict[str, int],
+    legend_token: Optional[str] = None,
 ) -> str:
     if not category_colors:
         return (
@@ -827,21 +996,36 @@ def _build_legend_html(
 
     items = []
     for category, color in category_colors.items():
-        label = html.escape(category.replace("_", " ").title())
-        count = category_counts.get(category, 0)
-        count_html = (
-            f"<span class='gabriel-legend-count'>{count}</span>"
-            if count
-            else ""
-        )
+        pretty = category.replace("_", " ").title()
+        label = html.escape(pretty)
+        raw_count = category_counts.get(category, 0)
+        try:
+            count_value = int(raw_count)
+        except (TypeError, ValueError):
+            count_value = 0
+        aria_label = html.escape(f"{pretty} ({count_value})", quote=True)
+        count = html.escape(str(count_value))
+        safe_color = html.escape(color, quote=True)
+        safe_category = html.escape(category, quote=True)
         items.append(
-            "<div class='gabriel-legend-item'>"
-            f"<span class='gabriel-legend-color' style='background:{color}'></span>"
+            "<button type='button' class='gabriel-legend-item' "
+            f"data-category='{safe_category}' data-count='{count}' aria-label='{aria_label}'>"
+            f"<span class='gabriel-legend-color' style='background:{safe_color}'></span>"
             f"<span class='gabriel-legend-label'>{label}</span>"
-            f"{count_html}"
-            "</div>"
+            f"<span class='gabriel-legend-count'>{count}</span>"
+            "</button>"
         )
-    return "<div class='gabriel-legend'><div class='gabriel-legend-grid'>" + "".join(items) + "</div></div>"
+
+    token_attr = (
+        f" data-legend-token='{html.escape(legend_token, quote=True)}'"
+        if legend_token
+        else ""
+    )
+    return (
+        f"<div class='gabriel-legend'{token_attr}><div class='gabriel-legend-grid'>"
+        + "".join(items)
+        + "</div></div>"
+    )
 
 
 def _view_coded_passages_colab(
@@ -884,7 +1068,6 @@ def _view_coded_passages_colab(
     colors = _generate_distinct_colors(len(categories))
     category_colors = dict(zip(categories, colors))
 
-    category_counts: Dict[str, int] = {cat: 0 for cat in categories}
     passages: List[Dict[str, Any]] = []
 
     for _, row in df.iterrows():
@@ -917,7 +1100,6 @@ def _view_coded_passages_colab(
             else:
                 cleaned = []
             snippet_map[cat] = cleaned
-            category_counts[cat] = category_counts.get(cat, 0) + len(cleaned)
 
         header_rows: List[Tuple[str, str]] = []
         for column, label in normalized_headers:
@@ -927,16 +1109,19 @@ def _view_coded_passages_colab(
                 header_rows.append((label, formatted))
 
         active_categories = [cat for cat, snippets in snippet_map.items() if snippets]
+        passage_counts = {
+            cat: len(snippet_map.get(cat, []))
+            for cat in categories
+        }
         passages.append(
             {
                 "text": text,
                 "snippets": snippet_map,
                 "header": header_rows,
                 "active": active_categories,
+                "counts": passage_counts,
             }
         )
-
-    legend_html = _build_legend_html(category_colors, category_counts)
     total = len(passages)
 
     try:  # pragma: no cover - optional dependency
@@ -990,6 +1175,10 @@ def _view_coded_passages_colab(
                 payload["text"], payload["snippets"], category_colors
             )
             header_html = _build_header_html(payload["header"], payload["active"])
+            legend_token = f"interactive-{index}-{random.random()}"
+            legend_html = _build_legend_html(
+                category_colors, payload["counts"], legend_token
+            )
             passage_html = (
                 "<div class='gabriel-codify-viewer'><div class='gabriel-passage-panel'>"
                 "<div class='gabriel-passage-scroll'>"
@@ -1035,6 +1224,10 @@ def _view_coded_passages_colab(
         html_parts.append("<div class='gabriel-empty'>No passages to display.</div>")
     else:
         for idx, payload in enumerate(passages):
+            legend_token = f"static-{idx}-{random.random()}"
+            legend_html = _build_legend_html(
+                category_colors, payload["counts"], legend_token
+            )
             body_html = _build_highlighted_text(
                 payload["text"], payload["snippets"], category_colors
             )
