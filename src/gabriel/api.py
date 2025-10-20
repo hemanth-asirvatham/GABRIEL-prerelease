@@ -467,34 +467,11 @@ async def codify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Codify`.
-
-    ``n_rounds`` controls the total number of Codify passes, including the
-    initial run. Set ``n_rounds=1`` to skip the follow-up completion sweep, which
-    mirrors the previous ``completion_check=False`` behaviour.
-    """
+    """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg_kwargs = dict(cfg_kwargs)
-    if "completion_check" in cfg_kwargs:
-        completion_flag = bool(cfg_kwargs.pop("completion_check"))
-        warnings.warn(
-            "completion_check is deprecated; set n_rounds to 1 to disable "
-            "completion passes.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not completion_flag:
-            n_rounds = 1
-    if "completion_max_rounds" in cfg_kwargs:
-        replacement = cfg_kwargs.pop("completion_max_rounds")
-        warnings.warn(
-            "completion_max_rounds is deprecated; use n_rounds instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if replacement is not None:
-            n_rounds = replacement
+    
     cfg = CodifyConfig(
         save_dir=save_dir,
         file_name=file_name,
