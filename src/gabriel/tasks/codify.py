@@ -41,7 +41,7 @@ class CodifyConfig:
     json_mode: bool = True
     max_timeout: Optional[float] = None
     completion_check: bool = True
-    completion_max_rounds: int = 2
+    completion_max_rounds: int = 2  # Total Codify passes including the initial run
     completion_classifier_instructions: Optional[str] = None
 
 
@@ -98,16 +98,23 @@ class Codify:
         df: pd.DataFrame,
         column_name: str,
         categories: Optional[Union[List[str], str]] = None,
+        **viewer_kwargs: Any,
     ):
         """Convenience wrapper around :func:`view_coded_passages`.
 
         This helper makes it easy to visualise coding results produced by
-        :class:`Codify`. It simply forwards the provided DataFrame to the
-        passage viewer utility.
+        :class:`Codify`. Additional keyword arguments are forwarded to
+        :func:`gabriel.utils.passage_viewer.view_coded_passages`, enabling
+        features such as the Colab viewer and custom metadata headers.
         """
         from ..utils import view_coded_passages
 
-        return view_coded_passages(df, column_name, categories)
+        return view_coded_passages(
+            df,
+            column_name,
+            categories,
+            **viewer_kwargs,
+        )
 
     def parse_json(self, response_text: Any) -> Optional[dict]:
         """Robust JSON parsing using :func:`safe_json`."""
@@ -854,7 +861,10 @@ class Codify:
         reset_files: bool,
         **kwargs: Any,
     ) -> Dict[int, Dict[str, List[str]]]:
-        for depth in range(1, self.cfg.completion_max_rounds + 1):
+        total_rounds = max(1, int(self.cfg.completion_max_rounds))
+        completion_iterations = max(0, total_rounds - 1)
+
+        for depth in range(1, completion_iterations + 1):
             flagged = await self._classify_remaining(
                 aggregated,
                 original_texts,

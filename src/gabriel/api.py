@@ -1041,6 +1041,13 @@ def view_coded_passages(
     column_name: str,
     categories: Optional[Union[list[str], str]] = None,
     colab: bool = False,
+    header_columns: Optional[Any] = None,
 ):
     """Convenience wrapper for the passage viewer utility."""
-    return _view_coded_passages(df, column_name, categories, colab=colab)
+    return _view_coded_passages(
+        df,
+        column_name,
+        categories,
+        colab=colab,
+        header_columns=header_columns,
+    )
