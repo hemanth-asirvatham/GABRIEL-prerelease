@@ -6,10 +6,11 @@ except Exception:  # pragma: no cover - optional dependency
     ttk = None  # type: ignore
     scrolledtext = None  # type: ignore
 
+import html
 import pandas as pd
 import random
 import re
-from typing import List, Dict, Any, Optional, Union
+from typing import Iterable, List, Dict, Any, Optional, Sequence, Tuple, Union
 import colorsys
 try:
     import matplotlib.pyplot as plt
@@ -521,10 +522,333 @@ class PassageViewer:
             self.tooltip.destroy()
             self.tooltip = None
 
+_COLAB_STYLE = """
+<style>
+.gabriel-codify-viewer {
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #f5f7fa;
+    background: transparent;
+}
+.gabriel-codify-viewer .gabriel-status {
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 8px;
+}
+.gabriel-codify-viewer .gabriel-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.gabriel-codify-viewer .gabriel-passage-panel {
+    background: #13161a;
+    border: 1px solid #2b323c;
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 16px 40px rgba(9, 11, 16, 0.45);
+}
+.gabriel-codify-viewer .gabriel-passage-scroll {
+    max-height: 560px;
+    overflow-y: auto;
+    padding-right: 12px;
+}
+.gabriel-codify-viewer .gabriel-legend {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #13161a;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #2b323c;
+}
+.gabriel-codify-viewer .gabriel-legend-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.gabriel-codify-viewer .gabriel-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 13px;
+}
+.gabriel-codify-viewer .gabriel-legend-color {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+}
+.gabriel-codify-viewer .gabriel-legend-label {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+}
+.gabriel-codify-viewer .gabriel-legend-count {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.78);
+}
+.gabriel-codify-viewer .gabriel-header {
+    margin-bottom: 14px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.gabriel-codify-viewer .gabriel-header-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.gabriel-codify-viewer .gabriel-header-label {
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.7);
+}
+.gabriel-codify-viewer .gabriel-header-value {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.94);
+}
+.gabriel-codify-viewer .gabriel-active-cats {
+    margin-top: 4px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+}
+.gabriel-codify-viewer .gabriel-text {
+    font-size: 15px;
+    line-height: 1.7;
+    color: rgba(245, 247, 250, 0.96);
+}
+.gabriel-codify-viewer .gabriel-text p {
+    margin: 0 0 1em 0;
+}
+.gabriel-codify-viewer .gabriel-snippet {
+    border-radius: 6px;
+    padding: 1px 5px;
+    font-weight: 600;
+    color: #0d1014;
+}
+.gabriel-codify-viewer .gabriel-empty {
+    font-style: italic;
+    color: rgba(255, 255, 255, 0.65);
+}
+@media (prefers-color-scheme: light) {
+    .gabriel-codify-viewer {
+        color: #1f2933;
+    }
+    .gabriel-codify-viewer .gabriel-passage-panel {
+        background: #f7f9fb;
+        border-color: #d0d7e2;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+    }
+    .gabriel-codify-viewer .gabriel-legend {
+        background: #f7f9fb;
+        border-color: #d0d7e2;
+    }
+    .gabriel-codify-viewer .gabriel-header {
+        background: rgba(15, 23, 42, 0.06);
+        border-color: rgba(15, 23, 42, 0.12);
+    }
+    .gabriel-codify-viewer .gabriel-header-label {
+        color: rgba(15, 23, 42, 0.65);
+    }
+    .gabriel-codify-viewer .gabriel-header-value {
+        color: rgba(15, 23, 42, 0.92);
+    }
+    .gabriel-codify-viewer .gabriel-text {
+        color: #1f2933;
+    }
+    .gabriel-codify-viewer .gabriel-legend-item {
+        background: rgba(15, 23, 42, 0.06);
+        border-color: rgba(15, 23, 42, 0.12);
+    }
+    .gabriel-codify-viewer .gabriel-legend-count {
+        background: rgba(15, 23, 42, 0.1);
+        color: rgba(15, 23, 42, 0.75);
+    }
+    .gabriel-codify-viewer .gabriel-empty {
+        color: rgba(15, 23, 42, 0.55);
+    }
+}
+</style>
+"""
+
+
+def _normalize_header_columns(
+    header_columns: Optional[Union[Sequence[Any], Any]]
+) -> List[Tuple[str, str]]:
+    if header_columns is None:
+        return []
+
+    if isinstance(header_columns, (str, bytes)):
+        header_sequence: Iterable[Any] = [header_columns]
+    elif isinstance(header_columns, Iterable):
+        header_sequence = header_columns
+    else:
+        header_sequence = [header_columns]
+
+    normalized: List[Tuple[str, str]] = []
+    for entry in header_sequence:
+        if isinstance(entry, (list, tuple)) and entry:
+            column = str(entry[0])
+            label = str(entry[1]) if len(entry) > 1 else column
+        else:
+            column = str(entry)
+            label = column
+        pretty_label = label.replace("_", " ").title()
+        normalized.append((column, pretty_label))
+    return normalized
+
+
+def _is_na(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        result = pd.isna(value)
+    except Exception:
+        return False
+    if isinstance(result, bool):
+        return result
+    return False
+
+
+def _format_header_value(value: Any) -> str:
+    if _is_na(value):
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(parts)
+    return str(value)
+
+
+def _build_highlighted_text(
+    text: str,
+    snippet_map: Dict[str, List[str]],
+    category_colors: Dict[str, str],
+) -> str:
+    if not text:
+        return "<div class='gabriel-empty'>No text available.</div>"
+
+    spans: List[Tuple[int, int, str]] = []
+    for category, snippets in snippet_map.items():
+        if not snippets or category not in category_colors:
+            continue
+        for snippet in snippets:
+            if not snippet:
+                continue
+            start = 0
+            while True:
+                index = text.find(snippet, start)
+                if index == -1:
+                    break
+                spans.append((index, index + len(snippet), category))
+                start = index + len(snippet)
+
+    if not spans:
+        return html.escape(text).replace("\n", "<br/>")
+
+    spans.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    merged: List[Tuple[int, int, str]] = []
+    current_end = -1
+    for start, end, category in spans:
+        if start < current_end:
+            continue
+        merged.append((start, end, category))
+        current_end = end
+
+    pieces: List[str] = []
+    cursor = 0
+    for start, end, category in merged:
+        pieces.append(html.escape(text[cursor:start]).replace("\n", "<br/>"))
+        snippet_html = html.escape(text[start:end]).replace("\n", "<br/>")
+        label = html.escape(category.replace("_", " ").title())
+        color = category_colors.get(category, "#ffd54f")
+        pieces.append(
+            f"<span class='gabriel-snippet' style='background-color:{color}' title='{label}'>"
+            f"{snippet_html}</span>"
+        )
+        cursor = end
+    pieces.append(html.escape(text[cursor:]).replace("\n", "<br/>"))
+    return "".join(pieces)
+
+
+def _build_header_html(
+    header_rows: List[Tuple[str, str]],
+    active_categories: List[str],
+) -> str:
+    if not header_rows and not active_categories:
+        return ""
+
+    parts: List[str] = []
+    for label, value in header_rows:
+        safe_label = html.escape(label)
+        safe_value = html.escape(value).replace("\n", "<br/>")
+        parts.append(
+            f"<div class='gabriel-header-row'>"
+            f"<span class='gabriel-header-label'>{safe_label}:</span>"
+            f"<span class='gabriel-header-value'>{safe_value}</span>"
+            f"</div>"
+        )
+
+    if active_categories:
+        active = ", ".join(
+            html.escape(cat.replace("_", " ").title()) for cat in active_categories
+        )
+        parts.append(
+            "<div class='gabriel-active-cats'><strong>Categories:</strong> "
+            f"{active}</div>"
+        )
+
+    return "<div class='gabriel-header'>" + "".join(parts) + "</div>"
+
+
+def _build_legend_html(
+    category_colors: Dict[str, str],
+    category_counts: Dict[str, int],
+) -> str:
+    if not category_colors:
+        return (
+            "<div class='gabriel-legend gabriel-empty'>No categories to display.</div>"
+        )
+
+    items = []
+    for category, color in category_colors.items():
+        label = html.escape(category.replace("_", " ").title())
+        count = category_counts.get(category, 0)
+        count_html = (
+            f"<span class='gabriel-legend-count'>{count}</span>"
+            if count
+            else ""
+        )
+        items.append(
+            "<div class='gabriel-legend-item'>"
+            f"<span class='gabriel-legend-color' style='background:{color}'></span>"
+            f"<span class='gabriel-legend-label'>{label}</span>"
+            f"{count_html}"
+            "</div>"
+        )
+    return "<div class='gabriel-legend'><div class='gabriel-legend-grid'>" + "".join(items) + "</div></div>"
+
+
 def _view_coded_passages_colab(
     df: pd.DataFrame,
     column_name: str,
     categories: Optional[Union[List[str], str]] = None,
+    header_columns: Optional[Union[Sequence[Any], Any]] = None,
 ) -> None:
     """Display passages inside a Jupyter notebook.
 
@@ -556,38 +880,177 @@ def _view_coded_passages_colab(
         dynamic_mode = False
         categories = categories if categories else []
 
+    normalized_headers = _normalize_header_columns(header_columns)
     colors = _generate_distinct_colors(len(categories))
     category_colors = dict(zip(categories, colors))
 
-    legend_parts = [
-        "<span style='display:inline-block;width:12px;height:12px;background:{};margin-right:4px'></span>{}".format(
-            color, cat.replace("_", " ").title()
-        )
-        for cat, color in category_colors.items()
-    ]
-    html_parts = ["<div>" + " &nbsp; ".join(legend_parts) + "</div><hr/>"]
+    category_counts: Dict[str, int] = {cat: 0 for cat in categories}
+    passages: List[Dict[str, Any]] = []
 
     for _, row in df.iterrows():
-        text = str(row[column_name])
+        raw_text = row.get(column_name)
+        text = "" if _is_na(raw_text) else str(raw_text)
+
         if dynamic_mode:
-            snippet_map = row.get("coded_passages") or {}
+            raw_map = row.get("coded_passages")
+            snippet_source = raw_map if isinstance(raw_map, dict) else {}
         else:
-            snippet_map = {cat: row.get(cat, []) for cat in categories}
+            snippet_source = {cat: row.get(cat, []) for cat in categories}
 
-        for cat, snippets in snippet_map.items():
-            color = category_colors.get(cat)
-            if not color or not snippets:
+        snippet_map: Dict[str, List[str]] = {cat: [] for cat in categories}
+        for cat, snippets in snippet_source.items():
+            if cat not in category_colors:
                 continue
-            for snippet in snippets:
-                if not snippet:
-                    continue
-                pattern = re.escape(snippet)
-                replacement = f"<span style='background-color:{color}'>{snippet}</span>"
-                text = re.sub(pattern, replacement, text)
+            cleaned: List[str]
+            if isinstance(snippets, str):
+                cleaned = [snippets]
+            elif isinstance(snippets, (list, tuple, set)):
+                cleaned = [
+                    str(item)
+                    for item in snippets
+                    if item is not None and not _is_na(item) and str(item)
+                ]
+            elif _is_na(snippets) or snippets is None:
+                cleaned = []
+            elif snippets:
+                cleaned = [str(snippets)]
+            else:
+                cleaned = []
+            snippet_map[cat] = cleaned
+            category_counts[cat] = category_counts.get(cat, 0) + len(cleaned)
 
-        html_parts.append(f"<div style='margin-bottom:1em'>{text}</div>")
+        header_rows: List[Tuple[str, str]] = []
+        for column, label in normalized_headers:
+            value = row.get(column)
+            formatted = _format_header_value(value)
+            if formatted:
+                header_rows.append((label, formatted))
 
-    display(HTML("\n".join(html_parts)))
+        active_categories = [cat for cat, snippets in snippet_map.items() if snippets]
+        passages.append(
+            {
+                "text": text,
+                "snippets": snippet_map,
+                "header": header_rows,
+                "active": active_categories,
+            }
+        )
+
+    legend_html = _build_legend_html(category_colors, category_counts)
+    total = len(passages)
+
+    try:  # pragma: no cover - optional dependency
+        import ipywidgets as widgets  # type: ignore
+    except Exception:  # pragma: no cover - optional dependency
+        widgets = None  # type: ignore
+
+    if widgets is not None:
+        display(HTML(_COLAB_STYLE))
+
+        if total == 0:
+            display(
+                widgets.HTML(
+                    "<div class='gabriel-codify-viewer gabriel-empty'>No passages to display.</div>"
+                )
+            )
+            return
+
+        status = widgets.HTML()
+        slider = widgets.IntSlider(
+            min=1,
+            max=total,
+            value=1,
+            description="Passage",
+            continuous_update=False,
+        )
+        slider.layout = widgets.Layout(width="100%")
+
+        prev_button = widgets.Button(description="◀ Previous")
+        next_button = widgets.Button(description="Next ▶")
+        random_button = widgets.Button(description="🎲 Random")
+
+        controls_box = widgets.HBox([prev_button, next_button, random_button, slider])
+        try:
+            controls_box.add_class("gabriel-controls")
+        except Exception:  # pragma: no cover - best effort styling
+            pass
+
+        passage_display = widgets.HTML()
+        passage_display.layout = widgets.Layout(width="100%")
+
+        current = {"idx": 0}
+
+        def _render(index: int) -> None:
+            if total == 0:
+                return
+            index = max(0, min(total - 1, index))
+            current["idx"] = index
+            payload = passages[index]
+            body_html = _build_highlighted_text(
+                payload["text"], payload["snippets"], category_colors
+            )
+            header_html = _build_header_html(payload["header"], payload["active"])
+            passage_html = (
+                "<div class='gabriel-codify-viewer'><div class='gabriel-passage-panel'>"
+                "<div class='gabriel-passage-scroll'>"
+                f"{legend_html}{header_html}<div class='gabriel-text'>{body_html}</div>"
+                "</div></div></div>"
+            )
+            passage_display.value = passage_html
+            status.value = (
+                "<div class='gabriel-codify-viewer'><div class='gabriel-status'>Passage "
+                f"<strong>{index + 1}</strong> of {total}</div></div>"
+            )
+            if slider.value != index + 1:
+                slider.value = index + 1
+
+        def _prev(_event: Any) -> None:
+            new_index = (current["idx"] - 1) % total
+            _render(new_index)
+
+        def _next(_event: Any) -> None:
+            new_index = (current["idx"] + 1) % total
+            _render(new_index)
+
+        def _random(_event: Any) -> None:
+            new_index = random.randrange(total)
+            _render(new_index)
+
+        def _slider_change(change: Dict[str, Any]) -> None:
+            if change.get("name") == "value" and isinstance(change.get("new"), int):
+                _render(change["new"] - 1)
+
+        prev_button.on_click(_prev)
+        next_button.on_click(_next)
+        random_button.on_click(_random)
+        slider.observe(_slider_change, names="value")
+
+        ui = widgets.VBox([status, controls_box, passage_display])
+        display(ui)
+        _render(0)
+        return
+
+    html_parts: List[str] = [_COLAB_STYLE, "<div class='gabriel-codify-viewer'>"]
+    if total == 0:
+        html_parts.append("<div class='gabriel-empty'>No passages to display.</div>")
+    else:
+        for idx, payload in enumerate(passages):
+            body_html = _build_highlighted_text(
+                payload["text"], payload["snippets"], category_colors
+            )
+            header_html = _build_header_html(payload["header"], payload["active"])
+            html_parts.append("<div class='gabriel-passage-panel' style='margin-bottom:18px'>")
+            html_parts.append(
+                f"<div class='gabriel-status'>Passage <strong>{idx + 1}</strong> of {total}</div>"
+            )
+            html_parts.append(
+                "<div class='gabriel-passage-scroll'>"
+                f"{legend_html}{header_html}<div class='gabriel-text'>{body_html}</div>"
+                "</div>"
+            )
+            html_parts.append("</div>")
+    html_parts.append("</div>")
+    display(HTML("".join(html_parts)))
 
 
 def view_coded_passages(
@@ -595,6 +1058,7 @@ def view_coded_passages(
     column_name: str,
     categories: Optional[Union[List[str], str]] = None,
     colab: bool = False,
+    header_columns: Optional[Union[Sequence[Any], Any]] = None,
 ):
     """View coded passages.
 
@@ -611,10 +1075,20 @@ def view_coded_passages(
         When ``True``, use the lightweight HTML viewer that works in Google
         Colab or other headless notebook environments. The default ``False``
         launches the full ``tkinter`` GUI.
+    header_columns:
+        Optional sequence of column names (or ``(column, label)`` tuples)
+        displayed above each passage when using the viewer. The values are
+        rendered in the order provided, allowing quick inspection of metadata
+        such as speaker names or timestamps.
     """
 
     if colab:
-        _view_coded_passages_colab(df, column_name, categories)
+        _view_coded_passages_colab(
+            df,
+            column_name,
+            categories,
+            header_columns=header_columns,
+        )
         return None
 
     viewer = PassageViewer(df, column_name, categories)
