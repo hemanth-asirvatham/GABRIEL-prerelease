@@ -1050,7 +1050,7 @@ def view_coded_passages(
     df: pd.DataFrame,
     column_name: str,
     categories: Optional[Union[list[str], str]] = None,
-    colab: bool = False,
+    colab: bool = True,
     header_columns: Optional[Any] = None,
 ):
     """Convenience wrapper for the passage viewer utility."""

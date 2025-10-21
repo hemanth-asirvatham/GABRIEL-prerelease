@@ -8,7 +8,7 @@ def test_view_coded_passages_colab_runs():
 
     df = pd.DataFrame({"text": ["A snippet"], "cat": [["A snippet"]]})
     # Should not raise when using the lightweight HTML viewer
-    view_coded_passages(df, "text", ["cat"], colab=True)
+    view_coded_passages(df, "text", ["cat"])
 
 
 def test_view_coded_passages_colab_with_headers():
@@ -26,7 +26,6 @@ def test_view_coded_passages_colab_with_headers():
         df,
         "text",
         ["cat"],
-        colab=True,
         header_columns=["speaker"],
     )
 
@@ -48,6 +47,5 @@ def test_top_level_view_coded_passages_colab_runs():
         df,
         "text",
         ["cat"],
-        colab=True,
         header_columns=["speaker"],
     )

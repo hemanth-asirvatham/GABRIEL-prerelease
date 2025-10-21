@@ -1250,7 +1250,7 @@ def view_coded_passages(
     df: pd.DataFrame,
     column_name: str,
     categories: Optional[Union[List[str], str]] = None,
-    colab: bool = False,
+    colab: bool = True,
     header_columns: Optional[Union[Sequence[Any], Any]] = None,
 ):
     """View coded passages.
@@ -1265,9 +1265,9 @@ def view_coded_passages(
         Either a list of category column names or ``"coded_passages"`` for
         dynamic dictionaries.
     colab:
-        When ``True``, use the lightweight HTML viewer that works in Google
-        Colab or other headless notebook environments. The default ``False``
-        launches the full ``tkinter`` GUI.
+        When ``True`` (the default), use the lightweight HTML viewer that
+        works in Google Colab or other headless notebook environments.
+        Passing ``False`` launches the full ``tkinter`` GUI.
     header_columns:
         Optional sequence of column names (or ``(column, label)`` tuples)
         displayed above each passage when using the viewer. The values are
