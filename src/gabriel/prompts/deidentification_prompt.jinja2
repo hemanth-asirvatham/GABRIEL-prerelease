@@ -19,12 +19,6 @@ We don't want to override even very personal and sensitive details; we only wish
 Someone's hobbies and opinions are not identifying information and should be retained; their name and address are identifying information and should be anonymized.
 Similarly, "my mother" or a common workplace name like "Target" should not be included in the mapping dictionary, only include cases where the term could easily be used to identify an individual, where they live, and other PII.
 
-{% if additional_instructions %}
-Follow these additional de-identification guidelines carefully:
-{{ additional_instructions }}
-The guidelines should be followed strictly, and you should focus on thorough compliance with them. They take precedence over the default instructions.
-{% endif %}
-
 For each entity, output an object with two fields:
 - "real forms": list of verbatim strings exactly as they appear in the text across all processed chunks
 - "casted form": your chosen anonymized substitute, ideally matching the original's style (e.g., similar cultural background for names, similar city for hometown). Choose a conceptually close substitute that conveys the essence of the original entity without revealing the original identity
@@ -67,12 +61,6 @@ Current mapping:
 
 If there is no existing mapping provided above, start a new one from scratch.
 
-{% if additional_instructions %}
-Follow these additional de-identification guidelines carefully:
-{{ additional_instructions }}
-The guidelines should be followed strictly, and you should focus on thorough compliance with them. They take precedence over the default instructions.
-{% endif %}
-
 Return the full mapping dictionary as JSON, retaining all existing entries and adding only. Do not include any narrative or explanation outside the JSON object.
 Ensure the real forms are verbatim as they appear in the text.
 The keys like "younger son's name" should be descriptive and concise, as precise as you can confidently make them.
@@ -113,3 +101,12 @@ Ensure that you do not confuse two distinct entities by assigning them the same 
 Map to casted forms that are conceptually close to the original and carry the same meaning, like a real similar sized city or an ethnically similar name.
 Only map to fictitious casted forms if necessary; otherwise, map to a casted form that is real and exists, like a real city or a real neighborhood.
 Have some creativity and stochasticity with choosing casted forms and don't just default to the same names/places every time.
+
+{% if additional_instructions %}
+The user has provided the following additional instructions, clarifications, or labelled examples (if these provided, rely heavily on them to calibrate your judgment).
+If they conflict with the other instructions, these user instructions take precedence.
+
+BEGIN ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{{ additional_instructions }}
+END ADDITIONAL INSTRUCTIONS/CLARIFICATIONS
+{% endif %}
