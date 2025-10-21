@@ -68,6 +68,14 @@ class IdeateConfig:
     seed_additional_instructions: Optional[str] = None
     seed_template_path: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
+        if self.seed_additional_instructions is not None:
+            cleaned_seed = str(self.seed_additional_instructions).strip()
+            self.seed_additional_instructions = cleaned_seed or None
+
 
 class Ideate:
     """Generate and optionally score frontier scientific theories."""

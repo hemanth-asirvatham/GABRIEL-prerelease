@@ -35,6 +35,11 @@ class CompareConfig:
     reasoning_summary: Optional[str] = None
     circle_first: Optional[bool] = None
 
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
+
 
 class Compare:
     """Compare two columns row-wise using an LLM."""

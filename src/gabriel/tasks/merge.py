@@ -42,6 +42,11 @@ class MergeConfig:
     use_best_auto_match: bool = False
     candidate_scan_chunks: int = 5
 
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
+
 
 class Merge:
     """Fuzzy merge between two DataFrames using LLM assistance."""

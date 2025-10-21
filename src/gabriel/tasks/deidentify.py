@@ -30,8 +30,7 @@ class DeidentifyConfig:
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     max_words_per_call: int = 7500
-    guidelines: str = ""
-    additional_guidelines: str = ""
+    additional_instructions: Optional[str] = None
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
     n_passes: int = 1
@@ -40,6 +39,9 @@ class DeidentifyConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.n_passes, int) or self.n_passes < 1:
             raise ValueError("n_passes must be an integer >= 1")
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
 
 
 # ────────────────────────────
@@ -249,8 +251,7 @@ class Deidentifier:
                                 current_map=json.dumps(
                                     group_to_map.get(gid, {}), ensure_ascii=False
                                 ),
-                                guidelines=self.cfg.guidelines,
-                                additional_guidelines=self.cfg.additional_guidelines,
+                                additional_instructions=self.cfg.additional_instructions,
                             )
                         )
 

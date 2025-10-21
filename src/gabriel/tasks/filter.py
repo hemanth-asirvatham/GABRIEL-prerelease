@@ -27,11 +27,16 @@ class FilterConfig:
     random_seed: int = 42
     n_runs: int = 1
     threshold: float = 0.5
-    additional_instructions: str = ""
+    additional_instructions: Optional[str] = None
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     fix_json_with_llm: bool = False
     json_fix_timeout: Optional[float] = 60.0
+
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
 
 
 class Filter:

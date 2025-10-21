@@ -37,6 +37,11 @@ class BucketConfig:
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
+
 
 class Bucket:
     """Group raw terms into a smaller set of mutually exclusive buckets."""
