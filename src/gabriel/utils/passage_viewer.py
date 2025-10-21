@@ -6,7 +6,9 @@ except Exception:  # pragma: no cover - optional dependency
     ttk = None  # type: ignore
     scrolledtext = None  # type: ignore
 
+import ast
 import html
+import json
 import pandas as pd
 import random
 import re
@@ -55,6 +57,28 @@ def _generate_distinct_colors(n: int) -> List[str]:
         )
     return base_colors[:n]
 
+def _coerce_category_spec(
+    categories: Optional[Union[Sequence[Any], Any]]
+) -> Optional[Union[List[str], str]]:
+    """Normalize the ``categories`` argument into a predictable form."""
+
+    if categories is None:
+        return None
+
+    if isinstance(categories, str):
+        return categories if categories == "coded_passages" else [categories]
+
+    if isinstance(categories, Iterable):
+        normalized: List[str] = []
+        for item in categories:
+            if item is None:
+                continue
+            normalized.append(str(item))
+        return normalized
+
+    return [str(categories)]
+
+
 class PassageViewer:
     def __init__(self, df: pd.DataFrame, column_name: str, categories: Optional[Union[List[str], str]] = None):
         self.df = df.copy()
@@ -63,24 +87,24 @@ class PassageViewer:
         self.last_tooltip_cats = None
         self.selected_snippet_tag = None
         self.dark_mode = True  # Default to dark mode
+        category_spec = _coerce_category_spec(categories)
+        self.df = _normalize_structured_dataframe(self.df, category_spec)
         # Detect mode: static categories or dynamic coded_passages
-        if categories is None and 'coded_passages' in df.columns:
+        if (
+            category_spec is None
+            and "coded_passages" in self.df.columns
+        ):
             self.dynamic_mode = True
-            all_categories = set()
-            for coded_passages in df['coded_passages']:
-                if coded_passages and isinstance(coded_passages, dict):
-                    all_categories.update(coded_passages.keys())
-            self.categories = sorted(list(all_categories))
-        elif isinstance(categories, str) and categories == 'coded_passages':
+            self.categories = _extract_categories_from_coded_passages(self.df)
+        elif category_spec == 'coded_passages':
             self.dynamic_mode = True
-            all_categories = set()
-            for coded_passages in df['coded_passages']:
-                if coded_passages and isinstance(coded_passages, dict):
-                    all_categories.update(coded_passages.keys())
-            self.categories = sorted(list(all_categories))
+            if 'coded_passages' in self.df.columns:
+                self.categories = _extract_categories_from_coded_passages(self.df)
+            else:
+                self.categories = []
         else:
             self.dynamic_mode = False
-            self.categories = categories if categories else []
+            self.categories = list(category_spec) if category_spec else []
         self.colors = _generate_distinct_colors(len(self.categories))
         self.category_colors = dict(zip(self.categories, self.colors))
         self.tooltip = None
@@ -355,39 +379,34 @@ class PassageViewer:
         self.category_snippet_positions = {cat: [] for cat in self.categories}
         if self.dynamic_mode:
             coded_passages = row['coded_passages'] if 'coded_passages' in row else {}
-            for category in self.categories:
-                if category in coded_passages and coded_passages[category]:
-                    snippets = coded_passages[category]
-                    if isinstance(snippets, list):
-                        for snippet in snippets:
-                            if snippet and isinstance(snippet, str):
-                                start_pos, end_pos = self._find_text_position(text, snippet)
-                                if start_pos is not None:
-                                    highlights.append({
-                                        'start': start_pos,
-                                        'end': end_pos,
-                                        'category': category,
-                                        'snippet': snippet
-                                    })
-                                    self.category_snippet_positions[category].append((start_pos, end_pos))
-                                    snippet_count += 1
+            if isinstance(coded_passages, dict):
+                for category in self.categories:
+                    snippets = _coerce_snippet_list(coded_passages.get(category, []))
+                    for snippet in snippets:
+                        start_pos, end_pos = self._find_text_position(text, snippet)
+                        if start_pos is not None:
+                            highlights.append({
+                                'start': start_pos,
+                                'end': end_pos,
+                                'category': category,
+                                'snippet': snippet
+                            })
+                            self.category_snippet_positions[category].append((start_pos, end_pos))
+                            snippet_count += 1
         else:
             for category in self.categories:
-                if category in row and row[category]:
-                    snippets = row[category]
-                    if isinstance(snippets, list):
-                        for snippet in snippets:
-                            if snippet and isinstance(snippet, str):
-                                start_pos, end_pos = self._find_text_position(text, snippet)
-                                if start_pos is not None:
-                                    highlights.append({
-                                        'start': start_pos,
-                                        'end': end_pos,
-                                        'category': category,
-                                        'snippet': snippet
-                                    })
-                                    self.category_snippet_positions[category].append((start_pos, end_pos))
-                                    snippet_count += 1
+                snippets = _coerce_snippet_list(row.get(category, []))
+                for snippet in snippets:
+                    start_pos, end_pos = self._find_text_position(text, snippet)
+                    if start_pos is not None:
+                        highlights.append({
+                            'start': start_pos,
+                            'end': end_pos,
+                            'category': category,
+                            'snippet': snippet
+                        })
+                        self.category_snippet_positions[category].append((start_pos, end_pos))
+                        snippet_count += 1
         highlights.sort(key=lambda x: x['start'])
         self.text_widget.tag_remove('highlight', '1.0', tk.END)
         for tag in self.text_widget.tag_names():
@@ -878,6 +897,112 @@ def _is_na(value: Any) -> bool:
     return False
 
 
+def _parse_structured_cell(value: Any) -> Any:
+    """Attempt to parse serialized list/dict values from CSV/JSON sources."""
+
+    if not isinstance(value, str):
+        return value
+
+    stripped = value.strip()
+    if not stripped:
+        return []
+
+    lowered = stripped.lower()
+    if lowered in {"nan", "none", "null", "n/a"}:
+        return None
+
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            return loader(stripped)
+        except Exception:
+            continue
+
+    return value
+
+
+def _coerce_snippet_list(value: Any) -> List[str]:
+    parsed = _parse_structured_cell(value)
+
+    if _is_na(parsed) or parsed is None:
+        return []
+
+    if isinstance(parsed, str):
+        return [parsed] if parsed.strip() else []
+
+    if isinstance(parsed, (list, tuple, set)):
+        snippets: List[str] = []
+        for item in parsed:
+            if _is_na(item) or item is None:
+                continue
+            text = str(item)
+            if text.strip():
+                snippets.append(text)
+        return snippets
+
+    text = str(parsed)
+    return [text] if text.strip() else []
+
+
+def _coerce_coded_passage_map(value: Any) -> Dict[str, List[str]]:
+    parsed = _parse_structured_cell(value)
+
+    if _is_na(parsed) or parsed is None:
+        return {}
+
+    if isinstance(parsed, dict):
+        normalized: Dict[str, List[str]] = {}
+        for key, snippets in parsed.items():
+            if _is_na(key) or key is None:
+                continue
+            cat = str(key)
+            normalized[cat] = _coerce_snippet_list(snippets)
+        return normalized
+
+    if isinstance(parsed, (list, tuple)):
+        aggregated: Dict[str, List[str]] = {}
+        for entry in parsed:
+            if isinstance(entry, dict):
+                for key, snippets in entry.items():
+                    cat = str(key)
+                    aggregated.setdefault(cat, []).extend(_coerce_snippet_list(snippets))
+        return aggregated
+
+    return {}
+
+
+def _normalize_structured_dataframe(
+    df: pd.DataFrame,
+    categories: Optional[Union[List[str], str]],
+) -> pd.DataFrame:
+    if "coded_passages" in df.columns:
+        df["coded_passages"] = df["coded_passages"].apply(_coerce_coded_passage_map)
+
+    category_columns: Iterable[str]
+    if categories is None or categories == "coded_passages":
+        category_columns = []
+    else:
+        category_columns = categories
+
+    for column in category_columns:
+        if column in df.columns:
+            df[column] = df[column].apply(_coerce_snippet_list)
+
+    return df
+
+
+def _extract_categories_from_coded_passages(df: pd.DataFrame) -> List[str]:
+    if "coded_passages" not in df.columns:
+        return []
+
+    all_categories = set()
+    for entry in df["coded_passages"]:
+        if isinstance(entry, dict):
+            for key in entry.keys():
+                all_categories.add(str(key))
+
+    return sorted(all_categories)
+
+
 def _format_header_value(value: Any) -> str:
     if _is_na(value):
         return ""
@@ -1044,29 +1169,22 @@ def _view_coded_passages_colab(
     from IPython.display import HTML, display  # pragma: no cover - optional
 
     df = df.copy()
+    category_spec = _coerce_category_spec(categories)
+    df = _normalize_structured_dataframe(df, category_spec)
 
-    # Detect categories in the same way as :class:`PassageViewer`.
-    if categories is None and "coded_passages" in df.columns:
+    if category_spec is None and "coded_passages" in df.columns:
         dynamic_mode = True
-        all_categories = set()
-        for coded_passages in df["coded_passages"]:
-            if coded_passages and isinstance(coded_passages, dict):
-                all_categories.update(coded_passages.keys())
-        categories = sorted(list(all_categories))
-    elif isinstance(categories, str) and categories == "coded_passages":
+        category_names = _extract_categories_from_coded_passages(df)
+    elif category_spec == "coded_passages":
         dynamic_mode = True
-        all_categories = set()
-        for coded_passages in df["coded_passages"]:
-            if coded_passages and isinstance(coded_passages, dict):
-                all_categories.update(coded_passages.keys())
-        categories = sorted(list(all_categories))
+        category_names = _extract_categories_from_coded_passages(df)
     else:
         dynamic_mode = False
-        categories = categories if categories else []
+        category_names = list(category_spec) if category_spec else []
 
     normalized_headers = _normalize_header_columns(header_columns)
-    colors = _generate_distinct_colors(len(categories))
-    category_colors = dict(zip(categories, colors))
+    colors = _generate_distinct_colors(len(category_names))
+    category_colors = dict(zip(category_names, colors))
 
     passages: List[Dict[str, Any]] = []
 
@@ -1078,28 +1196,14 @@ def _view_coded_passages_colab(
             raw_map = row.get("coded_passages")
             snippet_source = raw_map if isinstance(raw_map, dict) else {}
         else:
-            snippet_source = {cat: row.get(cat, []) for cat in categories}
+            snippet_source = {cat: row.get(cat, []) for cat in category_names}
 
-        snippet_map: Dict[str, List[str]] = {cat: [] for cat in categories}
+        snippet_map: Dict[str, List[str]] = {cat: [] for cat in category_names}
         for cat, snippets in snippet_source.items():
-            if cat not in category_colors:
+            cat_key = str(cat)
+            if cat_key not in category_colors:
                 continue
-            cleaned: List[str]
-            if isinstance(snippets, str):
-                cleaned = [snippets]
-            elif isinstance(snippets, (list, tuple, set)):
-                cleaned = [
-                    str(item)
-                    for item in snippets
-                    if item is not None and not _is_na(item) and str(item)
-                ]
-            elif _is_na(snippets) or snippets is None:
-                cleaned = []
-            elif snippets:
-                cleaned = [str(snippets)]
-            else:
-                cleaned = []
-            snippet_map[cat] = cleaned
+            snippet_map[cat_key] = _coerce_snippet_list(snippets)
 
         header_rows: List[Tuple[str, str]] = []
         for column, label in normalized_headers:
@@ -1111,7 +1215,7 @@ def _view_coded_passages_colab(
         active_categories = [cat for cat, snippets in snippet_map.items() if snippets]
         passage_counts = {
             cat: len(snippet_map.get(cat, []))
-            for cat in categories
+            for cat in category_names
         }
         passages.append(
             {
