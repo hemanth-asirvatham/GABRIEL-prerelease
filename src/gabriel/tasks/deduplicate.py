@@ -31,6 +31,11 @@ class DeduplicateConfig:
     use_embeddings: bool = True
     group_size: int = 500
 
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
+
 
 class Deduplicate:
     """LLM-assisted deduplication for a single DataFrame column."""

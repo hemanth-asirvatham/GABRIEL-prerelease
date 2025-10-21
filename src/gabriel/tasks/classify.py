@@ -51,8 +51,7 @@ class ClassifyConfig:
     n_parallels: int = 750
     n_runs: int = 1
     min_frequency: float = 0.6
-    additional_instructions: str = ""
-    additional_guidelines: str = ""
+    additional_instructions: Optional[str] = None
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     modality: str = "text"
@@ -61,6 +60,11 @@ class ClassifyConfig:
     reasoning_summary: Optional[str] = None
     differentiate: bool = False
     circle_first: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
 
 
 # ────────────────────────────
@@ -216,7 +220,6 @@ class Classify:
                             entry_square=prompt_squares[ident],
                             attributes=batch_labels,
                             additional_instructions=self.cfg.additional_instructions,
-                            additional_guidelines=self.cfg.additional_guidelines,
                             differentiate=True,
                             modality=self.cfg.modality,
                             circle_first=id_to_circle_first[ident],
@@ -245,7 +248,6 @@ class Classify:
                             text=prompt_texts[ident],
                             attributes=batch_labels,
                             additional_instructions=self.cfg.additional_instructions,
-                            additional_guidelines=self.cfg.additional_guidelines,
                             modality=self.cfg.modality,
                         )
                     )

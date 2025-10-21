@@ -158,7 +158,7 @@ class RankConfig:
     use_dummy: bool = False
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "rankings"
-    additional_instructions: str = ""
+    additional_instructions: Optional[str] = None
     circle_first: Optional[bool] = None
     modality: str = "text"
     n_attributes_per_run: int = 8
@@ -180,6 +180,11 @@ class RankConfig:
     # Optional single pass rating seed controls
     initial_rating_pass: bool = False
     rate_kwargs: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
 
 
 class Rank:
@@ -1922,3 +1927,4 @@ class Rank:
         # After processing all rounds, return the final DataFrame
         # The checkpoint has already been written in the final iteration
         return pd.read_csv(final_path)
+

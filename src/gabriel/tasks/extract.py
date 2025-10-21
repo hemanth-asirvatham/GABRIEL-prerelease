@@ -12,7 +12,11 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, load_image_inputs, load_audio_inputs
+from ..utils import (
+    safest_json,
+    load_image_inputs,
+    load_audio_inputs,
+)
 
 
 @dataclass
@@ -30,6 +34,11 @@ class ExtractConfig:
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.additional_instructions is not None:
+            cleaned = str(self.additional_instructions).strip()
+            self.additional_instructions = cleaned or None
 
 
 class Extract:
