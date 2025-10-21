@@ -18,15 +18,11 @@ Importantly, all personal details that are not identifying should be retained an
 We don't want to override even very personal and sensitive details; we only wish to anonymize all information that would be easily identifying.
 Someone's hobbies and opinions are not identifying information and should be retained; their name and address are identifying information and should be anonymized.
 Similarly, "my mother" or a common workplace name like "Target" should not be included in the mapping dictionary, only include cases where the term could easily be used to identify an individual, where they live, and other PII.
-{% if guidelines %}
-Follow these additional de-identification guidelines carefully:
-{{ guidelines }}
-The guidelines should be followed strictly, and you should focus on thorough compliance with them. They take precedence over the default instructions.
-{% endif %}
 
-{% if additional_guidelines %}
-In addition, please take the following into account:
-{{ additional_guidelines }}
+{% if additional_instructions %}
+Follow these additional de-identification guidelines carefully:
+{{ additional_instructions }}
+The guidelines should be followed strictly, and you should focus on thorough compliance with them. They take precedence over the default instructions.
 {% endif %}
 
 For each entity, output an object with two fields:
@@ -71,15 +67,10 @@ Current mapping:
 
 If there is no existing mapping provided above, start a new one from scratch.
 
-{% if guidelines %}
+{% if additional_instructions %}
 Follow these additional de-identification guidelines carefully:
-{{ guidelines }}
-The guidelines should be followed strictly, and you should focus on thorough compliance with them.
-{% endif %}
-
-{% if additional_guidelines %}
-In addition, please take the following into account:
-{{ additional_guidelines }}
+{{ additional_instructions }}
+The guidelines should be followed strictly, and you should focus on thorough compliance with them. They take precedence over the default instructions.
 {% endif %}
 
 Return the full mapping dictionary as JSON, retaining all existing entries and adding only. Do not include any narrative or explanation outside the JSON object.
