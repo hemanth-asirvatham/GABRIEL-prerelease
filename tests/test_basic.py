@@ -607,6 +607,38 @@ def test_deidentifier_dummy(tmp_path):
     assert "deidentified_text" in df.columns
 
 
+def test_deidentifier_respects_punctuation_in_real_forms(tmp_path):
+    cfg = DeidentifyConfig(
+        save_dir=str(tmp_path),
+        file_name="deid.csv",
+        use_dummy=True,
+        use_existing_mappings_only=True,
+    )
+    task = Deidentifier(cfg)
+    mapping = {
+        "person's name": {
+            "real forms": ["Gabriel R.", "Gabriel R"],
+            "casted form": "Miles P.",
+        }
+    }
+    data = pd.DataFrame(
+        {
+            "text": ["Gabriel R. met with Gabriel R at the library."],
+            "existing_map": [mapping],
+        }
+    )
+    df = asyncio.run(
+        task.run(
+            data,
+            column_name="text",
+            mapping_column="existing_map",
+        )
+    )
+    output = df["deidentified_text"].iloc[0]
+    assert output.count("Miles P.") == 2
+    assert "Gabriel R" not in output
+
+
 def test_classification_dummy(tmp_path):
     cfg = ClassifyConfig(labels={"yes": ""}, save_dir=str(tmp_path), use_dummy=True)
     task = Classify(cfg)

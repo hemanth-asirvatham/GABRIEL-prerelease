@@ -301,7 +301,10 @@ class Deidentifier:
                             pairs.append((real, casted))
             pairs.sort(key=lambda x: len(x[0]), reverse=True)
             for real, casted in pairs:
-                pattern = re.compile(rf"\b{re.escape(real)}\b", flags=re.IGNORECASE)
+                escaped = re.escape(real)
+                pattern = re.compile(
+                    rf"(?<!\w){escaped}(?!\w)", flags=re.IGNORECASE
+                )
                 deid_text = pattern.sub(casted, deid_text)
             deidentified_texts.append(deid_text)
 
