@@ -800,6 +800,69 @@ def test_whatever_dataframe_inputs(tmp_path, monkeypatch):
     assert result.shape[0] == 2
 
 
+def test_whatever_dataframe_kwarg(tmp_path, monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    async def fake_get_all_responses(**kwargs):
+        captured.update(kwargs)
+        identifiers = kwargs["identifiers"]
+        df = pd.DataFrame(
+            {
+                "Identifier": identifiers,
+                "Response": [["OK"] for _ in identifiers],
+                "Successful": [True for _ in identifiers],
+                "Error Log": [[] for _ in identifiers],
+                "Time Taken": [0.1 for _ in identifiers],
+                "Input Tokens": [1 for _ in identifiers],
+                "Reasoning Tokens": [0 for _ in identifiers],
+                "Output Tokens": [1 for _ in identifiers],
+                "Reasoning Effort": [None for _ in identifiers],
+            }
+        )
+        return df
+
+    monkeypatch.setattr("gabriel.tasks.whatever.get_all_responses", fake_get_all_responses)
+
+    data = pd.DataFrame(
+        {
+            "prompt": ["Hi", "Bye"],
+            "img": [["img1"], None],
+            "aud": [None, [{"data": "a", "format": "mp3"}]],
+            "city_col": ["Austin", "Paris"],
+            "domains": [["example.com"], ["news.com", "blog.com"]],
+            "ident": ["row1", "row2"],
+        }
+    )
+
+    result = asyncio.run(
+        gabriel.whatever(
+            save_dir=str(tmp_path / "whatever_kwarg"),
+            df=data,
+            column_name="prompt",
+            identifier_column="ident",
+            image_column="img",
+            audio_column="aud",
+            web_search_filters={"city": "city_col", "allowed_domains": "domains"},
+            use_dummy=True,
+        )
+    )
+
+    assert captured["prompts"] == ["Hi", "Bye"]
+    assert captured["identifiers"] == ["row1", "row2"]
+    assert captured["prompt_images"]["row1"] == ["img1"]
+    assert "row2" not in captured["prompt_images"]
+    assert captured["prompt_audio"]["row2"][0]["format"] == "mp3"
+    assert captured["prompt_web_search_filters"]["row1"] == {
+        "city": "Austin",
+        "allowed_domains": ["example.com"],
+    }
+    assert captured["prompt_web_search_filters"]["row2"]["allowed_domains"] == [
+        "news.com",
+        "blog.com",
+    ]
+    assert result.shape[0] == 2
+
+
 def test_paraphrase_api(tmp_path):
     data = pd.DataFrame({"txt": ["hello"]})
     df = asyncio.run(

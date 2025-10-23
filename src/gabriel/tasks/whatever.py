@@ -121,8 +121,9 @@ class Whatever:
 
     async def run(
         self,
-        data: Union[str, List[str], pd.DataFrame],
+        prompts: Optional[Union[str, List[str], pd.DataFrame]] = None,
         *,
+        df: Optional[pd.DataFrame] = None,
         identifiers: Optional[List[str]] = None,
         column_name: Optional[str] = None,
         identifier_column: Optional[str] = None,
@@ -156,23 +157,27 @@ class Whatever:
         df_filters: Optional[Dict[str, Dict[str, Any]]] = None
         global_filters: Optional[Dict[str, Any]] = filters_spec or None
 
-        if isinstance(data, pd.DataFrame):
+        source_data = df if df is not None else prompts
+        if source_data is None:
+            raise ValueError("Either prompts or df must be provided to Whatever.run")
+
+        if isinstance(source_data, pd.DataFrame):
             if column_name is None:
                 raise ValueError("column_name must be provided when passing a DataFrame")
-            if column_name not in data.columns:
+            if column_name not in source_data.columns:
                 raise ValueError(f"Column '{column_name}' not found in DataFrame")
-            df = data.reset_index(drop=True)
-            prompt_series = df[column_name]
+            df_input = source_data.reset_index(drop=True)
+            prompt_series = df_input[column_name]
             prompt_values = [
                 "" if self._is_missing(val) else str(val)
                 for val in prompt_series.tolist()
             ]
             if identifier_column is not None:
-                if identifier_column not in df.columns:
+                if identifier_column not in df_input.columns:
                     raise ValueError(
                         f"Identifier column '{identifier_column}' not found in DataFrame"
                     )
-                identifiers_list = [str(i) for i in df[identifier_column].tolist()]
+                identifiers_list = [str(i) for i in df_input[identifier_column].tolist()]
                 if len(set(identifiers_list)) != len(identifiers_list):
                     raise ValueError("identifier_column must contain unique values")
             else:
@@ -180,22 +185,22 @@ class Whatever:
 
             image_map: Dict[str, List[str]] = {}
             if image_column is not None:
-                if image_column not in df.columns:
+                if image_column not in df_input.columns:
                     raise ValueError(
                         f"Image column '{image_column}' not found in DataFrame"
                     )
-                for ident, cell in zip(identifiers_list, df[image_column]):
+                for ident, cell in zip(identifiers_list, df_input[image_column]):
                     imgs = load_image_inputs(cell)
                     if imgs:
                         image_map[str(ident)] = imgs
 
             audio_map: Dict[str, List[Dict[str, str]]] = {}
             if audio_column is not None:
-                if audio_column not in df.columns:
+                if audio_column not in df_input.columns:
                     raise ValueError(
                         f"Audio column '{audio_column}' not found in DataFrame"
                     )
-                for ident, cell in zip(identifiers_list, df[audio_column]):
+                for ident, cell in zip(identifiers_list, df_input[audio_column]):
                     auds = load_audio_inputs(cell)
                     if auds:
                         audio_map[str(ident)] = auds
@@ -203,9 +208,9 @@ class Whatever:
             column_filters: Dict[str, str] = {}
             base_filters: Dict[str, Any] = {}
             for key, spec in filters_spec.items():
-                if isinstance(spec, str) and spec in df.columns:
+                if isinstance(spec, str) and spec in df_input.columns:
                     column_filters[key] = spec
-                elif key == "allowed_domains" and isinstance(spec, str) and spec in df.columns:
+                elif key == "allowed_domains" and isinstance(spec, str) and spec in df_input.columns:
                     column_filters[key] = spec
                 else:
                     base_filters[key] = spec
@@ -213,7 +218,7 @@ class Whatever:
             per_prompt_filters: Dict[str, Dict[str, Any]] = {}
             if column_filters:
                 for idx, ident in enumerate(identifiers_list):
-                    row = df.iloc[idx]
+                    row = df_input.iloc[idx]
                     row_filters: Dict[str, Any] = {}
                     for key, col in column_filters.items():
                         value = row.get(col)
@@ -234,10 +239,10 @@ class Whatever:
 
             prompts_list = prompt_values
         else:
-            if isinstance(data, str):
-                prompts_list = [data]
+            if isinstance(source_data, str):
+                prompts_list = [source_data]
             else:
-                prompts_list = [str(p) for p in data]
+                prompts_list = [str(p) for p in source_data]
             identifiers_list = self._generate_identifiers(
                 prompts_list, identifiers
             )

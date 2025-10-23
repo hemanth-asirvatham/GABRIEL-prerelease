@@ -956,10 +956,11 @@ async def debias(
 
 
 async def whatever(
-    prompts: Union[str, list[str], pd.DataFrame],
+    prompts: Optional[Union[str, list[str], pd.DataFrame]] = None,
     identifiers: Optional[list[str]] = None,
     *,
     save_dir: str,
+    df: Optional[pd.DataFrame] = None,
     column_name: Optional[str] = None,
     identifier_column: Optional[str] = None,
     image_column: Optional[str] = None,
@@ -993,6 +994,9 @@ async def whatever(
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
+
+    if df is None and prompts is None:
+        raise ValueError("Either prompts or df must be provided to `whatever`.")
 
     if web_search is None and "web_search" in kwargs:
         web_search = kwargs.pop("web_search")
@@ -1031,6 +1035,7 @@ async def whatever(
     runner = Whatever(cfg)
     return await runner.run(
         prompts,
+        df=df,
         identifiers=identifiers,
         column_name=column_name,
         identifier_column=identifier_column,
