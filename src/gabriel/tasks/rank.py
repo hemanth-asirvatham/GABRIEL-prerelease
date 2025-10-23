@@ -59,7 +59,7 @@ import pandas as pd
 # expected to be available in the runtime environment.  Should you wish
 # to run this module outside of the GABRIEL distribution, you may need
 # to adjust these imports accordingly.
-from gabriel.core.prompt_template import PromptTemplate
+from gabriel.core.prompt_template import PromptTemplate, resolve_template
 from gabriel.utils.openai_utils import get_all_responses
 from gabriel.utils import (
     safest_json,
@@ -223,14 +223,10 @@ class Rank:
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
         self.cfg = cfg
-        if template is not None and template_path is not None:
-            raise ValueError("Provide either template or template_path, not both")
-        if template_path is not None:
-            template = PromptTemplate.from_file(
-                template_path, reference_filename="rankings_prompt.jinja2"
-            )
-        self.template = template or PromptTemplate.from_package(
-            "rankings_prompt.jinja2"
+        self.template = resolve_template(
+            template=template,
+            template_path=template_path,
+            reference_filename="rankings_prompt.jinja2",
         )
         # random state; a seed is intentionally omitted from the public
         # configuration to discourage brittle behaviour.  If

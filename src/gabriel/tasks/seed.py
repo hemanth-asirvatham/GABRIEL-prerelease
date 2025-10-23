@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from gabriel.core.prompt_template import PromptTemplate
+from gabriel.core.prompt_template import PromptTemplate, resolve_template
 from gabriel.utils import safest_json
 from gabriel.utils.openai_utils import get_all_responses
 
@@ -56,13 +56,11 @@ class Seed:
             raise ValueError("entity_batch_frac must be between 0 and 1")
         if cfg.existing_entities_cap < 0:
             raise ValueError("existing_entities_cap must be non-negative")
-        if template is not None and template_path is not None:
-            raise ValueError("Provide either template or template_path, not both")
-        if template_path is not None:
-            template = PromptTemplate.from_file(
-                template_path, reference_filename="seed.jinja2"
-            )
-        self.template = template or PromptTemplate.from_package("seed.jinja2")
+        self.template = resolve_template(
+            template=template,
+            template_path=template_path,
+            reference_filename="seed.jinja2",
+        )
 
     async def run(
         self,

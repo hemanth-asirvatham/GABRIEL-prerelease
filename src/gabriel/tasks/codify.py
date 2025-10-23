@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 
-from ..core.prompt_template import PromptTemplate
+from ..core.prompt_template import PromptTemplate, resolve_template
 from ..tasks.classify import Classify, ClassifyConfig
 from ..utils import (
     get_all_responses,
@@ -102,13 +102,11 @@ class Codify:
         cfg.save_dir = str(expanded)
         self.cfg = cfg
         self.hit_rate_stats = {}  # Track hit rates across all texts
-        if template is not None and template_path is not None:
-            raise ValueError("Provide either template or template_path, not both")
-        if template_path is not None:
-            template = PromptTemplate.from_file(
-                template_path, reference_filename="codify_prompt.jinja2"
-            )
-        self.template = template or PromptTemplate.from_package("codify_prompt.jinja2")
+        self.template = resolve_template(
+            template=template,
+            template_path=template_path,
+            reference_filename="codify_prompt.jinja2",
+        )
         self.hit_rate_stats = {}  # Track hit rates across all texts
 
     @staticmethod
