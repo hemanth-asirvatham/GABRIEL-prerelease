@@ -599,13 +599,14 @@ def test_rank_outputs_zscores_and_raw_columns(tmp_path):
     task = Rank(cfg)
     data = pd.DataFrame({"text": ["first", "second"]})
     df = asyncio.run(task.run(data, column_name="text"))
-    assert not any(col.endswith("_se") for col in df.columns)
     for attr in ("clarity", "originality"):
         assert attr in df.columns
         assert f"{attr}_raw" in df.columns
+        assert f"{attr}_se" in df.columns
+        assert np.isfinite(df[f"{attr}_se"].fillna(0.0)).all()
 
 
-def test_rank_can_compute_standard_errors(tmp_path):
+def test_rank_outputs_standard_errors(tmp_path):
     cfg = RankConfig(
         attributes={"clarity": ""},
         save_dir=str(tmp_path),
@@ -614,13 +615,60 @@ def test_rank_can_compute_standard_errors(tmp_path):
         n_rounds=1,
         matches_per_round=1,
         n_parallels=4,
-        compute_se=True,
     )
     task = Rank(cfg)
     data = pd.DataFrame({"text": ["first", "second"]})
     df = asyncio.run(task.run(data, column_name="text"))
     assert "clarity_se" in df.columns
     assert np.isfinite(df["clarity_se"].fillna(0.0)).all()
+
+
+def test_api_rank_hides_raw_columns(tmp_path):
+    data = pd.DataFrame({"text": ["first", "second"]})
+    df = asyncio.run(
+        gabriel.rank(
+            data,
+            "text",
+            attributes={"clarity": "", "originality": ""},
+            save_dir=str(tmp_path),
+            file_name="rankings.csv",
+            use_dummy=True,
+            n_rounds=1,
+            matches_per_round=1,
+            n_parallels=4,
+        )
+    )
+    for attr in ("clarity", "originality"):
+        assert attr in df.columns
+        assert f"{attr}_raw" not in df.columns
+        assert f"{attr}_se" not in df.columns
+    final_path = tmp_path / "rankings_final.csv"
+    saved = pd.read_csv(final_path)
+    for attr in ("clarity", "originality"):
+        assert f"{attr}_raw" in saved.columns
+        assert f"{attr}_se" in saved.columns
+
+
+def test_api_rank_can_return_raw_scores_when_requested(tmp_path):
+    data = pd.DataFrame({"text": ["first", "second"]})
+    df = asyncio.run(
+        gabriel.rank(
+            data,
+            "text",
+            attributes={"clarity": "", "originality": ""},
+            save_dir=str(tmp_path),
+            file_name="rankings.csv",
+            use_dummy=True,
+            n_rounds=1,
+            matches_per_round=1,
+            n_parallels=4,
+            return_raw_scores=True,
+        )
+    )
+    for attr in ("clarity", "originality"):
+        assert attr in df.columns
+        assert f"{attr}_raw" in df.columns
+        assert f"{attr}_se" in df.columns
 
 
 def test_deidentifier_dummy(tmp_path):

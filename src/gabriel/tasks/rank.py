@@ -29,7 +29,7 @@ Key improvements and changes relative to ``elo.py`` include:
   ranked.  Each row receives a stable identifier derived from a hash of its
   contents; no external ``id_col`` argument is required.  The method
   produces a DataFrame with one row per input passage, a numeric
-  rating for each attribute, optional z‑scores and standard errors,
+  rating for each attribute, along with z‑scores and standard errors,
   and writes the results to disk under ``save_dir``.
 
 The core ranking logic remains largely unchanged from ``elo.py``
@@ -90,17 +90,10 @@ class RankConfig:
     matches_per_round:
         Number of matches per item per round.
     power_matching:
-        Whether to use an information‑theoretic pairing heuristic.
-    add_zscore:
-        If ``True`` the per-attribute columns in the output DataFrame contain
-        z‑scores (normalised scores).  The raw Bradley–Terry log‑skill
-        estimates are always written alongside these z‑scores using an
-        ``"<attribute>_raw"`` suffix.
-    compute_se:
-        If ``True`` compute standard errors for each score and include
-        ``"<attribute>_se"`` columns in the output.  Standard errors are
-        primarily useful for diagnosing the pairing strategy and are disabled
-        by default so that only the renamed z‑score columns are returned.
+        Whether to use an information‑theoretic pairing heuristic.  The
+        resulting rankings always include per‑attribute z‑scores alongside the
+        raw Bradley–Terry estimates (``"<attribute>_raw"``) and their
+        standard errors (``"<attribute>_se"``).
     learning_rate:
         Pseudo‑count used by the BT model to regularise the win/loss
         matrix.  A larger value makes updates more conservative.
@@ -156,8 +149,6 @@ class RankConfig:
     n_rounds: int = 5
     matches_per_round: int = 5
     power_matching: bool = True
-    add_zscore: bool = True
-    compute_se: bool = False
     learning_rate: float = 0.1
     model: str = "gpt-5-mini"
     n_parallels: int = 750
@@ -200,7 +191,7 @@ class Rank:
     of sampling pairs, calling a language model to adjudicate which
     passage better exhibits each attribute, and then fitting a
     Bradley–Terry model to those outcomes.  Standard errors and
-    z‑scores are optionally computed.  Results are persisted to disk
+    z‑scores are computed for every attribute.  Results are persisted to disk
     after the final round.
     """
 
@@ -983,25 +974,23 @@ class Rank:
                 )
                 for i in item_ids:
                     ratings[i][attr] = bt_scores[i]
-                if self.cfg.compute_se:
-                    s_vec = np.array([bt_scores[i] for i in item_ids])
-                    se_vec = self._bt_standard_errors(
-                        s=s_vec,
-                        n_ij=n_ij,
-                        p_ij=p_ij,
-                        ridge=self._SE_RIDGE,
-                    )
-                    for i, se_val in zip(item_ids, se_vec):
-                        se_store[attr][i] = float(se_val)
-                        se_agg_next[i] += float(se_val)
-                        se_agg_counts[i] += 1
-            if self.cfg.compute_se:
-                for i in item_ids:
-                    if se_agg_counts[i] > 0:
-                        se_agg_next[i] /= se_agg_counts[i]
-                    else:
-                        se_agg_next[i] = 1.0
-                self._last_se_agg = se_agg_next
+                s_vec = np.array([bt_scores[i] for i in item_ids])
+                se_vec = self._bt_standard_errors(
+                    s=s_vec,
+                    n_ij=n_ij,
+                    p_ij=p_ij,
+                    ridge=self._SE_RIDGE,
+                )
+                for i, se_val in zip(item_ids, se_vec):
+                    se_store[attr][i] = float(se_val)
+                    se_agg_next[i] += float(se_val)
+                    se_agg_counts[i] += 1
+            for i in item_ids:
+                if se_agg_counts[i] > 0:
+                    se_agg_next[i] /= se_agg_counts[i]
+                else:
+                    se_agg_next[i] = 1.0
+            self._last_se_agg = se_agg_next
             for attr in attr_keys:
                 vals = [ratings[i][attr] for i in item_ids]
                 mean_val = float(np.mean(vals))
@@ -1295,12 +1284,10 @@ class Rank:
         pandas.DataFrame
             A DataFrame with one row per input passage.  For each
             attribute the DataFrame contains a ``"<attribute>"`` column
-            holding the z‑score (or the raw Bradley–Terry score when
-            ``add_zscore`` is ``False``), a ``"<attribute>_raw"`` column
-            with the centred Bradley–Terry estimate, and—when
-            ``compute_se`` is ``True``—an optional
-            ``"<attribute>_se"`` column with the standard error.  The
-            DataFrame is also written to ``save_dir``.
+            holding the z‑score, a ``"<attribute>_raw"`` column with the
+            centred Bradley–Terry estimate, and a ``"<attribute>_se"``
+            column with the standard error.  The DataFrame is also written
+            to ``save_dir``.
         """
         kwargs.setdefault("web_search", self.cfg.modality == "web")
         if self.cfg.recursive:
@@ -1480,19 +1467,19 @@ class Rank:
         # ``ratings``/``se_store``/``zscores`` and writes it to
         # ``final_path``.
         def _write_checkpoint() -> None:
-            # Compute z‑scores for each attribute if required
+            # Compute z‑scores for each attribute so that we can expose centred
+            # BT scores alongside their normalised variants.
             zscores_local: Dict[str, Dict[str, float]] = {}
-            if self.cfg.add_zscore:
-                for attr in attr_keys:
-                    vals = np.array([ratings[i][attr] for i in item_ids])
-                    mean = vals.mean()
-                    std = vals.std(ddof=0)
-                    if std == 0:
-                        zscores_local[attr] = {i: 0.0 for i in item_ids}
-                    else:
-                        zscores_local[attr] = {
-                            i: float((ratings[i][attr] - mean) / std) for i in item_ids
-                        }
+            for attr in attr_keys:
+                vals = np.array([ratings[i][attr] for i in item_ids])
+                mean = vals.mean()
+                std = vals.std(ddof=0)
+                if std == 0:
+                    zscores_local[attr] = {i: 0.0 for i in item_ids}
+                else:
+                    zscores_local[attr] = {
+                        i: float((ratings[i][attr] - mean) / std) for i in item_ids
+                    }
             # Merge computed results back into the original DataFrame copy.
             for attr in attr_keys:
                 raw_col = f"{attr}_raw"
@@ -1500,15 +1487,11 @@ class Rank:
                 val_map = {i: ratings[i][attr] for i in item_ids}
                 df_proc[raw_col] = df_proc["_id"].map(val_map)
                 # standard errors
-                if self.cfg.compute_se:
-                    se_map = {i: se_store[attr].get(i, np.nan) for i in item_ids}
-                    df_proc[f"{attr}_se"] = df_proc["_id"].map(se_map)
-                # z‑scores (or fall back to raw scores when disabled)
-                if self.cfg.add_zscore:
-                    z_map = zscores_local.get(attr, {i: np.nan for i in item_ids})
-                    df_proc[attr] = df_proc["_id"].map(z_map)
-                else:
-                    df_proc[attr] = df_proc[raw_col]
+                se_map = {i: se_store[attr].get(i, np.nan) for i in item_ids}
+                df_proc[f"{attr}_se"] = df_proc["_id"].map(se_map)
+                # z‑scores
+                z_map = zscores_local.get(attr, {i: np.nan for i in item_ids})
+                df_proc[attr] = df_proc["_id"].map(z_map)
             # Reorder columns: original user columns first (excluding the internal ``_id``),
             # then for each attribute the z‑score column, followed by raw scores and standard errors.
             original_cols = [
@@ -1518,8 +1501,7 @@ class Rank:
             for attr in attr_keys:
                 new_cols.append(attr)
                 new_cols.append(f"{attr}_raw")
-                if self.cfg.compute_se:
-                    new_cols.append(f"{attr}_se")
+                new_cols.append(f"{attr}_se")
             final_cols = original_cols + new_cols
             final_cols = [c for c in final_cols if c in df_proc.columns]
             df_out_local = df_proc[final_cols].copy()
@@ -1647,25 +1629,23 @@ class Rank:
                     )
                     for i in item_ids:
                         ratings[i][attr] = bt_scores[i]
-                    if self.cfg.compute_se:
-                        s_vec = np.array([bt_scores[i] for i in item_ids])
-                        se_vec = self._bt_standard_errors(
-                            s=s_vec,
-                            n_ij=n_ij,
-                            p_ij=p_ij,
-                            ridge=self._SE_RIDGE,
-                        )
-                        for i, se_val in zip(item_ids, se_vec):
-                            se_store[attr][i] = float(se_val)
-                            se_agg_next[i] += float(se_val)
-                            se_agg_counts[i] += 1
-                if self.cfg.compute_se:
-                    for i in item_ids:
-                        if se_agg_counts[i] > 0:
-                            se_agg_next[i] /= se_agg_counts[i]
-                        else:
-                            se_agg_next[i] = 1.0
-                    self._last_se_agg = se_agg_next
+                    s_vec = np.array([bt_scores[i] for i in item_ids])
+                    se_vec = self._bt_standard_errors(
+                        s=s_vec,
+                        n_ij=n_ij,
+                        p_ij=p_ij,
+                        ridge=self._SE_RIDGE,
+                    )
+                    for i, se_val in zip(item_ids, se_vec):
+                        se_store[attr][i] = float(se_val)
+                        se_agg_next[i] += float(se_val)
+                        se_agg_counts[i] += 1
+                for i in item_ids:
+                    if se_agg_counts[i] > 0:
+                        se_agg_next[i] /= se_agg_counts[i]
+                    else:
+                        se_agg_next[i] = 1.0
+                self._last_se_agg = se_agg_next
                 # Centre ratings to zero mean for each attribute
                 for attr in attr_keys:
                     vals = [ratings[i][attr] for i in item_ids]
@@ -1884,25 +1864,23 @@ class Rank:
                 )
                 for i in item_ids:
                     ratings[i][attr] = bt_scores[i]
-                if self.cfg.compute_se:
-                    s_vec = np.array([bt_scores[i] for i in item_ids])
-                    se_vec = self._bt_standard_errors(
-                        s=s_vec,
-                        n_ij=n_ij,
-                        p_ij=p_ij,
-                        ridge=self._SE_RIDGE,
-                    )
-                    for i, se_val in zip(item_ids, se_vec):
-                        se_store[attr][i] = float(se_val)
-                        se_agg_next[i] += float(se_val)
-                        se_agg_counts[i] += 1
-            if self.cfg.compute_se:
-                for i in item_ids:
-                    if se_agg_counts[i] > 0:
-                        se_agg_next[i] /= se_agg_counts[i]
-                    else:
-                        se_agg_next[i] = 1.0
-                self._last_se_agg = se_agg_next
+                s_vec = np.array([bt_scores[i] for i in item_ids])
+                se_vec = self._bt_standard_errors(
+                    s=s_vec,
+                    n_ij=n_ij,
+                    p_ij=p_ij,
+                    ridge=self._SE_RIDGE,
+                )
+                for i, se_val in zip(item_ids, se_vec):
+                    se_store[attr][i] = float(se_val)
+                    se_agg_next[i] += float(se_val)
+                    se_agg_counts[i] += 1
+            for i in item_ids:
+                if se_agg_counts[i] > 0:
+                    se_agg_next[i] /= se_agg_counts[i]
+                else:
+                    se_agg_next[i] = 1.0
+            self._last_se_agg = se_agg_next
             # Centre ratings to zero mean for each attribute
             for attr in attr_keys:
                 vals = [ratings[i][attr] for i in item_ids]
