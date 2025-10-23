@@ -94,3 +94,45 @@ class PromptTemplate:
         """Load a template from the given package file."""
         text = resources.files(package).joinpath(filename).read_text(encoding="utf-8")
         return cls(text)
+
+
+def resolve_template(
+    *,
+    template: Optional[PromptTemplate],
+    template_path: Optional[str],
+    reference_filename: str,
+    package: str = "gabriel.prompts",
+) -> PromptTemplate:
+    """Return a prompt template using either an object or a filesystem override.
+
+    Parameters
+    ----------
+    template:
+        Optional :class:`PromptTemplate` instance supplied directly by the caller.
+    template_path:
+        Filesystem path to a custom Jinja2 template.  When provided, the template
+        is validated against ``reference_filename`` to ensure it exposes the same
+        variables as the built-in prompt.
+    reference_filename:
+        Name of the packaged template used as the default for the task.  This is
+        used both as the fallback when no overrides are supplied and as the
+        reference for variable validation when ``template_path`` is set.
+    package:
+        Package containing the built-in prompt templates.  Callers rarely need to
+        override this.
+    """
+
+    if template is not None and template_path is not None:
+        raise ValueError("Provide either template or template_path, not both")
+
+    if template_path is not None:
+        template = PromptTemplate.from_file(
+            template_path,
+            reference_filename=reference_filename,
+            package=package,
+        )
+
+    return template or PromptTemplate.from_package(
+        reference_filename,
+        package=package,
+    )
