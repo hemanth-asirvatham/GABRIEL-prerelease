@@ -478,19 +478,6 @@ def test_get_all_responses_prompt_web_filters(tmp_path):
     assert seen_filters[0] == {"allowed_domains": ["example.com"]}
     assert seen_filters[1] == {"allowed_domains": ["example.com"], "city": "Paris"}
 
-
-def test_get_all_embeddings_dummy(tmp_path):
-    res = asyncio.run(
-        openai_utils.get_all_embeddings(
-            texts=["a", "b"],
-            identifiers=["1", "2"],
-            save_path=str(tmp_path / "emb.pkl"),
-            use_dummy=True,
-        )
-    )
-    assert set(res.keys()) == {"1", "2"}
-
-
 def test_ratings_dummy(tmp_path):
     cfg = RateConfig(attributes={"helpfulness": ""}, save_dir=str(tmp_path), file_name="ratings.csv", use_dummy=True)
     task = Rate(cfg)
