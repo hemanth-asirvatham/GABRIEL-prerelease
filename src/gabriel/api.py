@@ -370,8 +370,7 @@ async def rank(
     n_rounds: int = 5,
     matches_per_round: int = 3,
     power_matching: bool = True,
-    add_zscore: bool = True,
-    compute_se: bool = False,
+    return_raw_scores: bool = False,
     learning_rate: float = 0.1,
     n_parallels: int = 750,
     use_dummy: bool = False,
@@ -397,7 +396,15 @@ async def rank(
     id_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Rank`."""
+    """Convenience wrapper for :class:`gabriel.tasks.Rank`.
+
+    Notes
+    -----
+    The CSV written to ``save_dir`` always contains the z-score columns and the
+    corresponding ``"<attribute>_raw"``/``"<attribute>_se"`` columns, but the
+    DataFrame returned by this helper only exposes the attribute (z-score)
+    columns unless ``return_raw_scores`` is set to ``True``.
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = RankConfig(
@@ -405,8 +412,6 @@ async def rank(
         n_rounds=n_rounds,
         matches_per_round=matches_per_round,
         power_matching=power_matching,
-        add_zscore=add_zscore,
-        compute_se=compute_se,
         learning_rate=learning_rate,
         model=model,
         n_parallels=n_parallels,
@@ -432,12 +437,33 @@ async def rank(
         rate_kwargs=rate_kwargs or {},
         **cfg_kwargs,
     )
-    return await Rank(cfg, template_path=template_path).run(
+    result_df = await Rank(cfg, template_path=template_path).run(
         df,
         column_name,
         id_column=id_column,
         reset_files=reset_files,
     )
+
+    # By default only expose the z-score columns (attribute names without suffixes)
+    # to API callers while keeping the raw/SE columns persisted in the CSV output.
+    if return_raw_scores:
+        return result_df
+
+    if isinstance(attributes, dict):
+        attr_keys: List[str] = list(attributes.keys())
+    else:
+        attr_keys = list(attributes)
+    drop_cols: List[str] = []
+    for attr in attr_keys:
+        raw_col = f"{attr}_raw"
+        se_col = f"{attr}_se"
+        if raw_col in result_df.columns:
+            drop_cols.append(raw_col)
+        if se_col in result_df.columns:
+            drop_cols.append(se_col)
+    if drop_cols:
+        result_df = result_df.drop(columns=drop_cols)
+    return result_df
 
 
 async def codify(
