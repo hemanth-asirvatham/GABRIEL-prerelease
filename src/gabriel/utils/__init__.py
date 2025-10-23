@@ -5,6 +5,7 @@ from .openai_utils import (
     get_all_responses,
     get_embedding,
     get_all_embeddings,
+    DummyResponseSpec,
 )
 from .image_utils import encode_image
 from .audio_utils import encode_audio
@@ -28,6 +29,7 @@ __all__ = [
     "get_all_responses",
     "get_embedding",
     "get_all_embeddings",
+    "DummyResponseSpec",
     "get_logger",
     "set_log_level",
     "MapMaker",

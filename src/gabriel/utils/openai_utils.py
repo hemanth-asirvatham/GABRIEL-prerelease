@@ -60,7 +60,7 @@ import openai
 import statistics
 import numpy as np
 import tiktoken
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 logger = get_logger(__name__)
 
@@ -157,6 +157,22 @@ class StatusTracker:
     num_timeout_errors: int = 0
     num_other_errors: int = 0
     time_of_last_rate_limit_error: float = 0.0
+
+
+@dataclass
+class DummyResponseSpec:
+    """Configuration object describing synthetic responses for dummy runs."""
+
+    responses: Optional[Any] = None
+    duration: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    reasoning_summary: Optional[str] = None
+    response_id: Optional[str] = None
+    successful: Optional[bool] = None
+    error_log: Optional[Union[str, List[str]]] = None
+    warning: Optional[str] = None
 
 
 class BackgroundTimeoutError(asyncio.TimeoutError):
@@ -1616,6 +1632,7 @@ async def get_all_embeddings(
     timeout: float = 30.0,
     save_every_x: int = 5000,
     use_dummy: bool = False,
+    dummy_embeddings: Optional[Dict[str, List[float]]] = None,
     base_url: Optional[str] = None,
     verbose: bool = True,
     logging_level: Union[str, int] = "warning",
@@ -1653,6 +1670,11 @@ async def get_all_embeddings(
         Frequency (in processed texts) at which the pickle file is updated.
     use_dummy:
         Generate fake embeddings instead of calling the API.
+    dummy_embeddings:
+        Optional mapping from identifiers (or ``"*"`` for a fallback) to
+        deterministic vectors used when ``use_dummy`` is ``True``.  Supplying
+        this allows tests to control the synthetic embeddings instead of
+        relying on the default ``[len(text)]`` stub.
     base_url:
         Optional custom OpenAI-compatible endpoint used for requests.
     verbose:
@@ -1680,6 +1702,18 @@ async def get_all_embeddings(
 
     if identifiers is None:
         identifiers = texts
+    dummy_embeddings_map: Dict[str, List[float]] = {}
+    dummy_embedding_default: Optional[List[float]] = None
+    if dummy_embeddings:
+        for key, value in dummy_embeddings.items():
+            if value is None:
+                continue
+            vector = [float(v) for v in value]
+            dummy_embeddings_map[str(key)] = vector
+        if "*" in dummy_embeddings_map:
+            dummy_embedding_default = list(dummy_embeddings_map["*"])
+        elif "__default__" in dummy_embeddings_map:
+            dummy_embedding_default = list(dummy_embeddings_map["__default__"])
 
     save_path = os.path.expanduser(os.path.expandvars(save_path))
     embeddings: Dict[str, List[float]] = {}
@@ -1785,6 +1819,22 @@ async def get_all_embeddings(
                 error_logs.setdefault(ident, [])
                 call_timeout = timeout
                 start = time.time()
+                override_embedding: Optional[List[float]] = None
+                if use_dummy and (dummy_embeddings_map or dummy_embedding_default):
+                    override_embedding = dummy_embeddings_map.get(str(ident))
+                    if override_embedding is None:
+                        override_embedding = dummy_embedding_default
+                    if override_embedding is not None:
+                        embeddings[ident] = list(override_embedding)
+                        processed += 1
+                        successes_since_adjust += 1
+                        rate_limit_errors_since_adjust = 0
+                        maybe_adjust_concurrency()
+                        if processed % save_every_x == 0:
+                            with open(save_path, "wb") as f:
+                                pickle.dump(embeddings, f)
+                        pbar.update(1)
+                        continue
                 task = asyncio.create_task(
                     get_embedding(
                         text,
@@ -2002,6 +2052,129 @@ def _normalize_response_result(result: Any) -> Tuple[List[Any], Optional[float],
     return responses_list, duration, raw_list
 
 
+def _coerce_dummy_response_spec(
+    value: Optional[Union[DummyResponseSpec, Dict[str, Any]]]
+) -> Optional[DummyResponseSpec]:
+    """Return ``value`` as a :class:`DummyResponseSpec` instance when possible."""
+
+    if value is None:
+        return None
+    if isinstance(value, DummyResponseSpec):
+        return value
+    if isinstance(value, dict):
+        allowed = {field.name for field in fields(DummyResponseSpec)}
+        filtered = {k: v for k, v in value.items() if k in allowed}
+        return DummyResponseSpec(**filtered)
+    raise TypeError(
+        "dummy_responses values must be DummyResponseSpec instances or dictionaries"
+    )
+
+
+def _merge_dummy_specs(
+    primary: Optional[DummyResponseSpec], fallback: Optional[DummyResponseSpec]
+) -> Optional[DummyResponseSpec]:
+    """Combine ``primary`` with ``fallback`` preferring explicit ``primary`` values."""
+
+    if primary is None:
+        return fallback
+    if fallback is None:
+        return primary
+    return DummyResponseSpec(
+        responses=primary.responses
+        if primary.responses is not None
+        else fallback.responses,
+        duration=primary.duration
+        if primary.duration is not None
+        else fallback.duration,
+        input_tokens=primary.input_tokens
+        if primary.input_tokens is not None
+        else fallback.input_tokens,
+        output_tokens=primary.output_tokens
+        if primary.output_tokens is not None
+        else fallback.output_tokens,
+        reasoning_tokens=primary.reasoning_tokens
+        if primary.reasoning_tokens is not None
+        else fallback.reasoning_tokens,
+        reasoning_summary=primary.reasoning_summary
+        if primary.reasoning_summary is not None
+        else fallback.reasoning_summary,
+        response_id=primary.response_id
+        if primary.response_id is not None
+        else fallback.response_id,
+        successful=primary.successful
+        if primary.successful is not None
+        else fallback.successful,
+        error_log=primary.error_log
+        if primary.error_log is not None
+        else fallback.error_log,
+        warning=primary.warning
+        if primary.warning is not None
+        else fallback.warning,
+    )
+
+
+def _auto_dummy_usage(prompt: str, responses: List[Any]) -> DummyResponseSpec:
+    """Generate a fallback :class:`DummyResponseSpec` based on prompt/response length."""
+
+    approx_in = max(1, _approx_tokens(str(prompt)))
+    approx_out = max(
+        1,
+        sum(max(1, _approx_tokens(str(resp))) for resp in responses) or 1,
+    )
+    return DummyResponseSpec(
+        input_tokens=approx_in,
+        output_tokens=approx_out,
+        reasoning_tokens=0,
+    )
+
+
+def _listify_error_log(value: Optional[Union[str, List[str]]]) -> List[str]:
+    """Normalise ``value`` into a list of human-readable error log entries."""
+
+    if value is None:
+        return []
+    return [str(item) for item in _coerce_to_list(value)]
+
+
+def _synthesise_dummy_raw(
+    identifier: str, spec: DummyResponseSpec, responses: List[Any]
+) -> List[Dict[str, Any]]:
+    """Create a faux Responses payload so downstream code sees usage metrics."""
+
+    usage = {
+        "input_tokens": int(spec.input_tokens or 0),
+        "output_tokens": int(spec.output_tokens or 0),
+        "output_tokens_details": {
+            "reasoning_tokens": int(spec.reasoning_tokens or 0)
+        },
+    }
+    output_blocks: List[Dict[str, Any]] = []
+    if responses:
+        content = [
+            {"type": "output_text", "text": str(resp)} for resp in responses
+        ]
+        output_blocks.append(
+            {"type": "message", "role": "assistant", "content": content}
+        )
+    if spec.reasoning_summary:
+        output_blocks.append(
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "output_text", "text": spec.reasoning_summary}
+                ],
+            }
+        )
+    response_id = spec.response_id or f"dummy-{identifier}"
+    return [
+        {
+            "id": response_id,
+            "status": "completed" if spec.successful is not False else "failed",
+            "output": output_blocks,
+            "usage": usage,
+        }
+    ]
+
 async def get_all_responses(
     prompts: List[str],
     identifiers: Optional[List[str]] = None,
@@ -2024,6 +2197,7 @@ async def get_all_responses(
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    dummy_responses: Optional[Dict[str, Union[DummyResponseSpec, Dict[str, Any]]]] = None,
     use_dummy: bool = False,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
     base_url: Optional[str] = None,
@@ -2131,6 +2305,13 @@ async def get_all_responses(
     token‑tracking heuristics, keeping the worker resilient to alternative
     backends without forcing callers to mirror the OpenAI API exactly.
 
+    Offline test runs frequently rely on ``use_dummy`` to avoid network calls.
+    The optional ``dummy_responses`` mapping refines this mode by letting you
+    describe the synthetic payload for each identifier (or ``"*"`` as a
+    fallback) via :class:`DummyResponseSpec`.  These specs control the response
+    text, duration, token usage, warnings and error logs so tests can exercise
+    cost reporting and failure handling paths deterministically.
+
     The function remains backwards compatible with the original version, except
     that the parameter ``max_tokens`` has been renamed to ``max_output_tokens``.
     When both are provided, ``max_output_tokens`` takes precedence.  The former
@@ -2176,6 +2357,21 @@ async def get_all_responses(
             if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
                 response_param_names.add(name)
         response_accepts_return_raw = response_accepts_var_kw or ("return_raw" in response_param_names)
+    dummy_response_specs: Dict[str, DummyResponseSpec] = {}
+    dummy_default_spec: Optional[DummyResponseSpec] = None
+    if dummy_responses:
+        for key, value in dummy_responses.items():
+            spec = _coerce_dummy_response_spec(value)
+            if spec is None:
+                continue
+            dummy_response_specs[str(key)] = spec
+        dummy_default_spec = dummy_response_specs.get("*") or dummy_response_specs.get("__default__")
+        if not use_dummy:
+            logger.warning(
+                "`dummy_responses` were provided but `use_dummy` is False; ignoring synthetic payloads."
+            )
+    else:
+        dummy_response_specs = {}
     if status_report_interval is not None:
         try:
             status_report_interval = float(status_report_interval)
@@ -3304,6 +3500,28 @@ async def get_all_responses(
                     )
                 inflight.pop(ident, None)
                 resps, duration, raw = _normalize_response_result(result)
+                success_override: Optional[bool] = None
+                if use_dummy:
+                    selected_spec = dummy_response_specs.get(str(ident))
+                    if selected_spec is None:
+                        selected_spec = dummy_default_spec
+                    auto_spec: Optional[DummyResponseSpec] = None
+                    if not raw:
+                        auto_spec = _auto_dummy_usage(prompt, resps)
+                    selected_spec = _merge_dummy_specs(selected_spec, auto_spec)
+                    if selected_spec is not None:
+                        override_responses = selected_spec.responses
+                        if override_responses is not None:
+                            resps = _coerce_to_list(override_responses)
+                        if selected_spec.duration is not None:
+                            duration = selected_spec.duration
+                        if selected_spec.warning:
+                            logger.warning(selected_spec.warning)
+                        extra_errors = _listify_error_log(selected_spec.error_log)
+                        if extra_errors:
+                            error_logs[ident].extend(extra_errors)
+                        raw = _synthesise_dummy_raw(str(ident), selected_spec, resps)
+                        success_override = selected_spec.successful
                 if duration is not None:
                     success_times.append(duration)
                 await adjust_timeout()
@@ -3436,23 +3654,28 @@ async def get_all_responses(
                         "Reasoning Effort": get_response_kwargs.get(
                             "reasoning_effort", reasoning_effort
                         ),
-                        "Successful": True,
                         "Error Log": error_logs.get(ident, []),
                     }
                     if response_ids:
                         row["Response IDs"] = response_ids
                     if reasoning_summary is not None:
                         row["Reasoning Summary"] = summary_text
+                    is_success = True if success_override is None else bool(success_override)
+                    row["Successful"] = is_success
                     results.append(row)
                     processed += 1
-                    status.num_tasks_succeeded += 1
                     status.num_tasks_in_progress -= 1
                     pbar.update(1)
                     error_logs.pop(ident, None)
-                    successes_since_adjust += 1
-                    rate_limit_errors_since_adjust = 0
-                    maybe_adjust_concurrency()
-                    if processed % save_every_x_responses == 0:
+                    if is_success:
+                        status.num_tasks_succeeded += 1
+                        successes_since_adjust += 1
+                        rate_limit_errors_since_adjust = 0
+                        maybe_adjust_concurrency()
+                        if processed % save_every_x_responses == 0:
+                            await flush()
+                    else:
+                        status.num_tasks_failed += 1
                         await flush()
             except asyncio.CancelledError:
                 raise
