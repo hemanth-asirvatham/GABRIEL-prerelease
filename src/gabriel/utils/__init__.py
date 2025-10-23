@@ -22,7 +22,7 @@ from .word_matching import (
     strict_find,
 )
 from .prompt_utils import swap_circle_square
-from .file_utils import load_files
+from .file_utils import load
 
 __all__ = [
     "get_response",
@@ -51,5 +51,5 @@ __all__ = [
     "PassageViewer",
     "view_coded_passages",
     "swap_circle_square",
-    "load_files",
+    "load",
 ]
