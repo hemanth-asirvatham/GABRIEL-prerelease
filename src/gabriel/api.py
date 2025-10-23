@@ -371,7 +371,7 @@ async def rank(
     matches_per_round: int = 3,
     power_matching: bool = True,
     add_zscore: bool = True,
-    compute_se: bool = True,
+    compute_se: bool = False,
     learning_rate: float = 0.1,
     n_parallels: int = 750,
     use_dummy: bool = False,

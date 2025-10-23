@@ -92,9 +92,15 @@ class RankConfig:
     power_matching:
         Whether to use an information‑theoretic pairing heuristic.
     add_zscore:
-        If ``True`` append z‑scores (normalised scores) to the output.
+        If ``True`` the per-attribute columns in the output DataFrame contain
+        z‑scores (normalised scores).  The raw Bradley–Terry log‑skill
+        estimates are always written alongside these z‑scores using an
+        ``"<attribute>_raw"`` suffix.
     compute_se:
-        If ``True`` compute standard errors for each score.
+        If ``True`` compute standard errors for each score and include
+        ``"<attribute>_se"`` columns in the output.  Standard errors are
+        primarily useful for diagnosing the pairing strategy and are disabled
+        by default so that only the renamed z‑score columns are returned.
     learning_rate:
         Pseudo‑count used by the BT model to regularise the win/loss
         matrix.  A larger value makes updates more conservative.
@@ -151,7 +157,7 @@ class RankConfig:
     matches_per_round: int = 5
     power_matching: bool = True
     add_zscore: bool = True
-    compute_se: bool = True
+    compute_se: bool = False
     learning_rate: float = 0.1
     model: str = "gpt-5-mini"
     n_parallels: int = 750
@@ -463,83 +469,59 @@ class Rank:
     ) -> np.ndarray:
         """Estimate standard errors for BT skill parameters.
 
-        Standard errors are derived from the observed Fisher information
-        matrix for the Bradley–Terry model.  The matrix
-        ``n_ij * p_ij * (1 - p_ij)`` gives the contribution to the
-        Fisher information from each pairwise comparison (Ford, 1957).
-        We assemble the full information matrix ``I`` and compute its
-        Moore–Penrose pseudoinverse to obtain the covariance matrix of
-        the constrained maximum‑likelihood estimates under the
-        **sum‑to‑zero constraint**.  Using the pseudoinverse avoids
-        singling out one item as the reference level and spreads
-        uncertainty appropriately across all items【375153807620927†L569-L706】.  A small
-        ridge term is added to the diagonal of ``I`` to stabilise the
-        inversion when the matrix is ill‑conditioned.  The standard
-        error for each item is the square root of the corresponding
-        diagonal element of this covariance matrix.
+        The observed Fisher information for the Bradley–Terry model is given by
+        ``I = diag(q 1) - q`` where ``q = n_ij * p_ij * (1 - p_ij)`` encodes the
+        uncertainty contributed by each pairwise comparison (Ford, 1957).  The
+        estimates satisfy a sum-to-zero constraint, so the Fisher information is
+        rank deficient with the all-ones vector in its null space.  Instead of
+        selecting an arbitrary reference item (which previously produced
+        inflated standard errors for that reference when it received few
+        comparisons), we project the matrix onto the constrained subspace and
+        take its Moore–Penrose pseudoinverse.  A small ridge term stabilises the
+        inversion for sparse comparison graphs.  The standard error for item ``i``
+        is the square root of the ``i``-th diagonal entry of the resulting
+        covariance matrix.
 
         Parameters
         ----------
         s : np.ndarray
-            Array of estimated log‑skills for each item.
+            Array of estimated log-skills for each item.
         n_ij : np.ndarray
             Matrix of total match counts between items (wins + losses).
         p_ij : np.ndarray
             Matrix of predicted win probabilities between items.
         ridge : float
-            Small constant added to the diagonal of the Fisher information
-            matrix for numerical stability.
+            Small constant added to the diagonal of the projected Fisher
+            information matrix for numerical stability.
 
         Returns
         -------
         np.ndarray
             Array of standard errors corresponding to each element of ``s``.
         """
+
         n = len(s)
-        # variance contribution for each pair
+        if n == 0:
+            return np.array([], dtype=float)
+        if n == 1:
+            return np.zeros(1, dtype=float)
+
         q_ij = n_ij * p_ij * (1 - p_ij)
-        # Assemble the full Fisher information matrix.  Each diagonal entry
-        # accumulates the information for one item, and off‑diagonals encode
-        # negative interactions.  We do not apply the sum‑to‑zero constraint
-        # directly here; instead, we will remove a reference item to ensure
-        # identifiability.  Choosing a well‑connected reference object (i.e., one
-        # with many comparisons) avoids artificially inflating the standard
-        # errors of other items【375153807620927†L569-L706】.
-        I = np.zeros((n, n), dtype=float)
         diag = q_ij.sum(axis=1)
-        I[np.diag_indices(n)] = diag
-        I -= q_ij
-        # Identify a reference index.  We pick the item with the maximum
-        # information (largest diagonal entry), which typically has the most
-        # comparisons.  This minimises the effect of the reference choice on
-        # other items’ uncertainties.
-        ref_idx = int(np.argmax(diag)) if n > 0 else 0
-        # Build the reduced information matrix by removing the reference row and column.
-        if n > 1:
-            mask = np.ones(n, dtype=bool)
-            mask[ref_idx] = False
-            I_sub = I[np.ix_(mask, mask)].copy()
-            # Stabilise the inversion with a ridge term.
-            I_sub[np.diag_indices(n - 1)] += ridge
-            try:
-                cov_sub = np.linalg.inv(I_sub)
-            except np.linalg.LinAlgError:
-                cov_sub = np.linalg.pinv(I_sub)
-            # Replace invalid values to avoid numerical warnings during multiplication.
-            cov_sub = np.nan_to_num(cov_sub)
-            # Compute the variance of the reference item using the sum constraint.
-            ones = np.ones((n - 1, 1))
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                var_ref = float(ones.T @ cov_sub @ ones)
-            se = np.zeros(n, dtype=float)
-            # Fill standard errors for non‑reference items.
-            se[mask] = np.sqrt(np.maximum(0.0, np.diag(cov_sub)))
-            # Standard error for the reference item.
-            se[ref_idx] = np.sqrt(max(0.0, var_ref))
-        else:
-            # Only one item: variance is undefined; set SE to zero.
-            se = np.zeros(n, dtype=float)
-        return se
+        I = np.diag(diag) - q_ij
+        I = np.nan_to_num(I)
+        ones = np.ones((n, 1))
+        proj = np.eye(n) - ones @ ones.T / n
+        I_proj = proj @ I @ proj
+        I_proj[np.diag_indices(n)] += ridge
+        try:
+            cov = np.linalg.pinv(I_proj, rcond=1e-12)
+        except np.linalg.LinAlgError:
+            cov = np.linalg.pinv(np.nan_to_num(I_proj), rcond=1e-12)
+        cov = proj @ cov @ proj
+        cov = 0.5 * (cov + cov.T)
+        se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+        return np.nan_to_num(se)
 
     def _fit_pl(
         self,
@@ -1099,9 +1081,11 @@ class Rank:
 
         def _update_cumulative(stage_df: pd.DataFrame) -> None:
             for attr in attr_list:
-                if attr not in stage_df.columns:
+                raw_col = f"{attr}_raw"
+                col_name = raw_col if raw_col in stage_df.columns else attr
+                if col_name not in stage_df.columns:
                     continue
-                for ident, value in zip(stage_df["identifier"], stage_df[attr]):
+                for ident, value in zip(stage_df["identifier"], stage_df[col_name]):
                     try:
                         cumulative_scores[attr][str(ident)] += float(value)
                     except Exception:
@@ -1309,9 +1293,14 @@ class Rank:
         Returns
         -------
         pandas.DataFrame
-            A DataFrame with one row per input passage and columns for
-            each attribute's score, optional z‑score and standard
-            error.  The DataFrame is also written to ``save_dir``.
+            A DataFrame with one row per input passage.  For each
+            attribute the DataFrame contains a ``"<attribute>"`` column
+            holding the z‑score (or the raw Bradley–Terry score when
+            ``add_zscore`` is ``False``), a ``"<attribute>_raw"`` column
+            with the centred Bradley–Terry estimate, and—when
+            ``compute_se`` is ``True``—an optional
+            ``"<attribute>_se"`` column with the standard error.  The
+            DataFrame is also written to ``save_dir``.
         """
         kwargs.setdefault("web_search", self.cfg.modality == "web")
         if self.cfg.recursive:
@@ -1506,29 +1495,31 @@ class Rank:
                         }
             # Merge computed results back into the original DataFrame copy.
             for attr in attr_keys:
+                raw_col = f"{attr}_raw"
                 # ratings
                 val_map = {i: ratings[i][attr] for i in item_ids}
-                df_proc[attr] = df_proc["_id"].map(val_map)
+                df_proc[raw_col] = df_proc["_id"].map(val_map)
                 # standard errors
                 if self.cfg.compute_se:
                     se_map = {i: se_store[attr].get(i, np.nan) for i in item_ids}
                     df_proc[f"{attr}_se"] = df_proc["_id"].map(se_map)
-                # z‑scores
+                # z‑scores (or fall back to raw scores when disabled)
                 if self.cfg.add_zscore:
                     z_map = zscores_local.get(attr, {i: np.nan for i in item_ids})
-                    df_proc[f"{attr}_z"] = df_proc["_id"].map(z_map)
+                    df_proc[attr] = df_proc["_id"].map(z_map)
+                else:
+                    df_proc[attr] = df_proc[raw_col]
             # Reorder columns: original user columns first (excluding the internal ``_id``),
-            # then for each attribute the score column, followed by the standard error and z‑score.
+            # then for each attribute the z‑score column, followed by raw scores and standard errors.
             original_cols = [
                 c for c in df.columns
             ]  # preserve the order provided by the user
             new_cols: List[str] = []
             for attr in attr_keys:
                 new_cols.append(attr)
+                new_cols.append(f"{attr}_raw")
                 if self.cfg.compute_se:
                     new_cols.append(f"{attr}_se")
-                if self.cfg.add_zscore:
-                    new_cols.append(f"{attr}_z")
             final_cols = original_cols + new_cols
             final_cols = [c for c in final_cols if c in df_proc.columns]
             df_out_local = df_proc[final_cols].copy()
