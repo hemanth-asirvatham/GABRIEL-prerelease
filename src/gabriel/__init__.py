@@ -21,7 +21,7 @@ from .api import (
     whatever,
     view_coded_passages,
 )
-from .utils import load_files
+from .utils import load
 
 try:
     __version__ = _v("gabriel")
@@ -45,7 +45,7 @@ __all__ = list(_tasks.__all__) + [
     "ideate",
     "whatever",
     "view_coded_passages",
-    "load_files",
+    "load",
 ]
 
 
