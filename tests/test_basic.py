@@ -586,6 +586,43 @@ def test_rank_audio_dummy(tmp_path):
     assert "clear" in df.columns and "inspiring" in df.columns
 
 
+def test_rank_outputs_zscores_and_raw_columns(tmp_path):
+    cfg = RankConfig(
+        attributes={"clarity": "", "originality": ""},
+        save_dir=str(tmp_path),
+        file_name="rankings.csv",
+        use_dummy=True,
+        n_rounds=1,
+        matches_per_round=1,
+        n_parallels=4,
+    )
+    task = Rank(cfg)
+    data = pd.DataFrame({"text": ["first", "second"]})
+    df = asyncio.run(task.run(data, column_name="text"))
+    assert not any(col.endswith("_se") for col in df.columns)
+    for attr in ("clarity", "originality"):
+        assert attr in df.columns
+        assert f"{attr}_raw" in df.columns
+
+
+def test_rank_can_compute_standard_errors(tmp_path):
+    cfg = RankConfig(
+        attributes={"clarity": ""},
+        save_dir=str(tmp_path),
+        file_name="rankings.csv",
+        use_dummy=True,
+        n_rounds=1,
+        matches_per_round=1,
+        n_parallels=4,
+        compute_se=True,
+    )
+    task = Rank(cfg)
+    data = pd.DataFrame({"text": ["first", "second"]})
+    df = asyncio.run(task.run(data, column_name="text"))
+    assert "clarity_se" in df.columns
+    assert np.isfinite(df["clarity_se"].fillna(0.0)).all()
+
+
 def test_deidentifier_dummy(tmp_path):
     cfg = DeidentifyConfig(save_dir=str(tmp_path), file_name="deid.csv", use_dummy=True)
     task = Deidentifier(cfg)
