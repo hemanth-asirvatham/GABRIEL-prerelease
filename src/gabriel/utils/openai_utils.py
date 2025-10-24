@@ -3211,6 +3211,7 @@ async def get_all_responses(
     pbar = tqdm(total=len(todo_pairs), desc="Processing prompts", leave=True)
     cooldown_until = 0.0
     stop_event = asyncio.Event()
+    timeout_cancellations: Set[str] = set()
     # Counters used for the gentle concurrency adaptation below
     rate_limit_errors_since_adjust = 0
     successes_since_adjust = 0
@@ -3353,6 +3354,7 @@ async def get_all_responses(
                         nonlocal_timeout, t_out, dynamic_timeout
                     )
                     if now - start > limit and not task.done():
+                        timeout_cancellations.add(ident)
                         task.cancel()
         except Exception:
             pass
@@ -3495,9 +3497,12 @@ async def get_all_responses(
                     result = await task
                 except asyncio.CancelledError:
                     inflight.pop(ident, None)
-                    raise asyncio.TimeoutError(
-                        f"API call timed out after {call_timeout} s"
-                    )
+                    if ident in timeout_cancellations:
+                        timeout_cancellations.discard(ident)
+                        raise asyncio.TimeoutError(
+                            f"API call timed out after {call_timeout} s"
+                        )
+                    raise
                 inflight.pop(ident, None)
                 resps, duration, raw = _normalize_response_result(result)
                 success_override: Optional[bool] = None
@@ -3864,6 +3869,7 @@ async def get_all_responses(
                         t_out,
                         dynamic_timeout,
                     ):
+                        timeout_cancellations.add(ident)
                         task.cancel()
         except asyncio.CancelledError:
             pass
