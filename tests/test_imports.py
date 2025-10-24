@@ -12,6 +12,12 @@ def test_viewer_exposed():
     assert callable(gabriel.view)
 
 
+def test_api_view_exported_and_legacy_removed():
+    api = import_module("gabriel.api")
+    assert callable(getattr(api, "view", None))
+    assert not hasattr(api, "view_coded_passages")
+
+
 def test_openai_client_dummy():
     gabriel = import_module("gabriel")
     client = gabriel.core.OpenAIClient(api_key="sk-test")

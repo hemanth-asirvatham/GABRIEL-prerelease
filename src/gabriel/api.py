@@ -47,6 +47,27 @@ from .tasks.debias import (
     RemovalMethod,
 )
 
+__all__ = [
+    "rate",
+    "extract",
+    "seed",
+    "classify",
+    "ideate",
+    "deidentify",
+    "rank",
+    "codify",
+    "paraphrase",
+    "compare",
+    "bucket",
+    "discover",
+    "deduplicate",
+    "merge",
+    "filter",
+    "debias",
+    "whatever",
+    "view",
+]
+
 async def rate(
     df: pd.DataFrame,
     column_name: str,
