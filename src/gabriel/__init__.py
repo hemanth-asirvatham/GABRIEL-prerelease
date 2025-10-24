@@ -20,6 +20,8 @@ from .api import (
     ideate,
     whatever,
     view,
+    bucket,
+    seed,
 )
 from .utils import load
 
@@ -38,6 +40,7 @@ __all__ = list(_tasks.__all__) + [
     "paraphrase",
     "compare",
     "discover",
+    "seed",
     "deduplicate",
     "merge",
     "filter",
@@ -45,6 +48,7 @@ __all__ = list(_tasks.__all__) + [
     "ideate",
     "whatever",
     "view",
+    "bucket",
     "load",
 ]
 

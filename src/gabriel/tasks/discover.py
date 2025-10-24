@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import io
+import json
 import os
 import re
+import zipfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +66,83 @@ class Discover:
         expanded.mkdir(parents=True, exist_ok=True)
         cfg.save_dir = str(expanded)
         self.cfg = cfg
+
+    def _to_serializable(self, value: Any) -> Any:
+        if isinstance(value, pd.DataFrame):
+            safe = value.copy()
+            safe = safe.where(pd.notna(safe), None)
+            return safe.to_dict(orient="records")
+        if isinstance(value, dict):
+            return {str(k): self._to_serializable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._to_serializable(v) for v in value]
+        if isinstance(value, pd.Series):
+            safe_series = value.where(pd.notna(value), None)
+            return safe_series.tolist()
+        try:
+            if pd.isna(value):  # type: ignore[arg-type]
+                return None
+        except Exception:
+            pass
+        if isinstance(value, (pd.Timestamp, pd.Timedelta)):
+            return value.isoformat()
+        return value
+
+    def _persist_result_snapshot(self, result: Dict[str, Any]) -> None:
+        payload = {
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "results": {k: self._to_serializable(v) for k, v in result.items()},
+        }
+        out_path = os.path.join(self.cfg.save_dir, "discover_results_snapshot.json")
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _value_to_dataframe(self, name: str, value: Any) -> Optional[pd.DataFrame]:
+        if isinstance(value, pd.DataFrame):
+            return value.copy()
+        if isinstance(value, pd.Series):
+            return value.to_frame().reset_index(drop=True)
+        if isinstance(value, dict):
+            rows = [{"key": str(k), "value": v} for k, v in value.items()]
+            df = pd.DataFrame(rows)
+            if name == "buckets":
+                df = df.rename(columns={"key": "bucket", "value": "definition"})
+            return df
+        if isinstance(value, list):
+            if not value:
+                return pd.DataFrame()
+            if all(isinstance(item, dict) for item in value):
+                return pd.DataFrame(value)
+            return pd.DataFrame({"value": value})
+        return None
+
+    def _export_result_archive(self, result: Dict[str, Any]) -> None:
+        tables: Dict[str, pd.DataFrame] = {}
+        for key, value in result.items():
+            df = self._value_to_dataframe(key, value)
+            if df is not None:
+                tables[key] = df
+        if not tables:
+            return
+        archive_path = os.path.join(self.cfg.save_dir, "discover_results_export.zip")
+        try:
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                name_counts: Dict[str, int] = {}
+                for key, df in tables.items():
+                    csv_buffer = io.StringIO()
+                    df.to_csv(csv_buffer, index=False)
+                    safe = re.sub(r"[^0-9A-Za-z._-]+", "_", key).strip("._-") or "table"
+                    count = name_counts.get(safe, 0)
+                    name_counts[safe] = count + 1
+                    if count:
+                        safe = f"{safe}_{count}"
+                    filename = f"{safe}.csv"
+                    zf.writestr(filename, csv_buffer.getvalue())
+        except Exception:
+            pass
 
 
     async def run(
@@ -276,6 +357,28 @@ class Discover:
 
             classify_result = combined_df.rename(columns=rename_map)
 
+            available: Dict[str, str] = {}
+            missing: List[str] = []
+            for lab, desc in labels.items():
+                actual_col = f"{lab}_actual"
+                inverted_col = f"{lab}_inverted"
+                if (
+                    actual_col not in classify_result.columns
+                    or inverted_col not in classify_result.columns
+                ):
+                    missing.append(lab)
+                    continue
+                available[lab] = desc
+            if missing:
+                print(
+                    "[Discover] Warning: classification cache is missing the following labels, "
+                    "so they were skipped:",
+                    ", ".join(missing),
+                )
+                if not bucket_df.empty:
+                    bucket_df = bucket_df[bucket_df["bucket"].isin(available.keys())]
+            labels = available
+
             summary_records: List[Dict[str, Any]] = []
             for lab in labels:
                 actual_col = f"{lab}_actual"
@@ -336,4 +439,6 @@ class Discover:
             result["compare"] = compare_df
         if codify_df is not None:
             result["codify"] = codify_df
+        self._persist_result_snapshot(result)
+        self._export_result_archive(result)
         return result

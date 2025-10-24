@@ -78,6 +78,16 @@ class Bucket:
         reset_files: bool = False,
         **kwargs: Any,
     ) -> pd.DataFrame:
+        cache_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
+        if not reset_files and os.path.exists(cache_path):
+            try:
+                cached = pd.read_csv(cache_path)
+                if {"bucket", "definition"}.issubset(cached.columns):
+                    cols = ["bucket", "definition"]
+                    return cached[cols]
+            except Exception:
+                pass
+
         df_proc = df.reset_index(drop=True).copy()
         raw_entries = df_proc[column_name].dropna().tolist()
 

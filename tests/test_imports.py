@@ -12,6 +12,18 @@ def test_viewer_exposed():
     assert callable(gabriel.view)
 
 
+def test_bucket_api_exposed():
+    gabriel = import_module("gabriel")
+    assert hasattr(gabriel, "bucket")
+
+
+def test_root_exports_match_api():
+    gabriel = import_module("gabriel")
+    api = import_module("gabriel.api")
+    missing = [name for name in api.__all__ if not hasattr(gabriel, name)]
+    assert not missing, f"Top-level gabriel missing exports: {missing}"
+
+
 def test_api_view_exported_and_legacy_removed():
     api = import_module("gabriel.api")
     assert callable(getattr(api, "view", None))
