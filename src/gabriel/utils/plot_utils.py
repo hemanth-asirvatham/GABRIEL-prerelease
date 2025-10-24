@@ -39,8 +39,22 @@ try:
 except ModuleNotFoundError:
     tabulate = None  # fallback when tabulate isn't installed
 
-import statsmodels.api as sm
-import statsmodels.formula.api as smf
+
+class _MissingStatsmodels:
+    """Lazily raise an informative error when statsmodels isn't available."""
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover - trivial
+        raise ImportError(
+            "statsmodels is required for this functionality. Install statsmodels>=0.14 to enable it."
+        )
+
+
+try:
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+except Exception:  # pragma: no cover - exercised when statsmodels is missing
+    sm = _MissingStatsmodels()
+    smf = _MissingStatsmodels()
 
 
 def _ensure_list(values: Optional[Union[str, Sequence[str]]]) -> List[str]:
@@ -1522,28 +1536,19 @@ def bar_plot(
     figsize: Optional[Tuple[float, float]] = None,
     dpi: int = 400,
     label_font_size: int = 12,
+    tick_label_size: int = 11,
     title_font_size: int = 14,
-    wrap_width: Optional[int] = 16,
-    wrap_auto_scale: bool = True,
-    wrap_scale_reference: Optional[float] = 6.0,
-    wrap_scale_limits: Tuple[float, float] = (0.25, 3.0),
+    wrap_width: Optional[int] = 18,
+    min_wrap_chars: int = 12,
     rotate_xlabels: bool = False,
-    x_label_font_size: int = 12,
     annotation_font_size: int = 10,
     annotation_fontweight: str = "bold",
     precision: int = 3,
     value_axis_limits: Optional[Tuple[Optional[float], Optional[float]]] = None,
     orientation: str = "vertical",
+    horizontal_label_fraction: float = 0.28,
     series_labels: Optional[Iterable[str]] = None,
-    auto_size: bool = True,
-    size_per_category: float = 1.2,
-    min_category_axis: float = 6.0,
-    max_category_axis: float = 24.0,
     title_wrap: Optional[int] = None,
-    title_wrap_per_inch: float = 6.0,
-    title_wrap_auto_scale: bool = True,
-    title_wrap_reference: Optional[float] = 8.0,
-    title_wrap_scale_limits: Tuple[float, float] = (0.5, 1.5),
     error_bars: Optional[Union[Iterable[float], Dict[str, Iterable[float]], str, bool]] = None,
     error_bar_capsize: float = 4.0,
     max_bars_per_plot: Optional[int] = 12,
@@ -1551,7 +1556,6 @@ def bar_plot(
     save_path: Optional[Union[str, Path]] = None,
     vertical_bar_width: float = 0.92,
     horizontal_bar_height: float = 0.7,
-    category_axis_padding: float = 0.05,
     min_category_fraction: float = 0.0,
     category_cap: Optional[int] = 12,
     excess_year_col: Optional[str] = None,
@@ -1560,6 +1564,7 @@ def bar_plot(
     excess_columns: Optional[Union[str, Iterable[str]]] = None,
     excess_replace: bool = True,
     excess_prefix: str = "",
+    **legacy_kwargs: Any,
 ) -> None:
     """Draw a bar chart with flexible sizing, wrapping and optional extras.
 
@@ -1589,14 +1594,21 @@ def bar_plot(
     orientation : {"vertical", "horizontal"}, default "vertical"
         Direction of the bars.  Horizontal bars flip the axes and swap the role
         of ``x_label``/``y_label``.
+    horizontal_label_fraction : float, default 0.28
+        Portion of the figure width reserved for y-axis labels when rendering
+        horizontal charts.  Increase the fraction when labels are long and need
+        more breathing room on the left side of the figure.
     series_labels : iterable of str, optional
         Labels used in the legend when plotting grouped/multi-value bars.  When
         omitted the column names (data) or ``Series i`` placeholders (values)
         are used.
-    auto_size : bool, default True
-        Automatically scale the figure size along the categorical axis based on
-        the number of bars.  ``size_per_category`` controls the growth rate and
-        ``min_category_axis``/``max_category_axis`` bound the result.
+    tick_label_size : int, default 11
+        Font size applied to the tick labels along the categorical axis.
+    auto sizing :
+        When ``figsize`` is omitted, the function widens vertical charts or
+        increases the height of horizontal charts based on how many categories
+        are rendered in the current chunk.  The heuristic is intentionally
+        gentle so wide charts stay legible without becoming excessively tall.
     max_bars_per_plot : int, optional
         Maximum number of categories to display per figure.  Additional
         categories are wrapped into subsequent plots.  When ``orientation`` is
@@ -1609,31 +1621,13 @@ def bar_plot(
     wrap_width : int, optional
         Base width (in characters) used when wrapping category labels.  Values
         ``<= 0`` disable wrapping entirely.  When ``None`` a default width of
-        ``16`` characters is used before scaling.
-    wrap_auto_scale : bool, default True
-        When ``True`` the category labels are wrapped more aggressively as the
-        number of bars increases and relaxed when there are only a few.  The
-        ``wrap_width`` parameter acts as the base width and the optional
-        ``wrap_scale_reference``/``wrap_scale_limits`` tweak the scaling.  The
-        automatic scaling only applies to vertical plots where long labels risk
-        colliding.
-    wrap_scale_reference, wrap_scale_limits : optional
-        Control the reference bar count and minimum/maximum scaling factor for
-        automatic label wrapping.  ``wrap_scale_reference`` defaults to ``6``
-        bars and ``wrap_scale_limits`` to ``(0.25, 3.0)``; ``None`` for the
-        reference falls back to the per-plot bar limit.
-    title_wrap_auto_scale : bool, default True
-        Apply the same scaling logic as ``wrap_auto_scale`` to the title when
-        ``title_wrap`` is not specified.
-    title_wrap_reference, title_wrap_scale_limits : optional
-        Override the reference bar count and scaling bounds used for
-        ``title_wrap_auto_scale``.  The defaults are ``8`` bars and ``(0.5, 1.5)``
-        for a gentler adjustment; ``None`` again falls back to the effective
-        per-plot limit.
-    category_axis_padding : float, default 0.05
-        Extra whitespace (as a fraction of the bar height/width) retained at the
-        start and end of the categorical axis.  ``0`` removes the padding while
-        larger values add more breathing room.
+        ``18`` characters is used before scaling.
+    min_wrap_chars : int, default 12
+        Minimum wrap width applied after auto-scaling so labels never collapse
+        into unreadably narrow columns.
+    title_wrap : optional
+        Explicit wrap width (in characters) for the title.  When ``None`` a
+        reasonable width is derived from the figure width.
     min_category_fraction : float, default 0.0
         Minimum share of the underlying observations required for a category to
         be included when aggregating directly from ``data``.  Categories with a
@@ -1651,10 +1645,6 @@ def bar_plot(
     vertical_bar_width, horizontal_bar_height : float, default (0.92, 0.7)
         Width/height of each bar group for the respective orientations.  For
         grouped bars the value is split evenly across the series.
-    title_wrap, title_wrap_per_inch : optional
-        Control the wrapping applied to the title.  When ``title_wrap`` is
-        ``None`` the width is derived from the figure width using
-        ``title_wrap_per_inch``.
     error_bars : iterable, dict, str or bool, optional
         Adds error bars to each bar.  Provide a sequence of symmetric error
         magnitudes, a mapping with ``{"lower": ..., "upper": ...}`` for
@@ -1677,6 +1667,45 @@ def bar_plot(
     orientation = (orientation or "vertical").strip().lower()
     if orientation not in {"vertical", "horizontal"}:
         raise ValueError("orientation must be 'vertical' or 'horizontal'.")
+    min_wrap_chars = max(int(min_wrap_chars), 1)
+    try:
+        horizontal_label_fraction = float(horizontal_label_fraction)
+    except (TypeError, ValueError):
+        horizontal_label_fraction = 0.28
+    horizontal_label_fraction = max(0.05, min(horizontal_label_fraction, 0.85))
+    if legacy_kwargs:
+        renamed = {"x_label_font_size": "tick_label_size"}
+        removed = {
+            "wrap_auto_scale": "wrap_auto_scale has been removed; label wrapping now adapts automatically.",
+            "wrap_scale_reference": "wrap_scale_reference has been removed; the heuristics no longer need manual tuning.",
+            "wrap_scale_limits": "wrap_scale_limits has been removed; labels use a softer built-in scaling.",
+            "title_wrap_per_inch": "title_wrap_per_inch has been removed; pass title_wrap for explicit control.",
+            "title_wrap_auto_scale": "title_wrap_auto_scale has been removed; the automatic width uses the figure size directly.",
+            "title_wrap_reference": "title_wrap_reference has been removed; the automatic width uses the figure size directly.",
+            "title_wrap_scale_limits": "title_wrap_scale_limits has been removed; the automatic width uses the figure size directly.",
+            "auto_size": "auto_size has been removed; omit figsize to use the streamlined auto-sizing heuristics.",
+            "size_per_category": "size_per_category has been removed; omit figsize to use the streamlined auto-sizing heuristics.",
+            "min_category_axis": "min_category_axis has been removed; auto-sizing now keeps widths reasonable by default.",
+            "max_category_axis": "max_category_axis has been removed; auto-sizing now keeps widths reasonable by default.",
+            "category_axis_padding": "category_axis_padding has been removed; a consistent padding is now applied automatically.",
+        }
+        for key, value in list(legacy_kwargs.items()):
+            if key in renamed:
+                target = renamed[key]
+                if target == "tick_label_size":
+                    tick_label_size = value  # type: ignore[assignment]
+                legacy_kwargs.pop(key)
+                continue
+            if key in removed:
+                raise TypeError(removed[key])
+        if legacy_kwargs:
+            unexpected = ", ".join(sorted(legacy_kwargs))
+            raise TypeError(f"Unexpected keyword arguments: {unexpected}")
+
+    try:
+        tick_label_size = int(tick_label_size)
+    except (TypeError, ValueError):
+        tick_label_size = 11
 
     using_dataframe = data is not None or category_column is not None or value_column is not None
     min_category_fraction = 0.0 if min_category_fraction is None else float(min_category_fraction)
@@ -1959,10 +1988,13 @@ def bar_plot(
     plt.style.use("default")
     plt.rcParams["font.family"] = font_family
 
+    manual_figsize: Optional[Tuple[float, float]]
     if figsize is None:
-        base_width, base_height = (16.0, 7.0)
+        manual_figsize = None
     else:
-        base_width, base_height = figsize
+        manual_figsize = (float(figsize[0]), float(figsize[1]))
+    default_figsize = (13.0, 6.5)
+    configured_wrap_width = 18 if wrap_width is None else wrap_width
     if max_bars_per_plot is None or int(max_bars_per_plot) <= 0:
         effective_limit = n_categories
     else:
@@ -1971,22 +2003,28 @@ def bar_plot(
         effective_limit = max(effective_limit, 1)
     total_chunks = (n_categories + effective_limit - 1) // effective_limit if effective_limit else 1
 
-    def _wrap_scale(count: int, reference: Optional[float], limits: Tuple[float, float]) -> float:
-        if count <= 0:
-            return 1.0
-        lower, upper = limits
-        lower = max(lower, 0.0)
-        if upper <= 0:
-            upper = lower if lower > 0 else 1.0
-        if upper < lower:
-            lower, upper = upper, lower
-        if reference is None or reference <= 0:
-            reference_val = float(effective_limit) if effective_limit else float(count)
+    def _label_wrap_width(raw_labels: Sequence[str], chunk_count: int) -> Optional[int]:
+        if configured_wrap_width is None or configured_wrap_width <= 0:
+            return None
+        base_width = max(int(round(configured_wrap_width)), min_wrap_chars)
+        if not raw_labels:
+            return base_width
+        longest = max(len(label) for label in raw_labels)
+        bonus = int(round(max(longest - base_width, 0) * 0.4))
+        penalty_scale = 0.4 if orientation == "vertical" else 0.2
+        penalty = int(round(max(chunk_count - 8, 0) * penalty_scale))
+        effective_width = base_width - penalty + bonus
+        return max(effective_width, min_wrap_chars)
+
+    def _auto_figsize(chunk_count: int) -> Tuple[float, float]:
+        width, height = default_figsize
+        count = max(chunk_count, 1)
+        if orientation == "vertical":
+            width = min(24.0, max(width, 0.85 * count + 6.0))
         else:
-            reference_val = float(reference)
-        reference_val = max(reference_val, 1e-6)
-        scale = reference_val / float(count)
-        return max(lower, min(upper, scale))
+            height = min(18.0, max(height, 0.6 * count + 4.0))
+            width = max(width, 11.0)
+        return width, height
 
     chunk_sizes: List[int] = []
     if total_chunks > 0:
@@ -2027,42 +2065,18 @@ def bar_plot(
                 chunk_error = error_array[:, start:end]
 
         chunk_count = chunk_values.shape[0]
-        if wrap_width is not None and wrap_width <= 0:
+        resolved_wrap_width = _label_wrap_width(raw_labels, chunk_count)
+        if resolved_wrap_width is None:
             chunk_labels = raw_labels
         else:
-            base_wrap_width = wrap_width if wrap_width and wrap_width > 0 else 16
-            if wrap_auto_scale and orientation == "vertical":
-                wrap_scale = _wrap_scale(chunk_count, wrap_scale_reference, wrap_scale_limits)
-                reference_val = wrap_scale_reference if wrap_scale_reference and wrap_scale_reference > 0 else effective_limit
-                if reference_val and reference_val > 0:
-                    crowding = chunk_count / float(reference_val)
-                    if crowding > 1:
-                        wrap_scale /= math.sqrt(crowding)
-                longest_label = max((len(label) for label in raw_labels), default=0)
-                if base_wrap_width > 0 and longest_label > 0:
-                    length_ratio = longest_label / float(base_wrap_width)
-                    if length_ratio > 1:
-                        wrap_scale /= math.sqrt(length_ratio)
-                lower_limit = max(wrap_scale_limits[0], 0.0)
-                upper_limit = wrap_scale_limits[1] if wrap_scale_limits[1] > 0 else max(lower_limit, 1.0)
-                if upper_limit < lower_limit:
-                    lower_limit, upper_limit = upper_limit, lower_limit
-                wrap_scale = max(lower_limit, min(upper_limit, wrap_scale))
-            else:
-                wrap_scale = 1.0
-            effective_wrap_width = max(int(round(base_wrap_width * wrap_scale)), 1)
             chunk_labels = [
-                textwrap.fill(label, width=effective_wrap_width) if effective_wrap_width > 0 else label
+                textwrap.fill(label, width=resolved_wrap_width) if resolved_wrap_width > 0 else label
                 for label in raw_labels
             ]
-        if auto_size:
-            axis_span = min(max_category_axis, max(min_category_axis, size_per_category * chunk_count))
-            if orientation == "vertical":
-                fig_width, fig_height = axis_span, base_height
-            else:
-                fig_width, fig_height = base_width, axis_span
+        if manual_figsize is None:
+            fig_width, fig_height = _auto_figsize(chunk_count)
         else:
-            fig_width, fig_height = base_width, base_height
+            fig_width, fig_height = manual_figsize
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=dpi)
         ax.set_facecolor(background_color)
@@ -2184,14 +2198,14 @@ def bar_plot(
                         fontweight=annotation_fontweight,
                     )
 
-        axis_padding = max(category_axis_padding, 0.0)
+        axis_padding = 0.08
 
         if orientation == "vertical":
             ax.set_xticks(indices)
             ax.set_xticklabels(chunk_labels, rotation=45 if rotate_xlabels else 0, ha="right" if rotate_xlabels else "center")
             ax.set_xlabel(x_label, fontsize=label_font_size, fontweight="bold")
             ax.set_ylabel(y_label, fontsize=label_font_size, fontweight="bold")
-            ax.tick_params(axis="x", labelsize=x_label_font_size)
+            ax.tick_params(axis="x", labelsize=tick_label_size)
             if chunk_count > 0 and axis_padding:
                 ax.margins(x=axis_padding * 0.5)
             for tick_label in ax.get_xticklabels():
@@ -2208,7 +2222,7 @@ def bar_plot(
             ax.set_yticklabels(chunk_labels)
             ax.set_ylabel(x_label, fontsize=label_font_size, fontweight="bold")
             ax.set_xlabel(y_label, fontsize=label_font_size, fontweight="bold")
-            ax.tick_params(axis="y", labelsize=x_label_font_size)
+            ax.tick_params(axis="y", labelsize=tick_label_size)
             if value_axis_limits is not None:
                 lower, upper = value_axis_limits
                 current_lower, current_upper = ax.get_xlim()
@@ -2223,6 +2237,7 @@ def bar_plot(
                 lower_bound = indices[0] - pad - extra
                 upper_bound = indices[-1] + pad + extra
                 ax.set_ylim(lower_bound, upper_bound)
+                ax.invert_yaxis()
             else:
                 ax.margins(y=axis_padding)
             if value_axis_limits is None:
@@ -2243,19 +2258,19 @@ def bar_plot(
                 ax.legend(handles, labels, frameon=False)
 
         if title_wrap is None:
-            computed_wrap = int(round(fig.get_figwidth() * max(title_wrap_per_inch, 0)))
-            if title_wrap_auto_scale:
-                title_scale = _wrap_scale(chunk_count, title_wrap_reference, title_wrap_scale_limits)
-            else:
-                title_scale = 1.0
-            computed_wrap = int(round(computed_wrap * title_scale))
-            title_width = max(computed_wrap, 1)
+            computed_wrap = max(int(round(fig.get_figwidth() * 5.5)), 1)
+            title_width = computed_wrap
         else:
             title_width = max(int(title_wrap), 1)
         title_text = textwrap.fill(title, width=title_width) if title_width > 0 else title
         ax.set_title(title_text, fontsize=title_font_size, fontweight="bold")
 
-        plt.tight_layout()
+        fig.tight_layout()
+        if orientation == "horizontal":
+            right_margin = 0.98
+            if horizontal_label_fraction >= right_margin:
+                right_margin = min(horizontal_label_fraction + 0.01, 0.99)
+            fig.subplots_adjust(left=horizontal_label_fraction, right=right_margin)
         figures.append((fig, ax))
 
         if output_dir is not None:
@@ -2484,14 +2499,16 @@ def line_plot(
         line_plot(df, x='year', by='party', mode='proportion')  # y=None => counts
 
     WIDE (several numeric columns already):
-        line_plot(df, x='year', series=['dem_score','gop_score'])
+        line_plot(df, x='year', y=['dem_score','gop_score'])  # quick shorthand
+        line_plot(df, x='year', series=['dem_score','gop_score'])  # explicit
 
     Key behaviors
     -------------
     • mode='value'     : plot values (after aggregating duplicates if long).
     • mode='proportion': within each x, divide each series' value by total across series at that x.
                          (Works for long and wide.)
-    • Aggregation (long): when multiple rows share (x, by), combine with `agg`.
+    • Aggregation     : duplicates at each (x, series) are combined with `agg`
+                        (works for both long and wide data).
     • Smoothing         : centered rolling mean (or B-spline if SciPy available).
     • Colors            : deterministic; prefer `color_map={'A':'#...', 'B':'#...'}` to pin exact hues.
                           If not provided, falls back to colormaps in `cmap_names`.
@@ -2519,9 +2536,53 @@ def line_plot(
     if cmap_names is None:
         cmap_names = ["Reds", "Blues", "Greens", "Purples", "Oranges", "Greys"]
 
-    # Exactly one of by / series
-    if (by is None) == (series is None):
-        raise ValueError("Specify exactly one of `by` (long) OR `series` (wide).")
+    def _is_non_string_sequence(value: Any) -> bool:
+        return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+    series_columns: Optional[List[Any]] = None
+    if series is not None:
+        if by is not None:
+            raise ValueError("Specify either `by` for long-form data or `series`/`y` for wide data, not both.")
+        series_columns = _ensure_list(series)
+    elif by is None:
+        if y is None:
+            raise ValueError("Provide one or more columns via `y` or `series` when `by` is omitted.")
+        if _is_non_string_sequence(y):
+            series_columns = list(y)
+        else:
+            series_columns = [y]
+        y = None
+    elif y is not None and _is_non_string_sequence(y):
+        raise ValueError("When `by` is provided, `y` must reference a single column name.")
+
+    if by is None and series_columns is None:
+        raise ValueError("Specify `by` or supply one or more columns via `y`/`series`.")
+    if series_columns is not None and not series_columns:
+        raise ValueError("No columns were supplied to plot.")
+
+    agg_fns = {
+        'mean':   lambda arr: float(np.mean(arr)) if len(arr) else np.nan,
+        'median': lambda arr: float(np.median(arr)) if len(arr) else np.nan,
+        'std':    lambda arr: float(np.std(arr)) if len(arr) else np.nan,
+        'var':    lambda arr: float(np.var(arr)) if len(arr) else np.nan,
+        'cv':     lambda arr: float(np.std(arr) / np.mean(arr)) if len(arr) and np.mean(arr) != 0 else np.nan,
+        'se':     lambda arr: float(np.std(arr) / np.sqrt(max(len(arr), 1))) if len(arr) else np.nan,
+        'sum':    lambda arr: float(np.sum(arr)) if len(arr) else 0.0,
+        'count':  lambda arr: len(arr),
+    }
+    if callable(agg):
+        agg_callable = lambda arr: agg(np.asarray(arr))
+    else:
+        if agg not in agg_fns:
+            raise ValueError(f"Unsupported agg '{agg}'.")
+        agg_callable = agg_fns[agg]
+
+    def _apply_agg(values: Union[pd.Series, np.ndarray]) -> float:
+        if hasattr(values, "to_numpy"):
+            arr = values.to_numpy()
+        else:
+            arr = np.asarray(values)
+        return agg_callable(arr)
 
     work = df.copy()
 
@@ -2536,13 +2597,16 @@ def line_plot(
             pass
 
     # ---- represent everything as long: (x, _series, _value)
-    if series is not None:
-        if isinstance(series, (str, int)):
-            series = [series]
-        missing = [c for c in series if c not in work.columns]
+    if series_columns is not None:
+        missing = [c for c in series_columns if c not in work.columns]
         if missing:
-            raise KeyError(f"Missing `series` columns: {missing}")
-        long_all = work[[x] + series].melt(id_vars=[x], var_name="_series", value_name="_value")
+            raise KeyError(f"Missing columns for wide plot: {missing}")
+        subset = work[[x] + series_columns].copy()
+        for col in series_columns:
+            subset[col] = pd.to_numeric(subset[col], errors='coerce')
+        grouped = subset.groupby(x, dropna=False)[series_columns]
+        aggregated = grouped.agg(lambda s: _apply_agg(s)).reset_index()
+        long_all = aggregated.melt(id_vars=[x], var_name="_series", value_name="_value")
 
     else:
         if by not in work.columns:
@@ -2553,28 +2617,16 @@ def line_plot(
         if exclude is not None:
             work = work[~work[by].isin(exclude)]
 
-        agg_fns = {
-            'mean':  np.mean,
-            'median': np.median,
-            'std':   np.std,
-            'var':   np.var,
-            'cv':    lambda s: np.std(s) / (np.mean(s) if np.mean(s)!=0 else np.nan),
-            'se':    lambda s: np.std(s) / np.sqrt(max(len(s),1)),
-            'sum':   np.sum,
-            'count': lambda s: len(s),
-        }
-        if agg not in agg_fns:
-            raise ValueError(f"Unsupported agg '{agg}'.")
-
         if y is None:
             long_all = (work.groupby([x, by], dropna=False)
                             .size().rename("_value").reset_index())
         else:
             if y not in work.columns:
                 raise KeyError(f"`y` column '{y}' not found.")
+            work[y] = pd.to_numeric(work[y], errors='coerce')
             tmp = work.rename(columns={y: '_value'})
-            long_all = (tmp.groupby([x, by], dropna=False)['_value']
-                           .apply(lambda s: agg_fns[agg](s.values)).reset_index())
+            grouped = tmp.groupby([x, by], dropna=False)["_value"]
+            long_all = grouped.apply(lambda s: _apply_agg(s)).reset_index()
         long_all = long_all.rename(columns={by: "_series"})
 
     # ---- compute plotted value
