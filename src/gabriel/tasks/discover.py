@@ -480,6 +480,21 @@ class Discover:
                 column_name,  # type: ignore[arg-type]
                 reset_files=reset_files,
             )
+            actual_labels = dict(clf.cfg.labels)
+            if actual_labels != labels:
+                print(
+                    "[Discover] Detected mismatch between cached classifier labels and generated buckets; "
+                    "using cached labels from the classification cache instead."
+                )
+                labels = actual_labels
+                if labels:
+                    bucket_df = pd.DataFrame(
+                        {"bucket": list(labels.keys()), "definition": list(labels.values())}
+                    )
+                else:
+                    bucket_df = pd.DataFrame(columns=["bucket", "definition"])
+            else:
+                labels = actual_labels
 
         result: Dict[str, Any] = {
             "candidates": candidate_df,

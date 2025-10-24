@@ -1,6 +1,9 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 
+import json
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import openai
@@ -14,6 +17,7 @@ from gabriel.tasks.classify import Classify, ClassifyConfig, _collect_prediction
 from gabriel.tasks.extract import Extract, ExtractConfig
 from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.discover import Discover, DiscoverConfig
+from gabriel.tasks.bucket import Bucket, BucketConfig
 import gabriel.tasks.discover as discover_module
 import gabriel
 
@@ -890,9 +894,97 @@ def test_discover_uses_cached_labels_when_definitions_diverge(monkeypatch, tmp_p
     assert f"{expected_label}_inverted" in classification_cols
 
 
+def test_discover_single_column_uses_cached_labels(monkeypatch, tmp_path):
+    df = pd.DataFrame({"text": ["alpha"]})
+    cached_labels = {"cached": "cached desc"}
+    fresh_labels = {"fresh": "fresh desc"}
+
+    class DummyCodify:
+        def __init__(self, cfg: Any):
+            self.cfg = cfg
+
+        async def run(
+            self,
+            df: pd.DataFrame,
+            column_name: str,
+            *,
+            categories: Optional[Any] = None,
+            additional_instructions: str = "",
+            reset_files: bool = False,
+        ) -> pd.DataFrame:
+            return pd.DataFrame({"coded_passages": [{"fresh": ["desc"]}]})
+
+    class DummyBucket:
+        def __init__(self, cfg: Any):
+            self.cfg = cfg
+
+        async def run(
+            self,
+            df: pd.DataFrame,
+            column_name: str,
+            *,
+            reset_files: bool = False,
+        ) -> pd.DataFrame:
+            return pd.DataFrame(
+                {"bucket": list(fresh_labels.keys()), "definition": list(fresh_labels.values())}
+            )
+
+    class DummyClassify:
+        def __init__(self, cfg: Any):
+            self.cfg = cfg
+
+        async def run(
+            self,
+            df: pd.DataFrame,
+            column_name: Optional[str] = None,
+            *,
+            reset_files: bool = False,
+            **_: Any,
+        ) -> pd.DataFrame:
+            self.cfg.labels = dict(cached_labels)
+            subset = df[[column_name]].copy() if column_name else df.copy()
+            for lab in cached_labels:
+                subset[lab] = [True] * len(subset)
+            subset["predicted_classes"] = [[] for _ in range(len(subset))]
+            return subset
+
+    monkeypatch.setattr(discover_module, "Codify", DummyCodify)
+    monkeypatch.setattr(discover_module, "Bucket", DummyBucket)
+    monkeypatch.setattr(discover_module, "Classify", DummyClassify)
+
+    cfg = DiscoverConfig(
+        save_dir=str(tmp_path / "disc_single"),
+        use_dummy=True,
+        bucket_count=1,
+        raw_term_definitions=False,
+    )
+    result = asyncio.run(Discover(cfg).run(df, column_name="text"))
+    assert result["buckets"] == cached_labels
+    assert set(result["classification"].columns).issuperset(cached_labels.keys())
+
+
 def test_collect_predictions_np_bool():
     row = pd.Series({"speech": np.bool_(True), "beeps": np.bool_(False), "space": None})
     assert _collect_predictions(row) == ["speech"]
+
+
+def test_bucket_reuses_final_state(tmp_path):
+    cfg = BucketConfig(save_dir=str(tmp_path / "bucket_state"), use_dummy=True, bucket_count=1)
+    task = Bucket(cfg)
+    df = pd.DataFrame({"term": ["alpha", "beta"]})
+    term_map = {"alpha": "", "beta": ""}
+    signature = task._terms_signature(list(term_map.keys()), term_map)
+    state = {
+        "terms_signature": signature,
+        "finalized": True,
+        "final_buckets": [{"bucket": "cached", "definition": "saved"}],
+    }
+    state_path = Path(cfg.save_dir) / "bucket_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state))
+
+    result = asyncio.run(task.run(df, column_name="term"))
+    assert result.to_dict(orient="records") == state["final_buckets"]
 
 
 def test_classify_parse_dict(tmp_path):
