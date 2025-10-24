@@ -14,7 +14,7 @@ from .logging import get_logger, set_log_level
 from .mapmaker import MapMaker, create_county_choropleth
 from .parsing import safe_json, safest_json, clean_json_df
 from .jinja import shuffled, shuffled_dict, get_env
-from .passage_viewer import PassageViewer, view_coded_passages
+from .passage_viewer import PassageViewer, view
 from .word_matching import (
     normalize_text_aggressive,
     letters_only,
@@ -49,7 +49,7 @@ __all__ = [
     "robust_find_improved",
     "strict_find",
     "PassageViewer",
-    "view_coded_passages",
+    "view",
     "swap_circle_square",
     "load",
 ]

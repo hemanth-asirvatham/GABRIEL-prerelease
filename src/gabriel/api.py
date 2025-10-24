@@ -1,7 +1,7 @@
 import os
 import warnings
 import pandas as pd
-from typing import Callable, Dict, Optional, Union, Any, List
+from typing import Callable, Dict, Optional, Union, Any, List, Mapping, Sequence
 
 from .tasks import (
     Rate,
@@ -38,7 +38,7 @@ from .tasks import (
     IdeateConfig,
 )
 from .utils.openai_utils import get_all_responses
-from .utils.passage_viewer import view_coded_passages as _view_coded_passages
+from .utils.passage_viewer import view as _view_passages
 from .tasks.debias import (
     DebiasConfig,
     DebiasPipeline,
@@ -1075,18 +1075,28 @@ async def whatever(
     )
 
 
-def view_coded_passages(
+def view(
     df: pd.DataFrame,
     column_name: str,
-    categories: Optional[Union[list[str], str]] = None,
+    attributes: Optional[Union[Mapping[str, Any], Sequence[Any], Any]] = None,
+    *,
     colab: bool = True,
     header_columns: Optional[Any] = None,
+    max_passages: Optional[int] = None,
+    font_scale: float = 1.0,
+    font_family: Optional[str] = None,
+    color_mode: str = "auto",
 ):
     """Convenience wrapper for the passage viewer utility."""
-    return _view_coded_passages(
+
+    return _view_passages(
         df,
         column_name,
-        categories,
+        attributes=attributes,
         colab=colab,
         header_columns=header_columns,
+        max_passages=max_passages,
+        font_scale=font_scale,
+        font_family=font_family,
+        color_mode=color_mode,
     )

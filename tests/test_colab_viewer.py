@@ -1,21 +1,24 @@
 import pandas as pd
 import pytest
 
-from gabriel.utils.passage_viewer import _normalize_structured_dataframe
+from gabriel.utils.passage_viewer import (
+    _normalize_structured_dataframe,
+    _passage_matches_filters,
+)
 
 
-def test_view_coded_passages_colab_runs():
+def test_view_colab_runs():
     pytest.importorskip("IPython")
-    from gabriel.utils.passage_viewer import view_coded_passages
+    from gabriel.utils.passage_viewer import view
 
     df = pd.DataFrame({"text": ["A snippet"], "cat": [["A snippet"]]})
     # Should not raise when using the lightweight HTML viewer
-    view_coded_passages(df, "text", ["cat"])
+    view(df, "text", attributes=["cat"])
 
 
-def test_view_coded_passages_colab_with_headers():
+def test_view_colab_with_headers():
     pytest.importorskip("IPython")
-    from gabriel.utils.passage_viewer import view_coded_passages
+    from gabriel.utils.passage_viewer import view
 
     df = pd.DataFrame(
         {
@@ -24,10 +27,10 @@ def test_view_coded_passages_colab_with_headers():
             "speaker": ["Test Speaker"],
         }
     )
-    view_coded_passages(
+    view(
         df,
         "text",
-        ["cat"],
+        attributes=["cat"],
         header_columns=["speaker"],
     )
 
@@ -63,9 +66,9 @@ def test_normalize_structured_dataframe_handles_strings():
     assert normalized_dynamic.at[1, "coded_passages"]["cat"] == []
 
 
-def test_view_coded_passages_handles_stringified_inputs():
+def test_view_handles_stringified_inputs():
     pytest.importorskip("IPython")
-    from gabriel.utils.passage_viewer import view_coded_passages
+    from gabriel.utils.passage_viewer import view
 
     df = pd.DataFrame(
         {
@@ -75,11 +78,41 @@ def test_view_coded_passages_handles_stringified_inputs():
         }
     )
 
-    view_coded_passages(df, "text", ["cat"])
-    view_coded_passages(df, "text", "coded_passages")
+    view(df, "text", attributes=["cat"])
+    view(df, "text", attributes="coded_passages")
 
 
-def test_top_level_view_coded_passages_colab_runs():
+def test_view_handles_boolean_and_numeric_attributes():
+    pytest.importorskip("IPython")
+    from gabriel.utils.passage_viewer import view
+
+    df = pd.DataFrame(
+        {
+            "text": ["Sample", "Another"],
+            "flag": [True, False],
+            "score": [4.5, 3.1],
+        }
+    )
+
+    view(df, "text", attributes=["flag", "score"])
+
+
+def test_passage_matches_filters_helper():
+    payload = {
+        "snippets": {"topic": ["alpha"], "other": []},
+        "bools": {"is_positive": True, "is_negative": False},
+        "numeric": {"score": 4.2},
+    }
+
+    assert _passage_matches_filters(payload, required_snippets={"topic"})
+    assert not _passage_matches_filters(payload, required_snippets={"missing"})
+    assert _passage_matches_filters(payload, required_bools={"is_positive"})
+    assert not _passage_matches_filters(payload, required_bools={"is_negative"})
+    assert _passage_matches_filters(payload, numeric_filters={"score": (4.0, 5.0)})
+    assert not _passage_matches_filters(payload, numeric_filters={"score": (4.3, 4.9)})
+
+
+def test_top_level_view_colab_runs():
     pytest.importorskip("IPython")
     pytest.importorskip("aiolimiter")
     pytest.importorskip("openai")
@@ -92,9 +125,9 @@ def test_top_level_view_coded_passages_colab_runs():
             "speaker": ["Top Level"],
         }
     )
-    gabriel.view_coded_passages(
+    gabriel.view(
         df,
         "text",
-        ["cat"],
+        attributes=["cat"],
         header_columns=["speaker"],
     )

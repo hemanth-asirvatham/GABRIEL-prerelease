@@ -19,7 +19,7 @@ from .api import (
     debias,
     ideate,
     whatever,
-    view_coded_passages,
+    view,
 )
 from .utils import load
 
@@ -44,7 +44,7 @@ __all__ = list(_tasks.__all__) + [
     "debias",
     "ideate",
     "whatever",
-    "view_coded_passages",
+    "view",
     "load",
 ]
 
