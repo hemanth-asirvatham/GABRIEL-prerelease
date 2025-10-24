@@ -39,6 +39,9 @@ AUDIO_EXTENSIONS = {
     ".wma",
     ".alac",
 }
+IMAGE_EXTENSION_SUFFIXES = {ext.lstrip(".") for ext in IMAGE_EXTENSIONS}
+AUDIO_EXTENSION_SUFFIXES = {ext.lstrip(".") for ext in AUDIO_EXTENSIONS}
+PATH_MODALITY_SUFFIXES = IMAGE_EXTENSION_SUFFIXES | AUDIO_EXTENSION_SUFFIXES
 
 
 def load(
@@ -47,6 +50,7 @@ def load(
     *,
     tag_dict: Optional[dict[str, Any]] = None,
     save_name: str = "gabriel_aggregated_content.csv",
+    save_dir: Optional[str] = None,
     reset_files: bool = False,
     modality: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -55,7 +59,9 @@ def load(
     Parameters
     ----------
     folder_path:
-        Path to a directory containing media files or to a single file.
+        Path to a directory containing media files or to a single file. When a
+        CSV/Excel file is provided, it is loaded directly without creating a
+        copy.
     extensions:
         Optional iterable of file extensions (without leading dots) to include.
         When ``None`` all files are processed.
@@ -63,12 +69,15 @@ def load(
         Optional mapping of substrings to tag values. The first matching
         substring found in a file name determines the ``tag`` column value.
     save_name:
-        Name of the output CSV written inside ``folder_path`` (or its parent
-        directory when ``folder_path`` points to a file). Defaults to
+        Name of the output CSV written inside ``save_dir``. Defaults to
         ``"gabriel_aggregated_content.csv"``.
+    save_dir:
+        Optional directory for the aggregated CSV. When omitted, the data is
+        saved inside ``folder_path`` (or the parent directory if
+        ``folder_path`` points to a file).
     reset_files:
-        When ``False`` (default), an existing file at the save location causes a
-        :class:`FileExistsError`. Set to ``True`` to overwrite the file.
+        When ``False`` (default), an existing file at ``save_path`` is reused
+        instead of being regenerated. Set to ``True`` to overwrite the file.
     modality:
         Optional modality hint. ``"text"``, ``"entity"``, and ``"web"`` are
         treated as text; ``"image"`` and ``"audio"`` collect file paths. When
@@ -81,16 +90,15 @@ def load(
     """
 
     folder_path = os.path.expanduser(os.path.expandvars(folder_path))
-    if os.path.isfile(folder_path):
-        base_dir = os.path.dirname(folder_path)
-    else:
-        base_dir = folder_path
-    save_path = os.path.join(base_dir, save_name)
+    target_dir = _resolve_save_directory(folder_path, save_dir)
+    save_path = os.path.join(target_dir, save_name)
 
     if os.path.exists(save_path) and not reset_files:
-        raise FileExistsError(
-            f"{save_path} exists. Set reset_files=True to overwrite or choose a different save_name."
-        )
+        logger.info("Loading existing aggregated file from %s", save_path)
+        df = _read_tabular_file(save_path)
+        print(df.head())
+        print(f"Loaded existing aggregated file from {save_path}")
+        return df
 
     extset = {e.lower().lstrip(".") for e in extensions} if extensions else None
     modality = _resolve_modality(folder_path, extset, save_name, modality)
@@ -103,14 +111,13 @@ def load(
     if os.path.isfile(folder_path):
         ext = os.path.splitext(folder_path)[1].lower()
         if is_textual and ext in TABULAR_EXTENSIONS:
-            logger.info("Input path is a %s file; saving it directly.", ext)
-            if ext == ".csv":
-                df = pd.read_csv(folder_path)
-            else:
-                df = pd.read_excel(folder_path)
-            df.to_csv(save_path, index=False)
+            logger.info(
+                "Input path %s is a tabular file; loading it without creating a copy.",
+                folder_path,
+            )
+            df = _read_tabular_file(folder_path)
             print(df.head())
-            print(f"Saved aggregated file to {save_path}")
+            print(f"Loaded existing file from {folder_path}")
             return df
         name = os.path.basename(folder_path)
         rows.append(
@@ -129,7 +136,7 @@ def load(
                     continue
                 ext = os.path.splitext(fname)[1].lower()
                 short_ext = ext.lstrip(".")
-                if extset and short_ext not in extset:
+                if not _should_include_file(short_ext, modality, extset):
                     continue
                 file_path = os.path.join(root, fname)
                 rel = os.path.relpath(file_path, folder_path)
@@ -261,3 +268,48 @@ def _is_textual_modality(modality: str) -> bool:
     if modality in PATH_MODALITIES:
         return False
     return True
+
+
+def _should_include_file(
+    short_ext: str,
+    modality: str,
+    extset: Optional[set[str]],
+) -> bool:
+    if extset and short_ext not in extset:
+        return False
+    if modality == "image":
+        return short_ext in IMAGE_EXTENSION_SUFFIXES
+    if modality == "audio":
+        return short_ext in AUDIO_EXTENSION_SUFFIXES
+    # Text-style modalities should skip obvious binary media when no explicit filters
+    if short_ext in PATH_MODALITY_SUFFIXES:
+        return False
+    return True
+
+
+def _resolve_save_directory(folder_path: str, save_dir: Optional[str]) -> str:
+    if save_dir:
+        resolved = os.path.expanduser(os.path.expandvars(save_dir))
+    else:
+        if os.path.isdir(folder_path):
+            resolved = folder_path
+        else:
+            parent = os.path.dirname(folder_path)
+            if not parent:
+                parent = os.path.dirname(os.path.abspath(folder_path))
+            resolved = parent
+    if not resolved:
+        resolved = os.getcwd()
+    if os.path.isfile(resolved):
+        raise ValueError(f"save_dir must be a directory path, got file {resolved}")
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
+
+
+def _read_tabular_file(path: str) -> pd.DataFrame:
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".csv":
+        return pd.read_csv(path)
+    if ext in {".xlsx", ".xls"}:
+        return pd.read_excel(path)
+    return pd.read_csv(path)
