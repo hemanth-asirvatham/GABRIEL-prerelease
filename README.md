@@ -143,7 +143,7 @@ Each helper is built on a `Config` dataclass and a `.run()` coroutine in `gabrie
 
 ### Codifying (`gabriel.codify` / `Codify`)
 - Provide qualitative codes and optional completion checks to ensure every passage was reviewed.
-- Returns tidy tables plus helper functions like `gabriel.view_coded_passages` for rapid auditing.
+- Returns tidy tables plus helper functions like `gabriel.view` for rapid auditing, complete with clickable chips and numeric sliders to filter passages by categories, boolean labels, or rating bands.
 
 ### Deduplication and merging (`gabriel.deduplicate`, `gabriel.merge`)
 - Combine embeddings with GPT adjudication to produce clean entity lists or fuzzy joins.
@@ -187,7 +187,7 @@ Prefer working directly with prompt strings?  Use `gabriel.whatever` and forward
 - **Explore your corpus first**: read samples, pilot attributes in ChatGPT, and ensure definitions are precise yet concise.
 - **Guard against p-hacking** by logging every attribute you try and validating on reserved data splits when running large grids of measurements.
 - **Parallelise liberally**: GABRIEL handles concurrency and retry logic, so you can scale to large corpora quickly.
-- **Checkpoint and audit**: intermediate CSVs, JSON logs, and helper viewers (`view_coded_passages`) make it easy to inspect outputs and rerun failed batches.
+- **Checkpoint and audit**: intermediate CSVs, JSON logs, and helper viewers (`gabriel.view`) make it easy to inspect outputs and rerun failed batches.
 
 These principles—and many richer examples—are documented in the tutorial notebook linked above.
 

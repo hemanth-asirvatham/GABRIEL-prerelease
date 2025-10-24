@@ -84,7 +84,13 @@ class PromptRequest:
 
 class Codify:
     """Pipeline for coding passages of text according to specified categories."""
-    def __init__(self, cfg: CodifyConfig, template: Optional[PromptTemplate] = None, template_path: Optional[str] = None) -> None:
+
+    def __init__(
+        self,
+        cfg: CodifyConfig,
+        template: Optional[PromptTemplate] = None,
+        template_path: Optional[str] = None,
+    ) -> None:
         """Create a new :class:`Codify` instance.
 
         Parameters
@@ -113,22 +119,25 @@ class Codify:
     def view(
         df: pd.DataFrame,
         column_name: str,
-        categories: Optional[Union[List[str], str]] = None,
+        attributes: Optional[Union[List[str], str]] = None,
         **viewer_kwargs: Any,
     ):
-        """Convenience wrapper around :func:`view_coded_passages`.
+        """Convenience wrapper around :func:`gabriel.view`.
 
         This helper makes it easy to visualise coding results produced by
         :class:`Codify`. Additional keyword arguments are forwarded to
-        :func:`gabriel.utils.passage_viewer.view_coded_passages`, enabling
-        features such as the Colab viewer and custom metadata headers.
+        :func:`gabriel.view`, enabling features such as the Colab viewer,
+        attribute chips, and custom metadata headers.
         """
-        from ..utils import view_coded_passages
 
-        return view_coded_passages(
+        from ..utils import view as view_results
+
+        normalized_attributes = attributes or "coded_passages"
+
+        return view_results(
             df,
             column_name,
-            categories,
+            attributes=normalized_attributes,
             **viewer_kwargs,
         )
 
