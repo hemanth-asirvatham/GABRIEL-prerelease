@@ -362,6 +362,73 @@ def test_get_all_responses_custom_callable(tmp_path):
     assert df.loc[0, "Response"] == ["CUSTOM::x"]
 
 
+def test_get_all_responses_cancellation_stops_workers(tmp_path):
+    prompts = [f"p{i}" for i in range(6)]
+    call_log: List[str] = []
+    post_cancel_calls: List[str] = []
+    cancel_flag = asyncio.Event()
+    blocker = asyncio.Event()
+
+    async def stalled_response(prompt: str, **kwargs):
+        call_log.append(prompt)
+        if cancel_flag.is_set():
+            post_cancel_calls.append(prompt)
+        await blocker.wait()
+
+    async def runner():
+        task = asyncio.create_task(
+            openai_utils.get_all_responses(
+                prompts=prompts,
+                identifiers=[f"id{i}" for i in range(len(prompts))],
+                save_path=str(tmp_path / "cancel.csv"),
+                response_fn=stalled_response,
+                n_parallels=3,
+                verbose=False,
+            )
+        )
+        while len(call_log) < 3:
+            await asyncio.sleep(0.01)
+        cancel_flag.set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not post_cancel_calls
+
+    asyncio.run(runner())
+
+
+def test_get_all_responses_keyboard_interrupt_cleanup(tmp_path):
+    prompts = [f"p{i}" for i in range(5)]
+    call_log: List[str] = []
+    blocker = asyncio.Event()
+    counts = {"at_interrupt": 0}
+
+    async def stalled_response(prompt: str, **kwargs):
+        call_log.append(prompt)
+        await blocker.wait()
+
+    async def driver():
+        task = asyncio.create_task(
+            openai_utils.get_all_responses(
+                prompts=prompts,
+                identifiers=[f"kid{i}" for i in range(len(prompts))],
+                save_path=str(tmp_path / "kbint.csv"),
+                response_fn=stalled_response,
+                n_parallels=2,
+                verbose=False,
+            )
+        )
+        while len(call_log) < 2:
+            await asyncio.sleep(0.01)
+        counts["at_interrupt"] = len(call_log)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(driver())
+
+    assert len(call_log) == counts["at_interrupt"]
+
+
 def test_usage_overview_reports_remaining_budget_reason(capsys):
     openai_utils._print_usage_overview(
         prompts=["hello"],
