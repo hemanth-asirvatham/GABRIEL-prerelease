@@ -8,7 +8,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -328,17 +328,54 @@ class Discover:
                     return "square" if word.lower() == "circle" else "circle"
                 return re.sub(r"(?i)circle|square", repl, text)
 
-            combined_labels: Dict[str, str] = {}
-            rename_map: Dict[str, str] = {}
-            for lab, desc in labels.items():
-                actual_key = lab
-                swapped_lab = swap_cs(lab)
-                if swapped_lab == lab:
-                    swapped_lab = f"{lab} (inverted)"
-                combined_labels[actual_key] = desc
-                combined_labels[swapped_lab] = swap_cs(desc)
-                rename_map[actual_key] = f"{lab}_actual"
-                rename_map[swapped_lab] = f"{lab}_inverted"
+            def build_combined_metadata(
+                base_labels: Dict[str, str]
+            ) -> Tuple[Dict[str, str], Dict[str, str]]:
+                combined_local: Dict[str, str] = {}
+                rename_local: Dict[str, str] = {}
+                for lab, desc in base_labels.items():
+                    actual_key = lab
+                    swapped_lab = swap_cs(lab)
+                    if swapped_lab == lab:
+                        swapped_lab = f"{lab} (inverted)"
+                    combined_local[actual_key] = desc
+                    rename_local[actual_key] = f"{lab}_actual"
+                    combined_local[swapped_lab] = swap_cs(desc)
+                    rename_local[swapped_lab] = f"{lab}_inverted"
+                return combined_local, rename_local
+
+            def derive_base_from_combined(
+                combined_local: Dict[str, str]
+            ) -> Tuple[Dict[str, str], Dict[str, str]]:
+                base_local: Dict[str, str] = {}
+                rename_local: Dict[str, str] = {}
+                processed: Set[str] = set()
+                for key, desc in combined_local.items():
+                    if key in processed:
+                        continue
+                    swapped_key = swap_cs(key)
+                    inverted_key: Optional[str] = None
+                    if swapped_key != key and swapped_key in combined_local:
+                        inverted_key = swapped_key
+                    else:
+                        candidate = f"{key} (inverted)"
+                        if candidate in combined_local:
+                            inverted_key = candidate
+                    canonical_key = key
+                    canonical_desc = desc
+                    if canonical_key.endswith(" (inverted)") and swapped_key in combined_local:
+                        canonical_key = swapped_key
+                        canonical_desc = combined_local[canonical_key]
+                        inverted_key = key
+                    base_local[canonical_key] = canonical_desc
+                    rename_local[canonical_key] = f"{canonical_key}_actual"
+                    if inverted_key and inverted_key in combined_local:
+                        rename_local[inverted_key] = f"{canonical_key}_inverted"
+                        processed.add(inverted_key)
+                    processed.add(canonical_key)
+                return base_local, rename_local
+
+            combined_labels, rename_map = build_combined_metadata(labels)
 
             clf_cfg = ClassifyConfig(
                 labels=combined_labels,
@@ -354,6 +391,24 @@ class Discover:
                 square_column_name=square_column_name,  # type: ignore[arg-type]
                 reset_files=reset_files,
             )
+
+            actual_combined_labels = dict(clf.cfg.labels)
+            if set(actual_combined_labels.keys()) != set(combined_labels.keys()):
+                print(
+                    "[Discover] Detected mismatch between cached classifier labels and generated buckets; "
+                    "using cached labels from the classification cache instead."
+                )
+                combined_labels = actual_combined_labels
+                labels, rename_map = derive_base_from_combined(combined_labels)
+                if labels:
+                    bucket_df = pd.DataFrame(
+                        {
+                            "bucket": list(labels.keys()),
+                            "definition": list(labels.values()),
+                        }
+                    )
+                else:
+                    bucket_df = pd.DataFrame(columns=["bucket", "definition"])
 
             classify_result = combined_df.rename(columns=rename_map)
 

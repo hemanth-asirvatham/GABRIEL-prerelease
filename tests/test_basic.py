@@ -13,6 +13,8 @@ from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig, _collect_predictions
 from gabriel.tasks.extract import Extract, ExtractConfig
 from gabriel.tasks.rank import Rank, RankConfig
+from gabriel.tasks.discover import Discover, DiscoverConfig
+import gabriel.tasks.discover as discover_module
 import gabriel
 
 
@@ -805,6 +807,87 @@ def test_classification_multirun(tmp_path):
     assert res.predicted_classes.iloc[0] == []
     disagg = pd.read_csv(tmp_path / "classify_responses_full_disaggregated.csv", index_col=[0, 1])
     assert set(disagg.index.names) == {"text", "run"}
+
+
+def test_discover_uses_cached_labels_when_definitions_diverge(monkeypatch, tmp_path):
+    df = pd.DataFrame({"circle": ["alpha"], "square": ["beta"]})
+    cached_combined = {
+        "circle cached label more than square": "cached desc circle",
+        "square cached label more than circle": "cached desc square",
+    }
+    new_bucket = {
+        "circle fresh label more than square": "fresh desc",
+    }
+
+    class DummyCompare:
+        def __init__(self, cfg: Any):
+            self.cfg = cfg
+
+        async def run(
+            self,
+            df: pd.DataFrame,
+            circle_column_name: str,
+            square_column_name: str,
+            *,
+            reset_files: bool = False,
+        ) -> pd.DataFrame:
+            return pd.DataFrame(
+                {"attribute": list(new_bucket.keys()), "explanation": list(new_bucket.values())}
+            )
+
+    class DummyBucket:
+        def __init__(self, cfg: Any):
+            self.cfg = cfg
+
+        async def run(
+            self,
+            df: pd.DataFrame,
+            column_name: str,
+            *,
+            reset_files: bool = False,
+        ) -> pd.DataFrame:
+            return pd.DataFrame(
+                {"bucket": list(new_bucket.keys()), "definition": list(new_bucket.values())}
+            )
+
+    class DummyClassify:
+        def __init__(self, cfg: Any):
+            self.cfg = cfg
+
+        async def run(
+            self,
+            df: pd.DataFrame,
+            *,
+            circle_column_name: Optional[str] = None,
+            square_column_name: Optional[str] = None,
+            reset_files: bool = False,
+            **_: Any,
+        ) -> pd.DataFrame:
+            self.cfg.labels = dict(cached_combined)
+            subset = df[[circle_column_name, square_column_name]].copy()
+            for lab in cached_combined:
+                subset[lab] = [True] * len(subset)
+            subset["predicted_classes"] = [[] for _ in range(len(subset))]
+            return subset
+
+    monkeypatch.setattr(discover_module, "Compare", DummyCompare)
+    monkeypatch.setattr(discover_module, "Bucket", DummyBucket)
+    monkeypatch.setattr(discover_module, "Classify", DummyClassify)
+
+    cfg = DiscoverConfig(save_dir=str(tmp_path / "disc"), use_dummy=True, bucket_count=1)
+    result = asyncio.run(
+        Discover(cfg).run(
+            df,
+            circle_column_name="circle",
+            square_column_name="square",
+        )
+    )
+
+    expected_label = "circle cached label more than square"
+    assert list(result["buckets"].keys()) == [expected_label]
+    classification_cols = result["classification"].columns
+    assert f"{expected_label}_actual" in classification_cols
+    assert f"{expected_label}_inverted" in classification_cols
 
 
 def test_collect_predictions_np_bool():
