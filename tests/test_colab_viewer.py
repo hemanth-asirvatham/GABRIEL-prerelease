@@ -2,6 +2,8 @@ import pandas as pd
 import pytest
 
 from gabriel.utils.passage_viewer import (
+    _build_highlighted_text,
+    _build_note_html,
     _normalize_structured_dataframe,
     _passage_matches_filters,
 )
@@ -97,6 +99,14 @@ def test_view_handles_boolean_and_numeric_attributes():
     view(df, "text", attributes=["flag", "score"])
 
 
+def test_view_handles_text_only_requests():
+    pytest.importorskip("IPython")
+    from gabriel.utils.passage_viewer import view
+
+    df = pd.DataFrame({"text": ["Just text", "More text"]})
+    view(df, "text")
+
+
 def test_passage_matches_filters_helper():
     payload = {
         "snippets": {"topic": ["alpha"], "other": []},
@@ -110,6 +120,23 @@ def test_passage_matches_filters_helper():
     assert not _passage_matches_filters(payload, required_bools={"is_negative"})
     assert _passage_matches_filters(payload, numeric_filters={"score": (4.0, 5.0)})
     assert not _passage_matches_filters(payload, numeric_filters={"score": (4.3, 4.9)})
+
+
+def test_highlight_builder_returns_plain_text_without_snippets():
+    html_output = _build_highlighted_text(
+        "Plain text only",
+        {},
+        {},
+        {},
+    )
+    assert "Plain text only" in html_output
+
+
+def test_note_builder_handles_multiple_messages():
+    html_output = _build_note_html([" First message ", None, "Second"])
+    assert html_output.count("gabriel-note") == 2
+    assert "First message" in html_output
+    assert "Second" in html_output
 
 
 def test_top_level_view_colab_runs():

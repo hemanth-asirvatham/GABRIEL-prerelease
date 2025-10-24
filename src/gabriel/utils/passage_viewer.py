@@ -1691,6 +1691,26 @@ def _build_chip_html(chips: Optional[List[Dict[str, str]]]) -> str:
     return "".join(items)
 
 
+def _build_note_html(notes: Optional[Sequence[Any]]) -> str:
+    """Render helper notes such as truncation or text-only warnings."""
+
+    if not notes:
+        return ""
+
+    fragments: List[str] = []
+    for message in notes:
+        if message is None:
+            continue
+        text = str(message).strip()
+        if not text:
+            continue
+        fragments.append(
+            f"<div class='gabriel-note'>{html.escape(text)}</div>"
+        )
+
+    return "".join(fragments)
+
+
 def _build_legend_html(
     category_colors: Dict[str, str],
     category_counts: Dict[str, int],
@@ -1698,9 +1718,7 @@ def _build_legend_html(
     legend_token: Optional[str] = None,
 ) -> str:
     if not category_colors:
-        return (
-            "<div class='gabriel-legend gabriel-empty'>No categories to display.</div>"
-        )
+        return ""
 
     items = []
     for category, color in category_colors.items():
@@ -1783,6 +1801,7 @@ def _view_coded_passages_colab(
     normalized_headers = _normalize_header_columns(header_columns)
 
     has_dynamic = any(spec.dynamic for spec in attribute_specs)
+    text_only_mode = not attribute_specs
     category_names: List[str] = []
     category_labels: Dict[str, str] = {}
     if has_dynamic:
@@ -1939,11 +1958,14 @@ def _view_coded_passages_colab(
         passages = passages[:limit]
 
     total = len(passages)
-    note_html = (
-        f"<div class='gabriel-note'>{html.escape(trunc_note)}</div>"
-        if trunc_note
-        else ""
-    )
+    note_messages: List[str] = []
+    if text_only_mode:
+        note_messages.append(
+            "Displaying raw text because no attribute columns were provided."
+        )
+    if trunc_note:
+        note_messages.append(trunc_note)
+    note_html = _build_note_html(note_messages)
     root_class = f"gabriel-codify-viewer{theme_class}"
 
     display(HTML(style_html))
