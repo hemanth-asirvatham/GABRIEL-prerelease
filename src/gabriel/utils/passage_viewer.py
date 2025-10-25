@@ -447,6 +447,96 @@ _COLAB_STYLE = """
     flex-wrap: wrap;
     margin-bottom: 12px;
 }
+.gabriel-codify-viewer .gabriel-nav-group {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.gabriel-codify-viewer .gabriel-nav-button {
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03));
+    color: rgba(255, 255, 255, 0.95);
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+.gabriel-codify-viewer .gabriel-nav-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background: linear-gradient(135deg, rgba(0, 188, 212, 0.55), rgba(0, 188, 212, 0.2));
+    border-color: rgba(0, 188, 212, 0.65);
+    box-shadow: 0 10px 22px rgba(0, 188, 212, 0.25);
+}
+.gabriel-codify-viewer .gabriel-nav-button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+.gabriel-codify-viewer .gabriel-slider-shell {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.03);
+}
+.gabriel-codify-viewer .gabriel-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 160px;
+    height: 4px;
+    background: transparent;
+    cursor: pointer;
+}
+.gabriel-codify-viewer .gabriel-slider:focus-visible {
+    outline: none;
+}
+.gabriel-codify-viewer .gabriel-slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.25);
+}
+.gabriel-codify-viewer .gabriel-slider::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.25);
+}
+.gabriel-codify-viewer .gabriel-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #00bcd4;
+    border: 2px solid #0b1016;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
+    margin-top: -7px;
+}
+.gabriel-codify-viewer .gabriel-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #00bcd4;
+    border: 2px solid #0b1016;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
+}
+.gabriel-codify-viewer .gabriel-slider:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.gabriel-codify-viewer .gabriel-slider-count {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.78);
+    font-weight: 600;
+}
 .gabriel-codify-viewer .gabriel-passage-panel {
     background: #13161a;
     border: 1px solid #2b323c;
@@ -635,6 +725,157 @@ _COLAB_STYLE = """
     border-color: rgba(0, 188, 212, 0.6);
     color: #e8fbff;
 }
+.gabriel-codify-viewer .gabriel-numeric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+}
+.gabriel-codify-viewer .gabriel-numeric-control {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 10px 16px;
+    background: rgba(255, 255, 255, 0.02);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.gabriel-codify-viewer .gabriel-numeric-control.is-open {
+    border-color: rgba(0, 188, 212, 0.6);
+    box-shadow: 0 12px 26px rgba(0, 188, 212, 0.2);
+}
+.gabriel-codify-viewer .gabriel-numeric-pill {
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    padding: 4px 0;
+    font: inherit;
+}
+.gabriel-codify-viewer .gabriel-numeric-pill:focus-visible {
+    outline: none;
+}
+.gabriel-codify-viewer .gabriel-numeric-pill-label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.7);
+}
+.gabriel-codify-viewer .gabriel-numeric-pill-value {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.92);
+}
+.gabriel-codify-viewer .gabriel-numeric-pill-hint {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.55);
+}
+.gabriel-codify-viewer .gabriel-numeric-panel {
+    display: none;
+    padding-top: 10px;
+    margin-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.gabriel-codify-viewer .gabriel-numeric-control.is-open .gabriel-numeric-panel {
+    display: block;
+}
+.gabriel-codify-viewer .gabriel-numeric-slider {
+    position: relative;
+    height: 34px;
+    margin-bottom: 8px;
+    --start: 0%;
+    --end: 100%;
+}
+.gabriel-codify-viewer .gabriel-numeric-slider::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.15);
+}
+.gabriel-codify-viewer .gabriel-numeric-slider::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    border-radius: 999px;
+    left: var(--start, 0%);
+    right: calc(100% - var(--end, 100%));
+    background: linear-gradient(135deg, rgba(0, 188, 212, 0.85), rgba(99, 102, 241, 0.85));
+}
+.gabriel-codify-viewer .gabriel-range-input {
+    position: absolute;
+    width: 100%;
+    height: 34px;
+    margin: 0;
+    top: 0;
+    left: 0;
+    background: none;
+    pointer-events: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.gabriel-codify-viewer .gabriel-range-input--min {
+    z-index: 3;
+}
+.gabriel-codify-viewer .gabriel-range-input--max {
+    z-index: 2;
+}
+.gabriel-codify-viewer .gabriel-range-input::-webkit-slider-runnable-track {
+    height: 4px;
+}
+.gabriel-codify-viewer .gabriel-range-input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #00bcd4;
+    border: 2px solid #0a0f16;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+}
+.gabriel-codify-viewer .gabriel-range-input::-moz-range-track {
+    height: 4px;
+}
+.gabriel-codify-viewer .gabriel-range-input::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #00bcd4;
+    border: 2px solid #0a0f16;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+}
+.gabriel-codify-viewer .gabriel-range-input:focus-visible {
+    outline: none;
+}
+.gabriel-codify-viewer .gabriel-numeric-values {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.8);
+}
+.gabriel-codify-viewer .gabriel-numeric-value-chip {
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    font-variant-numeric: tabular-nums;
+}
 .gabriel-codify-viewer .gabriel-chip {
     display: inline-flex;
     align-items: center;
@@ -786,6 +1027,24 @@ _COLAB_STYLE = """
         border-color: rgba(15, 23, 42, 0.12);
         color: rgba(15, 23, 42, 0.8);
     }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-nav-button {
+        background: linear-gradient(135deg, #ffffff, #e0e7ff);
+        border-color: rgba(15, 23, 42, 0.12);
+        color: #1f2933;
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-slider-shell {
+        background: rgba(255, 255, 255, 0.9);
+        border-color: rgba(15, 23, 42, 0.12);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-slider::-webkit-slider-runnable-track,
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-slider::-moz-range-track {
+        background: rgba(15, 23, 42, 0.2);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-slider::-webkit-slider-thumb,
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-slider::-moz-range-thumb {
+        background: #2563eb;
+        border-color: #ffffff;
+    }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-chip-value {
         background: rgba(15, 23, 42, 0.08);
         color: rgba(15, 23, 42, 0.85);
@@ -819,6 +1078,41 @@ _COLAB_STYLE = """
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-note {
         color: rgba(15, 23, 42, 0.6);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-control {
+        background: rgba(15, 23, 42, 0.02);
+        border-color: rgba(15, 23, 42, 0.12);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-control.is-open {
+        box-shadow: 0 14px 30px rgba(37, 99, 235, 0.15);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-pill-label {
+        color: rgba(15, 23, 42, 0.65);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-pill-value {
+        background: rgba(15, 23, 42, 0.08);
+        color: rgba(15, 23, 42, 0.85);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-pill-hint {
+        color: rgba(15, 23, 42, 0.55);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-values {
+        color: rgba(15, 23, 42, 0.7);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-value-chip {
+        background: rgba(15, 23, 42, 0.08);
+        color: rgba(15, 23, 42, 0.85);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-slider::before {
+        background: rgba(15, 23, 42, 0.15);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-slider::after {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.85), rgba(14, 165, 233, 0.85));
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-range-input::-webkit-slider-thumb,
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-range-input::-moz-range-thumb {
+        background: #2563eb;
+        border-color: rgba(255, 255, 255, 0.95);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-chip--numeric .gabriel-chip-value {
         background: linear-gradient(135deg, #ffffff, #edf2ff);
@@ -886,6 +1180,59 @@ _COLAB_STYLE = """
     background: rgba(15, 23, 42, 0.05);
     border-color: rgba(15, 23, 42, 0.12);
     color: rgba(15, 23, 42, 0.8);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-nav-button {
+    background: linear-gradient(135deg, #ffffff, #e0e7ff);
+    border-color: rgba(15, 23, 42, 0.12);
+    color: #1f2933;
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-slider-shell {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(15, 23, 42, 0.12);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-slider::-webkit-slider-runnable-track,
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-slider::-moz-range-track {
+    background: rgba(15, 23, 42, 0.2);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-slider::-webkit-slider-thumb,
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-slider::-moz-range-thumb {
+    background: #2563eb;
+    border-color: #ffffff;
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-control {
+    background: rgba(15, 23, 42, 0.02);
+    border-color: rgba(15, 23, 42, 0.12);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-control.is-open {
+    box-shadow: 0 14px 30px rgba(37, 99, 235, 0.18);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-pill-label {
+    color: rgba(15, 23, 42, 0.65);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-pill-value {
+    background: rgba(15, 23, 42, 0.08);
+    color: rgba(15, 23, 42, 0.85);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-pill-hint {
+    color: rgba(15, 23, 42, 0.55);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-values {
+    color: rgba(15, 23, 42, 0.7);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-value-chip {
+    background: rgba(15, 23, 42, 0.08);
+    color: rgba(15, 23, 42, 0.85);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-slider::before {
+    background: rgba(15, 23, 42, 0.15);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-slider::after {
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.85), rgba(14, 165, 233, 0.85));
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-range-input::-webkit-slider-thumb,
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-range-input::-moz-range-thumb {
+    background: #2563eb;
+    border-color: rgba(255, 255, 255, 0.95);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-chip-value {
     background: rgba(15, 23, 42, 0.08);
@@ -1799,6 +2146,61 @@ def _render_passage_viewer(
     const numericDefaults = {};
     const numericHandles = {};
 
+    function updateNumericRange(column, start, end, opts = {}) {
+        const handle = numericHandles[column];
+        if (!handle) {
+            return;
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+            return;
+        }
+        if (start > end) {
+            const temp = start;
+            start = end;
+            end = temp;
+        }
+        const defaults = numericDefaults[column];
+        handle.minInput.value = String(start);
+        handle.maxInput.value = String(end);
+        if (handle.minValue) {
+            handle.minValue.textContent = formatNumber(start);
+        }
+        if (handle.maxValue) {
+            handle.maxValue.textContent = formatNumber(end);
+        }
+        if (handle.pillValue) {
+            handle.pillValue.textContent = formatNumber(start) + ' – ' + formatNumber(end);
+        }
+        if (
+            handle.sliderWrap &&
+            defaults &&
+            Number.isFinite(defaults.min) &&
+            Number.isFinite(defaults.max)
+        ) {
+            const span = defaults.max - defaults.min || 1;
+            const startPct = ((start - defaults.min) / span) * 100;
+            const endPct = ((end - defaults.min) / span) * 100;
+            const clamp = value => Math.max(0, Math.min(100, value));
+            handle.sliderWrap.style.setProperty('--start', clamp(startPct) + '%');
+            handle.sliderWrap.style.setProperty('--end', clamp(endPct) + '%');
+        }
+        const hasDefaults = Boolean(
+            defaults &&
+            Number.isFinite(defaults.min) &&
+            Number.isFinite(defaults.max)
+        );
+        let isActive = true;
+        if (hasDefaults) {
+            isActive =
+                Math.abs(start - defaults.min) > 1e-9 ||
+                Math.abs(end - defaults.max) > 1e-9;
+        }
+        state.numeric[column] = { min: start, max: end, active: Boolean(isActive) };
+        if (!opts.skipApply) {
+            applyFilters(false);
+        }
+    }
+
     function formatNumber(value) {
         if (typeof value !== 'number' || !isFinite(value)) {
             return '—';
@@ -1948,24 +2350,12 @@ def _render_passage_viewer(
         if (!handle) {
             return;
         }
-        let start = parseFloat(handle.minInput.value);
-        let end = parseFloat(handle.maxInput.value);
-        if (isNaN(start) || isNaN(end)) {
+        const start = parseFloat(handle.minInput.value);
+        const end = parseFloat(handle.maxInput.value);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
             return;
         }
-        if (start > end) {
-            const temp = start;
-            start = end;
-            end = temp;
-        }
-        handle.minInput.value = String(start);
-        handle.maxInput.value = String(end);
-        handle.minValue.textContent = formatNumber(start);
-        handle.maxValue.textContent = formatNumber(end);
-        const defaults = numericDefaults[column];
-        const isActive = !defaults || Math.abs(start - defaults.min) > 1e-9 || Math.abs(end - defaults.max) > 1e-9;
-        state.numeric[column] = { min: start, max: end, active: Boolean(isActive) };
-        applyFilters(false);
+        updateNumericRange(column, start, end);
     }
 
     function createToggleGroup(title, filters, kind) {
@@ -2018,36 +2408,54 @@ def _render_passage_viewer(
         group.appendChild(heading);
         const grid = document.createElement('div');
         grid.className = 'gabriel-numeric-grid';
+        const controls = [];
         filters.forEach(filter => {
             if (typeof filter.min !== 'number' || typeof filter.max !== 'number') {
                 return;
             }
             numericDefaults[filter.column] = { min: filter.min, max: filter.max };
-            state.numeric[filter.column] = { min: filter.min, max: filter.max, active: false };
             const control = document.createElement('div');
             control.className = 'gabriel-numeric-control';
             control.dataset.numeric = filter.column;
-            const label = document.createElement('div');
-            label.className = 'gabriel-numeric-label';
-            label.textContent = filter.label;
-            control.appendChild(label);
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'gabriel-numeric-pill';
+            pill.setAttribute('aria-expanded', 'false');
+            const pillLabel = document.createElement('span');
+            pillLabel.className = 'gabriel-numeric-pill-label';
+            pillLabel.textContent = filter.label;
+            const pillValue = document.createElement('span');
+            pillValue.className = 'gabriel-numeric-pill-value';
+            const pillHint = document.createElement('span');
+            pillHint.className = 'gabriel-numeric-pill-hint';
+            pillHint.textContent = 'Adjust';
+            pill.appendChild(pillLabel);
+            pill.appendChild(pillValue);
+            pill.appendChild(pillHint);
+            control.appendChild(pill);
+            const panel = document.createElement('div');
+            panel.className = 'gabriel-numeric-panel';
+            panel.hidden = true;
             const sliderWrap = document.createElement('div');
             sliderWrap.className = 'gabriel-numeric-slider';
+            sliderWrap.style.setProperty('--start', '0%');
+            sliderWrap.style.setProperty('--end', '100%');
             const minInput = document.createElement('input');
             minInput.type = 'range';
+            minInput.className = 'gabriel-range-input gabriel-range-input--min';
             minInput.min = String(filter.min);
             minInput.max = String(filter.max);
             minInput.step = String(filter.step);
             minInput.value = String(filter.min);
             const maxInput = document.createElement('input');
             maxInput.type = 'range';
+            maxInput.className = 'gabriel-range-input gabriel-range-input--max';
             maxInput.min = String(filter.min);
             maxInput.max = String(filter.max);
             maxInput.step = String(filter.step);
             maxInput.value = String(filter.max);
             sliderWrap.appendChild(minInput);
             sliderWrap.appendChild(maxInput);
-            control.appendChild(sliderWrap);
             const values = document.createElement('div');
             values.className = 'gabriel-numeric-values';
             const minValue = document.createElement('span');
@@ -2058,12 +2466,42 @@ def _render_passage_viewer(
             maxValue.textContent = formatNumber(filter.max);
             values.appendChild(minValue);
             values.appendChild(maxValue);
-            control.appendChild(values);
+            panel.appendChild(sliderWrap);
+            panel.appendChild(values);
+            control.appendChild(panel);
             grid.appendChild(control);
-            numericHandles[filter.column] = { minInput, maxInput, minValue, maxValue };
+            numericHandles[filter.column] = { minInput, maxInput, minValue, maxValue, pillValue, sliderWrap };
+            updateNumericRange(filter.column, filter.min, filter.max, { skipApply: true });
             const handler = () => handleNumericChange(filter.column);
             minInput.addEventListener('input', handler);
             maxInput.addEventListener('input', handler);
+            pill.addEventListener('click', () => {
+                const isOpen = control.classList.contains('is-open');
+                controls.forEach(other => {
+                    if (other === control) {
+                        return;
+                    }
+                    other.classList.remove('is-open');
+                    const otherPanel = other.querySelector('.gabriel-numeric-panel');
+                    if (otherPanel) {
+                        otherPanel.hidden = true;
+                    }
+                    const otherPill = other.querySelector('.gabriel-numeric-pill');
+                    if (otherPill) {
+                        otherPill.setAttribute('aria-expanded', 'false');
+                    }
+                });
+                if (isOpen) {
+                    control.classList.remove('is-open');
+                    panel.hidden = true;
+                    pill.setAttribute('aria-expanded', 'false');
+                } else {
+                    control.classList.add('is-open');
+                    panel.hidden = false;
+                    pill.setAttribute('aria-expanded', 'true');
+                }
+            });
+            controls.push(control);
         });
         if (!grid.children.length) {
             return null;
@@ -2105,15 +2543,22 @@ def _render_passage_viewer(
             state.snippets.clear();
             state.bools.clear();
             container.querySelectorAll('.gabriel-filter-toggle[aria-pressed="true"]').forEach(btn => btn.setAttribute('aria-pressed', 'false'));
-            Object.entries(numericDefaults).forEach(([column, defaults]) => {
-                state.numeric[column] = { min: defaults.min, max: defaults.max, active: false };
-                const handle = numericHandles[column];
-                if (handle) {
-                    handle.minInput.value = String(defaults.min);
-                    handle.maxInput.value = String(defaults.max);
-                    handle.minValue.textContent = formatNumber(defaults.min);
-                    handle.maxValue.textContent = formatNumber(defaults.max);
+            container.querySelectorAll('.gabriel-numeric-control.is-open').forEach(control => {
+                control.classList.remove('is-open');
+                const panel = control.querySelector('.gabriel-numeric-panel');
+                if (panel) {
+                    panel.hidden = true;
                 }
+                const pill = control.querySelector('.gabriel-numeric-pill');
+                if (pill) {
+                    pill.setAttribute('aria-expanded', 'false');
+                }
+            });
+            Object.entries(numericDefaults).forEach(([column, defaults]) => {
+                if (!defaults) {
+                    return;
+                }
+                updateNumericRange(column, defaults.min, defaults.max, { skipApply: true });
             });
             applyFilters(true);
         });
