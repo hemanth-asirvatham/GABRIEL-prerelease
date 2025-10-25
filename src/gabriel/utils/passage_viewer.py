@@ -106,15 +106,30 @@ def _rgba_string_from_hex(value: str, alpha: float) -> Optional[str]:
     return f"rgba({r}, {g}, {b}, {alpha_float:.3f})"
 
 
-def _build_chip_style_tokens(color: str) -> Optional[str]:
-    """Produce inline CSS custom properties for legend chips."""
+def _build_chip_style_tokens(color: str, intensity: float = 1.0) -> Optional[str]:
+    """Produce inline CSS custom properties for legend chips.
+
+    ``intensity`` allows callers to dim or brighten the glow that surrounds a
+    chip. The value is normalized to the ``[0.0, 1.0]`` range so that
+    ``intensity=1`` matches the original styling, while lower values softly
+    fade the background/border/glow.
+    """
 
     if not color:
         return None
+
+    try:
+        normalized = float(intensity)
+    except (TypeError, ValueError):
+        normalized = 1.0
+    if not math.isfinite(normalized):
+        normalized = 1.0
+    normalized = max(0.0, min(1.0, normalized))
+
     tokens: List[str] = []
-    bg = _rgba_string_from_hex(color, 0.22)
-    border = _rgba_string_from_hex(color, 0.55)
-    glow = _rgba_string_from_hex(color, 0.35)
+    bg = _rgba_string_from_hex(color, 0.05 + 0.17 * normalized)
+    border = _rgba_string_from_hex(color, 0.08 + 0.47 * normalized)
+    glow = _rgba_string_from_hex(color, 0.04 + 0.31 * normalized)
     if bg:
         tokens.append(f"--gabriel-chip-bg:{bg}")
     if border:
@@ -124,6 +139,42 @@ def _build_chip_style_tokens(color: str) -> Optional[str]:
     if not tokens:
         return None
     return ";".join(tokens)
+
+
+def _compute_numeric_intensity(
+    value: Optional[float],
+    bounds: Optional[Tuple[Optional[float], Optional[float]]],
+) -> float:
+    """Return a 0-1 score indicating where ``value`` sits within ``bounds``."""
+
+    if value is None or not bounds:
+        return 0.0
+
+    lower, upper = bounds
+    if lower is None and upper is None:
+        return 0.0
+
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+    lower_bound = float(lower) if lower is not None else numeric_value
+    upper_bound = float(upper) if upper is not None else numeric_value
+    if not math.isfinite(lower_bound):
+        lower_bound = numeric_value
+    if not math.isfinite(upper_bound):
+        upper_bound = numeric_value
+
+    if math.isclose(lower_bound, upper_bound, rel_tol=1e-9, abs_tol=1e-12):
+        return 1.0
+
+    span = upper_bound - lower_bound
+    if span == 0:
+        return 0.0
+
+    normalized = (numeric_value - lower_bound) / span
+    return max(0.0, min(1.0, normalized))
 
 
 @dataclass(frozen=True)
@@ -631,6 +682,9 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer .gabriel-legend-item--boolean,
 .gabriel-codify-viewer .gabriel-legend-item--numeric {
     min-height: 36px;
+    --gabriel-chip-bg: rgba(255, 255, 255, 0.05);
+    --gabriel-chip-border: rgba(255, 255, 255, 0.12);
+    --gabriel-chip-glow: rgba(0, 0, 0, 0.12);
 }
 .gabriel-codify-viewer .gabriel-legend-item:hover {
     background: rgba(255, 255, 255, 0.12);
@@ -685,28 +739,39 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer .gabriel-legend-value {
     font-size: 11px;
-    padding: 2px 8px;
+    padding: 2px 10px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.12);
     color: rgba(255, 255, 255, 0.82);
+    display: inline-flex;
+    justify-content: center;
+    min-width: 52px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'liga' 0;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean .gabriel-legend-value {
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
+.gabriel-codify-viewer .gabriel-legend-item--boolean {
+    --gabriel-chip-bg: rgba(0, 188, 212, 0.18);
+    --gabriel-chip-border: rgba(0, 188, 212, 0.55);
+    --gabriel-chip-glow: rgba(0, 188, 212, 0.25);
+}
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-true {
-    background: rgba(0, 188, 212, 0.18);
-    border-color: rgba(0, 188, 212, 0.55);
-    box-shadow: 0 12px 28px rgba(0, 188, 212, 0.25);
+    background: var(--gabriel-chip-bg);
+    border-color: var(--gabriel-chip-border);
+    box-shadow: 0 12px 28px var(--gabriel-chip-glow);
     color: #e6fcff;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-true:hover {
-    background: rgba(0, 188, 212, 0.22);
-    border-color: rgba(0, 188, 212, 0.65);
-    box-shadow: 0 16px 34px rgba(0, 188, 212, 0.35);
+    background: var(--gabriel-chip-bg);
+    border-color: var(--gabriel-chip-border);
+    box-shadow: 0 16px 34px var(--gabriel-chip-glow);
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
-    background: rgba(0, 188, 212, 0.25);
+    background: var(--gabriel-chip-bg);
     color: #e6fcff;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-false {
@@ -718,8 +783,13 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer .gabriel-legend-item.is-filtered,
 .gabriel-codify-viewer .gabriel-legend-item.is-sorted {
-    border-color: rgba(0, 188, 212, 0.6);
-    box-shadow: 0 6px 18px rgba(0, 188, 212, 0.25);
+    border-color: var(--gabriel-chip-border, rgba(0, 188, 212, 0.6));
+    box-shadow: 0 6px 18px var(--gabriel-chip-glow, rgba(0, 188, 212, 0.25));
+}
+.gabriel-codify-viewer .gabriel-legend-item--numeric {
+    background: var(--gabriel-chip-bg, rgba(255, 255, 255, 0.05));
+    border-color: var(--gabriel-chip-border, rgba(255, 255, 255, 0.12));
+    box-shadow: 0 8px 18px var(--gabriel-chip-glow, rgba(0, 0, 0, 0.12));
 }
 .gabriel-codify-viewer .gabriel-legend-item--numeric .gabriel-sort-indicator {
     display: inline-flex;
@@ -761,44 +831,62 @@ _COLAB_STYLE = """
     cursor: not-allowed;
 }
 .gabriel-codify-viewer .gabriel-header {
-    margin-bottom: 14px;
-    padding: 14px 16px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.04);
+    margin-bottom: 18px;
+    padding: 18px 20px;
+    border-radius: 14px;
+    background: linear-gradient(140deg, rgba(255, 255, 255, 0.05), rgba(9, 12, 18, 0.2));
     border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 36px rgba(5, 8, 13, 0.55);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
 }
 .gabriel-codify-viewer .gabriel-header-row {
     display: grid;
-    grid-template-columns: minmax(110px, auto) 1fr;
-    gap: 4px 12px;
-    align-items: center;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 14px;
+    row-gap: 2px;
+    align-items: baseline;
     margin: 0;
+    width: 100%;
 }
 .gabriel-codify-viewer .gabriel-header-label {
     font-weight: 600;
     text-transform: uppercase;
     font-size: 11px;
-    letter-spacing: 0.05em;
-    color: rgba(255, 255, 255, 0.7);
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.72);
     white-space: nowrap;
+    line-height: 1.2;
 }
 .gabriel-codify-viewer .gabriel-header-value {
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.94);
+    color: rgba(248, 250, 252, 0.96);
     font-weight: 600;
     letter-spacing: 0.01em;
-    line-height: 1.4;
+    line-height: 1.45;
     word-break: break-word;
+    text-align: left;
+    max-width: 100%;
+}
+.gabriel-codify-viewer .gabriel-header-label,
+.gabriel-codify-viewer .gabriel-header-value {
+    display: block;
+}
+@supports (backdrop-filter: blur(6px)) {
+    .gabriel-codify-viewer .gabriel-header {
+        backdrop-filter: blur(12px);
+    }
 }
 @media (max-width: 640px) {
     .gabriel-codify-viewer .gabriel-header-row {
         grid-template-columns: 1fr;
+        row-gap: 4px;
     }
     .gabriel-codify-viewer .gabriel-header-label {
         white-space: normal;
+        font-size: 10px;
+        letter-spacing: 0.08em;
     }
 }
 .gabriel-codify-viewer .gabriel-active-cats {
@@ -905,14 +993,19 @@ _COLAB_STYLE = """
         box-shadow: 0 12px 24px var(--gabriel-chip-glow, rgba(15, 23, 42, 0.18));
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true {
-        background: rgba(37, 99, 235, 0.18);
-        border-color: rgba(37, 99, 235, 0.4);
-        box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2);
+        background: var(--gabriel-chip-bg, rgba(37, 99, 235, 0.18));
+        border-color: var(--gabriel-chip-border, rgba(37, 99, 235, 0.4));
+        box-shadow: 0 12px 24px var(--gabriel-chip-glow, rgba(37, 99, 235, 0.2));
         color: rgba(15, 23, 42, 0.92);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
-        background: rgba(37, 99, 235, 0.35);
+        background: var(--gabriel-chip-bg, rgba(37, 99, 235, 0.35));
         color: rgba(15, 23, 42, 0.92);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--numeric {
+        background: var(--gabriel-chip-bg, rgba(15, 23, 42, 0.06));
+        border-color: var(--gabriel-chip-border, rgba(15, 23, 42, 0.12));
+        box-shadow: 0 10px 20px var(--gabriel-chip-glow, rgba(15, 23, 42, 0.12));
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-count {
         background: rgba(15, 23, 42, 0.1);
@@ -984,6 +1077,7 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-header {
     background: rgba(15, 23, 42, 0.06);
     border-color: rgba(15, 23, 42, 0.12);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-header-label {
     color: rgba(15, 23, 42, 0.65);
@@ -1486,12 +1580,20 @@ def _build_legend_html(
     boolean_values: Optional[Mapping[str, Optional[bool]]] = None,
     numeric_specs: Optional[Sequence[_AttributeSpec]] = None,
     numeric_values: Optional[Mapping[str, Optional[float]]] = None,
+    boolean_colors: Optional[Mapping[str, str]] = None,
+    numeric_colors: Optional[Mapping[str, str]] = None,
+    numeric_ranges: Optional[
+        Mapping[str, Tuple[Optional[float], Optional[float]]]
+    ] = None,
 ) -> str:
     if not category_colors and not boolean_specs and not numeric_specs:
         return ""
 
     boolean_values = boolean_values or {}
     numeric_values = numeric_values or {}
+    boolean_colors = boolean_colors or {}
+    numeric_colors = numeric_colors or {}
+    numeric_ranges = numeric_ranges or {}
 
     def _format_bool(value: Optional[bool]) -> str:
         if value is True:
@@ -1542,9 +1644,15 @@ def _build_legend_html(
         aria_label = html.escape(f"{label_text}: {display}", quote=True)
         safe_column = html.escape(column, quote=True)
         state_class = " is-true" if value is True else (" is-false" if value is False else "")
+        chip_style = _build_chip_style_tokens(boolean_colors.get(column))
+        style_attr = (
+            f" style=\"{html.escape(chip_style, quote=True)}\""
+            if chip_style
+            else ""
+        )
         items.append(
-            "<button type='button' class='gabriel-legend-item gabriel-legend-item--boolean"
-            f"{state_class}' data-boolean='{safe_column}' aria-pressed='false' aria-label='{aria_label}'>"
+            "<button type='button' class='gabriel-legend-item gabriel-legend-item--boolean'"
+            f"{state_class}' data-boolean='{safe_column}' aria-pressed='false' aria-label='{aria_label}'{style_attr}>"
             f"<span class='gabriel-legend-label'>{label}</span>"
             f"<span class='gabriel-legend-value'>{display}</span>"
             "</button>"
@@ -1558,14 +1666,25 @@ def _build_legend_html(
         display = html.escape(_format_numeric(value))
         aria_label = html.escape(f"{label_text}: {display}", quote=True)
         safe_column = html.escape(column, quote=True)
+        bounds = numeric_ranges.get(column)
+        intensity = _compute_numeric_intensity(value, bounds)
+        chip_style = _build_chip_style_tokens(
+            numeric_colors.get(column), intensity=intensity
+        )
+        style_attr = (
+            f" style=\"{html.escape(chip_style, quote=True)}\""
+            if chip_style
+            else ""
+        )
         items.append(
             "<button type='button' class='gabriel-legend-item gabriel-legend-item--numeric' "
-            f"data-numeric='{safe_column}' aria-pressed='false' aria-label='{aria_label}'>"
+            f"data-numeric='{safe_column}' aria-pressed='false' aria-label='{aria_label}'{style_attr}>"
             f"<span class='gabriel-legend-label'>{label}</span>"
             f"<span class='gabriel-legend-value'>{display}</span>"
             "<span class='gabriel-sort-indicator' aria-hidden='true'></span>"
             "</button>"
         )
+
 
     token_attr = (
         f" data-legend-token='{html.escape(legend_token, quote=True)}'"
@@ -1638,6 +1757,10 @@ def _render_passage_viewer(
     df = _normalize_structured_dataframe(df, snippet_columns)
     normalized_headers = _normalize_header_columns(header_columns)
 
+    numeric_bounds: Dict[str, List[Optional[float]]] = {
+        spec.column: [None, None] for spec in numeric_specs
+    }
+
     has_dynamic = any(spec.dynamic for spec in attribute_specs)
     text_only_mode = not attribute_specs
     category_names: List[str] = []
@@ -1653,8 +1776,21 @@ def _render_passage_viewer(
                 category_names.append(spec.column)
                 category_labels[spec.column] = spec.label
 
-    colors = _generate_distinct_colors(len(category_names))
-    category_colors = dict(zip(category_names, colors))
+    total_color_targets = len(category_names) + len(boolean_specs) + len(numeric_specs)
+    palette = _generate_distinct_colors(total_color_targets)
+    palette_iter = iter(palette)
+    category_colors = {
+        cat: next(palette_iter, "#ffd54f")
+        for cat in category_names
+    }
+    boolean_colors: Dict[str, str] = {
+        spec.column: next(palette_iter, "#80cbc4")
+        for spec in boolean_specs
+    }
+    numeric_colors: Dict[str, str] = {
+        spec.column: next(palette_iter, "#ffe082")
+        for spec in numeric_specs
+    }
 
     passages: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
@@ -1696,6 +1832,13 @@ def _render_passage_viewer(
             elif spec.kind == "numeric":
                 numeric_value = _coerce_numeric_value(value)
                 numeric_values[spec.column] = numeric_value
+                if numeric_value is not None:
+                    bounds = numeric_bounds.setdefault(spec.column, [None, None])
+                    lower, upper = bounds
+                    if lower is None or numeric_value < lower:
+                        bounds[0] = numeric_value
+                    if upper is None or numeric_value > upper:
+                        bounds[1] = numeric_value
             else:
                 formatted = _format_header_value(value)
                 if formatted:
@@ -1721,6 +1864,11 @@ def _render_passage_viewer(
                 "numeric": numeric_values,
             }
         )
+
+    numeric_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {
+        column: (bounds[0], bounds[1])
+        for column, bounds in numeric_bounds.items()
+    }
 
     color_choice = str(color_mode or "auto").lower()
     if color_choice not in {"auto", "dark", "light"}:
@@ -1782,6 +1930,9 @@ def _render_passage_viewer(
             boolean_values=payload.get("bools"),
             numeric_specs=numeric_specs,
             numeric_values=payload.get("numeric"),
+            boolean_colors=boolean_colors,
+            numeric_colors=numeric_colors,
+            numeric_ranges=numeric_ranges,
         )
         snippet_flags = {
             cat: bool(payload["snippets"].get(cat)) for cat in category_names
