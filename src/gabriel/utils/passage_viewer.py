@@ -637,155 +637,132 @@ _COLAB_STYLE = """
     font-size: 13px;
     color: rgba(255, 255, 255, 0.85);
 }
-.gabriel-codify-viewer .gabriel-chip-grid {
+.gabriel-codify-viewer .gabriel-filter-bar {
+    padding: 8px 0 18px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.gabriel-codify-viewer .gabriel-filter-chip-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 10px;
-}
-.gabriel-codify-viewer .gabriel-filter-panel {
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 14px;
-    padding: 12px 16px 10px;
-    margin-bottom: 12px;
-}
-.gabriel-codify-viewer .gabriel-filter-groups {
-    display: flex;
-    flex-direction: column;
     gap: 12px;
+    margin-bottom: 10px;
+    align-items: center;
 }
-.gabriel-codify-viewer .gabriel-filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+.gabriel-codify-viewer .gabriel-filter-chip-wrapper {
+    position: relative;
 }
-.gabriel-codify-viewer .gabriel-filter-title {
-    font-size: 11px;
-    letter-spacing: 0.08em;
+.gabriel-codify-viewer .gabriel-filter-chip {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.9);
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.gabriel-codify-viewer .gabriel-filter-chip:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
+}
+.gabriel-codify-viewer .gabriel-filter-chip:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.5);
+}
+.gabriel-codify-viewer .gabriel-filter-chip.is-active {
+    background: linear-gradient(135deg, rgba(0, 188, 212, 0.35), rgba(99, 102, 241, 0.35));
+    border-color: rgba(0, 188, 212, 0.65);
+    color: #e2fbff;
+    box-shadow: 0 12px 28px rgba(0, 188, 212, 0.25);
+}
+.gabriel-codify-viewer .gabriel-filter-chip-label {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+}
+.gabriel-codify-viewer .gabriel-filter-chip-value {
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.35);
+}
+.gabriel-codify-viewer .gabriel-filter-chip-hint {
+    font-size: 10px;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.65);
+    color: rgba(255, 255, 255, 0.58);
 }
-.gabriel-codify-viewer .gabriel-filter-row {
+.gabriel-codify-viewer .gabriel-filter-popover {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 10px);
+    min-width: 260px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(5, 8, 14, 0.96);
+    padding: 14px 16px 12px;
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
+    z-index: 30;
+}
+.gabriel-codify-viewer .gabriel-filter-chip-wrapper:not(.is-open) .gabriel-filter-popover {
+    display: none;
+}
+.gabriel-codify-viewer .gabriel-filter-chip-wrapper--numeric::after {
+    content: "";
+    position: absolute;
+    left: 32px;
+    top: calc(100% + 6px);
+    width: 14px;
+    height: 14px;
+    transform: rotate(45deg);
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(5, 8, 14, 0.96);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+.gabriel-codify-viewer .gabriel-filter-chip-wrapper--numeric.is-open::after {
+    opacity: 1;
+}
+.gabriel-codify-viewer .gabriel-filter-footer {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-}
-.gabriel-codify-viewer .gabriel-filter-toggle {
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    background: rgba(255, 255, 255, 0.05);
-    color: rgba(255, 255, 255, 0.88);
-    padding: 4px 14px;
-    font-size: 12px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.18s ease;
-}
-.gabriel-codify-viewer .gabriel-filter-toggle:hover {
-    background: rgba(0, 188, 212, 0.18);
-    border-color: rgba(0, 188, 212, 0.5);
-}
-.gabriel-codify-viewer .gabriel-filter-toggle[aria-pressed="true"] {
-    background: rgba(0, 188, 212, 0.28);
-    border-color: rgba(0, 188, 212, 0.7);
-    color: #d7fbff;
-    box-shadow: 0 6px 14px rgba(0, 188, 212, 0.22);
-}
-.gabriel-codify-viewer .gabriel-filter-toggle:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.45);
-}
-.gabriel-codify-viewer .gabriel-filter-slider {
-    width: 100%;
-    margin-top: 2px;
+    align-items: center;
+    justify-content: space-between;
 }
 .gabriel-codify-viewer .gabriel-filter-note {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.68);
-    margin-bottom: 6px;
-}
-.gabriel-codify-viewer .gabriel-filter-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 6px;
-}
-.gabriel-codify-viewer .gabriel-filter-clear {
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.85);
-    padding: 3px 12px;
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease;
-}
-.gabriel-codify-viewer .gabriel-filter-clear:hover {
-    background: rgba(0, 188, 212, 0.25);
-    border-color: rgba(0, 188, 212, 0.6);
-    color: #e8fbff;
-}
-.gabriel-codify-viewer .gabriel-numeric-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 12px;
-}
-.gabriel-codify-viewer .gabriel-numeric-control {
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    padding: 10px 16px;
-    background: rgba(255, 255, 255, 0.02);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.gabriel-codify-viewer .gabriel-numeric-control.is-open {
-    border-color: rgba(0, 188, 212, 0.6);
-    box-shadow: 0 12px 26px rgba(0, 188, 212, 0.2);
-}
-.gabriel-codify-viewer .gabriel-numeric-pill {
-    width: 100%;
-    border: none;
-    background: transparent;
-    color: inherit;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    cursor: pointer;
-    padding: 4px 0;
-    font: inherit;
-}
-.gabriel-codify-viewer .gabriel-numeric-pill:focus-visible {
-    outline: none;
-}
-.gabriel-codify-viewer .gabriel-numeric-pill-label {
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: rgba(255, 255, 255, 0.7);
 }
-.gabriel-codify-viewer .gabriel-numeric-pill-value {
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-    padding: 4px 10px;
+.gabriel-codify-viewer .gabriel-filter-clear {
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.92);
-}
-.gabriel-codify-viewer .gabriel-numeric-pill-hint {
-    font-size: 10px;
-    letter-spacing: 0.12em;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.85);
+    padding: 4px 14px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.55);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
-.gabriel-codify-viewer .gabriel-numeric-panel {
-    display: none;
-    padding-top: 10px;
-    margin-top: 8px;
-    border-top: 1px solid rgba(255, 255, 255, 0.07);
-}
-.gabriel-codify-viewer .gabriel-numeric-control.is-open .gabriel-numeric-panel {
-    display: block;
+.gabriel-codify-viewer .gabriel-filter-clear:hover {
+    background: rgba(0, 188, 212, 0.2);
+    border-color: rgba(0, 188, 212, 0.65);
+    color: #e8fbff;
 }
 .gabriel-codify-viewer .gabriel-numeric-slider {
     position: relative;
@@ -874,56 +851,6 @@ _COLAB_STYLE = """
     padding: 2px 8px;
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.08);
-    font-variant-numeric: tabular-nums;
-}
-.gabriel-codify-viewer .gabriel-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.88);
-}
-.gabriel-codify-viewer .gabriel-chip-label {
-    font-weight: 600;
-    color: inherit;
-}
-.gabriel-codify-viewer .gabriel-chip-value {
-    font-weight: 700;
-    background: rgba(255, 255, 255, 0.15);
-    color: rgba(255, 255, 255, 0.95);
-    padding: 0 8px;
-    border-radius: 8px;
-    font-size: 12px;
-}
-.gabriel-codify-viewer .gabriel-chip--boolean.gabriel-chip-state-true {
-    background: rgba(0, 188, 212, 0.2);
-    border-color: rgba(0, 188, 212, 0.5);
-    color: #7ce8ff;
-}
-.gabriel-codify-viewer .gabriel-chip--boolean.gabriel-chip-state-false {
-    opacity: 0.4;
-}
-.gabriel-codify-viewer .gabriel-chip--boolean.gabriel-chip-state-unknown {
-    opacity: 0.3;
-}
-.gabriel-codify-viewer .gabriel-chip--numeric .gabriel-chip-value {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(235, 240, 255, 0.9));
-    color: #0b0d11;
-    border-radius: 8px;
-    border: 1px solid rgba(9, 12, 16, 0.35);
-    padding: 4px 12px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-    letter-spacing: 0.04em;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 36px;
     font-variant-numeric: tabular-nums;
 }
 .gabriel-codify-viewer .gabriel-note {
@@ -1022,11 +949,6 @@ _COLAB_STYLE = """
         background: rgba(15, 23, 42, 0.1);
         color: rgba(15, 23, 42, 0.75);
     }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-chip {
-        background: rgba(15, 23, 42, 0.05);
-        border-color: rgba(15, 23, 42, 0.12);
-        color: rgba(15, 23, 42, 0.8);
-    }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-nav-button {
         background: linear-gradient(135deg, #ffffff, #e0e7ff);
         border-color: rgba(15, 23, 42, 0.12);
@@ -1045,56 +967,53 @@ _COLAB_STYLE = """
         background: #2563eb;
         border-color: #ffffff;
     }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-chip-value {
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-bar {
+        border-color: rgba(15, 23, 42, 0.14);
+        box-shadow: none;
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip {
+        background: rgba(255, 255, 255, 0.92);
+        border-color: rgba(15, 23, 42, 0.16);
+        color: rgba(15, 23, 42, 0.85);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip:hover {
+        background: rgba(226, 244, 255, 0.95);
+        border-color: rgba(59, 130, 246, 0.4);
+        color: rgba(15, 23, 42, 0.95);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip.is-active {
+        background: linear-gradient(135deg, #93c5fd, #c084fc);
+        border-color: rgba(79, 70, 229, 0.4);
+        color: #0f172a;
+        box-shadow: 0 8px 20px rgba(79, 70, 229, 0.18);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip-value {
         background: rgba(15, 23, 42, 0.08);
         color: rgba(15, 23, 42, 0.85);
     }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-panel {
-        background: rgba(15, 23, 42, 0.04);
-        border-color: rgba(15, 23, 42, 0.12);
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip-hint {
+        color: rgba(15, 23, 42, 0.55);
     }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-title {
-        color: rgba(15, 23, 42, 0.6);
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-popover {
+        background: #ffffff;
+        border-color: rgba(15, 23, 42, 0.14);
+        box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
     }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-toggle {
-        background: rgba(15, 23, 42, 0.05);
-        border-color: rgba(15, 23, 42, 0.2);
-        color: rgba(15, 23, 42, 0.78);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-toggle:hover {
-        background: rgba(0, 188, 212, 0.22);
-        color: rgba(15, 23, 42, 0.95);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-toggle[aria-pressed="true"] {
-        color: rgba(15, 23, 42, 0.98);
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip-wrapper--numeric::after {
+        background: #ffffff;
+        border-color: rgba(15, 23, 42, 0.14);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-clear {
-        background: rgba(15, 23, 42, 0.05);
-        border-color: rgba(15, 23, 42, 0.16);
-        color: rgba(15, 23, 42, 0.7);
+        background: rgba(191, 219, 254, 0.55);
+        border-color: rgba(59, 130, 246, 0.45);
+        color: rgba(15, 23, 42, 0.8);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-clear:hover {
+        background: rgba(147, 197, 253, 0.85);
         color: rgba(15, 23, 42, 0.95);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-note {
-        color: rgba(15, 23, 42, 0.6);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-control {
-        background: rgba(15, 23, 42, 0.02);
-        border-color: rgba(15, 23, 42, 0.12);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-control.is-open {
-        box-shadow: 0 14px 30px rgba(37, 99, 235, 0.15);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-pill-label {
         color: rgba(15, 23, 42, 0.65);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-pill-value {
-        background: rgba(15, 23, 42, 0.08);
-        color: rgba(15, 23, 42, 0.85);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-pill-hint {
-        color: rgba(15, 23, 42, 0.55);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-values {
         color: rgba(15, 23, 42, 0.7);
@@ -1113,12 +1032,6 @@ _COLAB_STYLE = """
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-range-input::-moz-range-thumb {
         background: #2563eb;
         border-color: rgba(255, 255, 255, 0.95);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-chip--numeric .gabriel-chip-value {
-        background: linear-gradient(135deg, #ffffff, #edf2ff);
-        border-color: rgba(15, 23, 42, 0.2);
-        color: rgba(15, 23, 42, 0.95);
-        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-note {
         color: rgba(15, 23, 42, 0.6);
@@ -1176,11 +1089,6 @@ _COLAB_STYLE = """
     background: rgba(15, 23, 42, 0.1);
     color: rgba(15, 23, 42, 0.75);
 }
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-chip {
-    background: rgba(15, 23, 42, 0.05);
-    border-color: rgba(15, 23, 42, 0.12);
-    color: rgba(15, 23, 42, 0.8);
-}
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-nav-button {
     background: linear-gradient(135deg, #ffffff, #e0e7ff);
     border-color: rgba(15, 23, 42, 0.12);
@@ -1199,22 +1107,41 @@ _COLAB_STYLE = """
     background: #2563eb;
     border-color: #ffffff;
 }
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-control {
-    background: rgba(15, 23, 42, 0.02);
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-bar {
     border-color: rgba(15, 23, 42, 0.12);
 }
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-control.is-open {
-    box-shadow: 0 14px 30px rgba(37, 99, 235, 0.18);
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip {
+    background: rgba(255, 255, 255, 0.94);
+    border-color: rgba(15, 23, 42, 0.14);
+    color: rgba(15, 23, 42, 0.85);
 }
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-pill-label {
-    color: rgba(15, 23, 42, 0.65);
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip.is-active {
+    background: linear-gradient(135deg, #93c5fd, #c084fc);
+    color: #0f172a;
 }
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-pill-value {
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip-value {
     background: rgba(15, 23, 42, 0.08);
     color: rgba(15, 23, 42, 0.85);
 }
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-pill-hint {
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip-hint {
     color: rgba(15, 23, 42, 0.55);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-popover {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.12);
+    box-shadow: 0 20px 44px rgba(15, 23, 42, 0.18);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip-wrapper--numeric::after {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.12);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-clear {
+    background: rgba(191, 219, 254, 0.7);
+    border-color: rgba(59, 130, 246, 0.5);
+    color: rgba(15, 23, 42, 0.85);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-clear:hover {
+    background: rgba(147, 197, 253, 0.85);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-values {
     color: rgba(15, 23, 42, 0.7);
@@ -1233,16 +1160,6 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-range-input::-moz-range-thumb {
     background: #2563eb;
     border-color: rgba(255, 255, 255, 0.95);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-chip-value {
-    background: rgba(15, 23, 42, 0.08);
-    color: rgba(15, 23, 42, 0.85);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-chip--numeric .gabriel-chip-value {
-    background: linear-gradient(135deg, #ffffff, #eef3ff);
-    border-color: rgba(15, 23, 42, 0.18);
-    color: rgba(15, 23, 42, 0.9);
-    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-note {
     color: rgba(15, 23, 42, 0.6);
@@ -1627,14 +1544,11 @@ def _build_highlighted_text(
 def _build_header_html(
     header_rows: List[Tuple[str, str]],
     active_categories: List[str],
-    chips: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    if not header_rows and not active_categories and not chips:
+    if not header_rows and not active_categories:
         return ""
 
     parts: List[str] = []
-    if chips:
-        parts.append(_build_chip_html(chips))
     for label, value in header_rows:
         safe_label = html.escape(label)
         safe_value = html.escape(value).replace("\n", "<br/>")
@@ -1655,35 +1569,6 @@ def _build_header_html(
         )
 
     return "<div class='gabriel-header'>" + "".join(parts) + "</div>"
-
-
-def _build_chip_html(chips: Optional[List[Dict[str, str]]]) -> str:
-    if not chips:
-        return ""
-
-    items: List[str] = ["<div class='gabriel-chip-grid'>"]
-    for chip in chips:
-        label = html.escape(chip.get("label", ""))
-        value = chip.get("value")
-        safe_value = html.escape(value, quote=False) if value else ""
-        kind = chip.get("kind", "generic")
-        state = chip.get("state", "")
-        title = chip.get("title") or chip.get("label", "")
-        safe_title = html.escape(title, quote=True)
-        class_names = ["gabriel-chip", f"gabriel-chip--{kind}"]
-        if state:
-            class_names.append(f"gabriel-chip-state-{state}")
-        safe_state = html.escape(state, quote=True)
-        items.append(
-            f"<div class='{' '.join(class_names)}' data-kind='{kind}' "
-            f"data-state='{safe_state}' title='{safe_title}'>"
-            f"<span class='gabriel-chip-label'>{label}</span>"
-        )
-        if safe_value:
-            items.append(f"<span class='gabriel-chip-value'>{safe_value}</span>")
-        items.append("</div>")
-    items.append("</div>")
-    return "".join(items)
 
 
 def _build_note_html(notes: Optional[Sequence[Any]]) -> str:
@@ -1856,7 +1741,6 @@ def _render_passage_viewer(
             if formatted:
                 header_rows.append((label, formatted))
 
-        chips: List[Dict[str, str]] = []
         text_attributes: List[Tuple[str, str]] = []
         for spec in attribute_specs:
             if spec.dynamic or spec.kind == "snippet":
@@ -1867,22 +1751,11 @@ def _render_passage_viewer(
                 bool_values[spec.column] = bool_value
                 if bool_value is True:
                     display_val = "True"
-                    state = "true"
                 elif bool_value is False:
                     display_val = "False"
-                    state = "false"
                 else:
                     display_val = "—"
-                    state = "unknown"
-                chips.append(
-                    {
-                        "label": spec.label,
-                        "value": display_val,
-                        "state": state,
-                        "kind": "boolean",
-                        "title": spec.description,
-                    }
-                )
+                text_attributes.append((spec.label, display_val))
             elif spec.kind == "numeric":
                 numeric_value = _coerce_numeric_value(value)
                 numeric_values[spec.column] = numeric_value
@@ -1899,14 +1772,8 @@ def _render_passage_viewer(
                                 min(existing[0], numeric_value),
                                 max(existing[1], numeric_value),
                             )
-                    chips.append(
-                        {
-                            "label": spec.label,
-                            "value": _format_numeric_chip(numeric_value),
-                            "state": "number",
-                            "kind": "numeric",
-                            "title": spec.description,
-                        }
+                    text_attributes.append(
+                        (spec.label, _format_numeric_chip(numeric_value))
                     )
                 else:
                     formatted = _format_header_value(value)
@@ -1932,7 +1799,6 @@ def _render_passage_viewer(
                 "header": header_rows,
                 "active": active_categories,
                 "counts": passage_counts,
-                "chips": chips,
                 "bools": bool_values,
                 "numeric": numeric_values,
             }
@@ -1986,7 +1852,7 @@ def _render_passage_viewer(
             payload["text"], payload["snippets"], category_colors, category_labels
         )
         header_html = _build_header_html(
-            payload["header"], payload["active"], payload.get("chips")
+            payload["header"], payload["active"]
         )
         legend_token = f"interactive-{idx}-{random.random()}"
         legend_html = _build_legend_html(
@@ -2088,13 +1954,12 @@ def _render_passage_viewer(
       <div class="gabriel-slider-count" data-role="slider-count">$slider_count</div>
     </div>
   </div>
-  <div class="gabriel-filter-panel" data-role="filter-panel">
-    <div class="gabriel-filter-title">Filters</div>
-    <div class="gabriel-filter-groups" data-role="filters"></div>
-    <div class="gabriel-filter-actions">
+  <div class="gabriel-filter-bar" data-role="filter-bar">
+    <div class="gabriel-filter-chip-row" data-role="filters"></div>
+    <div class="gabriel-filter-footer">
+      <div class="gabriel-filter-note" data-role="filter-note"></div>
       <button type="button" class="gabriel-filter-clear" data-role="clear-filters">Clear filters</button>
     </div>
-    <div class="gabriel-filter-note" data-role="filter-note"></div>
   </div>
   <div class="gabriel-passage-panel">
     <div class="gabriel-passage-scroll" data-role="passage"></div>
@@ -2112,7 +1977,7 @@ def _render_passage_viewer(
     const passageEl = container.querySelector('[data-role="passage"]');
     const sliderEl = container.querySelector('[data-role="slider"]');
     const sliderCountEl = container.querySelector('[data-role="slider-count"]');
-    const filterPanel = container.querySelector('[data-role="filter-panel"]');
+    const filterBar = container.querySelector('[data-role="filter-bar"]');
     const filtersHost = container.querySelector('[data-role="filters"]');
     const filterNoteEl = container.querySelector('[data-role="filter-note"]');
     const clearFiltersBtn = container.querySelector('[data-role="clear-filters"]');
@@ -2127,8 +1992,8 @@ def _render_passage_viewer(
         if (statusEl) {
             statusEl.textContent = "No passages available.";
         }
-        if (filterPanel) {
-            filterPanel.style.display = "none";
+        if (filterBar) {
+            filterBar.style.display = "none";
         }
         if (sliderEl) sliderEl.disabled = true;
         if (prevBtn) prevBtn.disabled = true;
@@ -2145,6 +2010,7 @@ def _render_passage_viewer(
     };
     const numericDefaults = {};
     const numericHandles = {};
+    const numericChipWrappers = [];
 
     function updateNumericRange(column, start, end, opts = {}) {
         const handle = numericHandles[column];
@@ -2168,8 +2034,8 @@ def _render_passage_viewer(
         if (handle.maxValue) {
             handle.maxValue.textContent = formatNumber(end);
         }
-        if (handle.pillValue) {
-            handle.pillValue.textContent = formatNumber(start) + ' – ' + formatNumber(end);
+        if (handle.displayValue) {
+            handle.displayValue.textContent = formatNumber(start) + ' – ' + formatNumber(end);
         }
         if (
             handle.sliderWrap &&
@@ -2358,200 +2224,226 @@ def _render_passage_viewer(
         updateNumericRange(column, start, end);
     }
 
-    function createToggleGroup(title, filters, kind) {
-        const group = document.createElement('div');
-        group.className = 'gabriel-filter-group';
-        const heading = document.createElement('div');
-        heading.className = 'gabriel-filter-title';
-        heading.textContent = title;
-        group.appendChild(heading);
-        const row = document.createElement('div');
-        row.className = 'gabriel-filter-row';
-        filters.forEach(filter => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'gabriel-filter-toggle';
-            button.setAttribute('aria-pressed', 'false');
-            button.textContent = filter.label;
-            if (kind === 'category') {
-                button.dataset.category = filter.id;
-            } else if (kind === 'boolean') {
-                button.dataset.boolean = filter.column;
-            }
-            button.addEventListener('click', () => {
-                const key = kind === 'category' ? button.dataset.category : button.dataset.boolean;
-                if (!key) {
-                    return;
-                }
-                const target = kind === 'category' ? state.snippets : state.bools;
-                if (target.has(key)) {
-                    target.delete(key);
-                    button.setAttribute('aria-pressed', 'false');
-                } else {
-                    target.add(key);
-                    button.setAttribute('aria-pressed', 'true');
-                }
-                applyFilters(true);
-            });
-            row.appendChild(button);
-        });
-        group.appendChild(row);
-        return group;
-    }
-
-    function createNumericGroup(filters) {
-        const group = document.createElement('div');
-        group.className = 'gabriel-filter-group';
-        const heading = document.createElement('div');
-        heading.className = 'gabriel-filter-title';
-        heading.textContent = 'Numeric Ranges';
-        group.appendChild(heading);
-        const grid = document.createElement('div');
-        grid.className = 'gabriel-numeric-grid';
-        const controls = [];
-        filters.forEach(filter => {
-            if (typeof filter.min !== 'number' || typeof filter.max !== 'number') {
+    function closeNumericWrappers(exceptWrapper = null) {
+        numericChipWrappers.forEach(wrapper => {
+            if (exceptWrapper && wrapper === exceptWrapper) {
                 return;
             }
-            numericDefaults[filter.column] = { min: filter.min, max: filter.max };
-            const control = document.createElement('div');
-            control.className = 'gabriel-numeric-control';
-            control.dataset.numeric = filter.column;
-            const pill = document.createElement('button');
-            pill.type = 'button';
-            pill.className = 'gabriel-numeric-pill';
-            pill.setAttribute('aria-expanded', 'false');
-            const pillLabel = document.createElement('span');
-            pillLabel.className = 'gabriel-numeric-pill-label';
-            pillLabel.textContent = filter.label;
-            const pillValue = document.createElement('span');
-            pillValue.className = 'gabriel-numeric-pill-value';
-            const pillHint = document.createElement('span');
-            pillHint.className = 'gabriel-numeric-pill-hint';
-            pillHint.textContent = 'Adjust';
-            pill.appendChild(pillLabel);
-            pill.appendChild(pillValue);
-            pill.appendChild(pillHint);
-            control.appendChild(pill);
-            const panel = document.createElement('div');
-            panel.className = 'gabriel-numeric-panel';
-            panel.hidden = true;
-            const sliderWrap = document.createElement('div');
-            sliderWrap.className = 'gabriel-numeric-slider';
-            sliderWrap.style.setProperty('--start', '0%');
-            sliderWrap.style.setProperty('--end', '100%');
-            const minInput = document.createElement('input');
-            minInput.type = 'range';
-            minInput.className = 'gabriel-range-input gabriel-range-input--min';
-            minInput.min = String(filter.min);
-            minInput.max = String(filter.max);
-            minInput.step = String(filter.step);
-            minInput.value = String(filter.min);
-            const maxInput = document.createElement('input');
-            maxInput.type = 'range';
-            maxInput.className = 'gabriel-range-input gabriel-range-input--max';
-            maxInput.min = String(filter.min);
-            maxInput.max = String(filter.max);
-            maxInput.step = String(filter.step);
-            maxInput.value = String(filter.max);
-            sliderWrap.appendChild(minInput);
-            sliderWrap.appendChild(maxInput);
-            const values = document.createElement('div');
-            values.className = 'gabriel-numeric-values';
-            const minValue = document.createElement('span');
-            minValue.className = 'gabriel-numeric-value-chip';
-            minValue.textContent = formatNumber(filter.min);
-            const maxValue = document.createElement('span');
-            maxValue.className = 'gabriel-numeric-value-chip';
-            maxValue.textContent = formatNumber(filter.max);
-            values.appendChild(minValue);
-            values.appendChild(maxValue);
-            panel.appendChild(sliderWrap);
-            panel.appendChild(values);
-            control.appendChild(panel);
-            grid.appendChild(control);
-            numericHandles[filter.column] = { minInput, maxInput, minValue, maxValue, pillValue, sliderWrap };
-            updateNumericRange(filter.column, filter.min, filter.max, { skipApply: true });
-            const handler = () => handleNumericChange(filter.column);
-            minInput.addEventListener('input', handler);
-            maxInput.addEventListener('input', handler);
-            pill.addEventListener('click', () => {
-                const isOpen = control.classList.contains('is-open');
-                controls.forEach(other => {
-                    if (other === control) {
-                        return;
-                    }
-                    other.classList.remove('is-open');
-                    const otherPanel = other.querySelector('.gabriel-numeric-panel');
-                    if (otherPanel) {
-                        otherPanel.hidden = true;
-                    }
-                    const otherPill = other.querySelector('.gabriel-numeric-pill');
-                    if (otherPill) {
-                        otherPill.setAttribute('aria-expanded', 'false');
-                    }
-                });
-                if (isOpen) {
-                    control.classList.remove('is-open');
-                    panel.hidden = true;
-                    pill.setAttribute('aria-expanded', 'false');
-                } else {
-                    control.classList.add('is-open');
-                    panel.hidden = false;
-                    pill.setAttribute('aria-expanded', 'true');
-                }
-            });
-            controls.push(control);
+            wrapper.classList.remove('is-open');
+            const popover = wrapper.querySelector('.gabriel-filter-popover');
+            if (popover) {
+                popover.hidden = true;
+            }
+            const chip = wrapper.querySelector('.gabriel-filter-chip--numeric');
+            if (chip) {
+                chip.setAttribute('aria-expanded', 'false');
+            }
         });
-        if (!grid.children.length) {
+    }
+
+    function createToggleChip(filter, kind) {
+        if (!filter) {
             return null;
         }
-        group.appendChild(grid);
-        return group;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'gabriel-filter-chip-wrapper';
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'gabriel-filter-chip gabriel-filter-chip--toggle';
+        chip.dataset.filterRole = 'toggle';
+        chip.setAttribute('aria-pressed', 'false');
+        if (kind === 'category') {
+            chip.dataset.category = filter.id;
+        } else if (kind === 'boolean') {
+            chip.dataset.boolean = filter.column;
+        }
+        const label = document.createElement('span');
+        label.className = 'gabriel-filter-chip-label';
+        label.textContent = filter.label;
+        chip.appendChild(label);
+        chip.addEventListener('click', () => {
+            const key = kind === 'category' ? chip.dataset.category : chip.dataset.boolean;
+            if (!key) {
+                return;
+            }
+            const target = kind === 'category' ? state.snippets : state.bools;
+            if (target.has(key)) {
+                target.delete(key);
+                chip.classList.remove('is-active');
+                chip.setAttribute('aria-pressed', 'false');
+            } else {
+                target.add(key);
+                chip.classList.add('is-active');
+                chip.setAttribute('aria-pressed', 'true');
+            }
+            applyFilters(true);
+        });
+        wrapper.appendChild(chip);
+        return wrapper;
+    }
+
+    function createNumericChip(filter) {
+        if (
+            !filter ||
+            typeof filter.min !== 'number' ||
+            typeof filter.max !== 'number'
+        ) {
+            return null;
+        }
+        numericDefaults[filter.column] = { min: filter.min, max: filter.max };
+        const wrapper = document.createElement('div');
+        wrapper.className = 'gabriel-filter-chip-wrapper gabriel-filter-chip-wrapper--numeric';
+        wrapper.dataset.numeric = filter.column;
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'gabriel-filter-chip gabriel-filter-chip--numeric';
+        chip.setAttribute('aria-expanded', 'false');
+        const chipLabel = document.createElement('span');
+        chipLabel.className = 'gabriel-filter-chip-label';
+        chipLabel.textContent = filter.label;
+        const chipValue = document.createElement('span');
+        chipValue.className = 'gabriel-filter-chip-value';
+        const chipHint = document.createElement('span');
+        chipHint.className = 'gabriel-filter-chip-hint';
+        chipHint.textContent = 'Adjust';
+        chip.appendChild(chipLabel);
+        chip.appendChild(chipValue);
+        chip.appendChild(chipHint);
+        wrapper.appendChild(chip);
+        const popover = document.createElement('div');
+        popover.className = 'gabriel-filter-popover';
+        popover.hidden = true;
+        const sliderWrap = document.createElement('div');
+        sliderWrap.className = 'gabriel-numeric-slider';
+        sliderWrap.style.setProperty('--start', '0%');
+        sliderWrap.style.setProperty('--end', '100%');
+        const minInput = document.createElement('input');
+        minInput.type = 'range';
+        minInput.className = 'gabriel-range-input gabriel-range-input--min';
+        minInput.min = String(filter.min);
+        minInput.max = String(filter.max);
+        minInput.step = String(filter.step);
+        minInput.value = String(filter.min);
+        const maxInput = document.createElement('input');
+        maxInput.type = 'range';
+        maxInput.className = 'gabriel-range-input gabriel-range-input--max';
+        maxInput.min = String(filter.min);
+        maxInput.max = String(filter.max);
+        maxInput.step = String(filter.step);
+        maxInput.value = String(filter.max);
+        sliderWrap.appendChild(minInput);
+        sliderWrap.appendChild(maxInput);
+        const values = document.createElement('div');
+        values.className = 'gabriel-numeric-values';
+        const minValue = document.createElement('span');
+        minValue.className = 'gabriel-numeric-value-chip';
+        minValue.textContent = formatNumber(filter.min);
+        const maxValue = document.createElement('span');
+        maxValue.className = 'gabriel-numeric-value-chip';
+        maxValue.textContent = formatNumber(filter.max);
+        values.appendChild(minValue);
+        values.appendChild(maxValue);
+        popover.appendChild(sliderWrap);
+        popover.appendChild(values);
+        wrapper.appendChild(popover);
+        numericChipWrappers.push(wrapper);
+        numericHandles[filter.column] = {
+            minInput,
+            maxInput,
+            minValue,
+            maxValue,
+            displayValue: chipValue,
+            sliderWrap,
+            wrapper,
+            chip,
+        };
+        updateNumericRange(filter.column, filter.min, filter.max, { skipApply: true });
+        const handler = () => handleNumericChange(filter.column);
+        minInput.addEventListener('input', handler);
+        maxInput.addEventListener('input', handler);
+        chip.addEventListener('click', () => {
+            const isOpen = wrapper.classList.contains('is-open');
+            closeNumericWrappers(wrapper);
+            if (isOpen) {
+                wrapper.classList.remove('is-open');
+                popover.hidden = true;
+                chip.setAttribute('aria-expanded', 'false');
+            } else {
+                wrapper.classList.add('is-open');
+                popover.hidden = false;
+                chip.setAttribute('aria-expanded', 'true');
+            }
+        });
+        return wrapper;
     }
 
     function buildFilters() {
-        if (!filtersHost || !filterPanel) {
+        if (!filtersHost || !filterBar) {
             return;
         }
         filtersHost.innerHTML = '';
+        numericChipWrappers.length = 0;
+        Object.keys(numericHandles).forEach(key => delete numericHandles[key]);
         if (!data.hasFilters) {
-            filterPanel.style.display = 'none';
+            filterBar.style.display = 'none';
             return;
         }
-        filterPanel.style.display = '';
+        filterBar.style.display = '';
         if (data.categoryFilters && data.categoryFilters.length) {
-            const group = createToggleGroup('Categories', data.categoryFilters, 'category');
-            filtersHost.appendChild(group);
+            data.categoryFilters.forEach(filter => {
+                const chip = createToggleChip(filter, 'category');
+                if (chip) {
+                    filtersHost.appendChild(chip);
+                }
+            });
         }
         if (data.booleanFilters && data.booleanFilters.length) {
-            const group = createToggleGroup('Attributes', data.booleanFilters, 'boolean');
-            filtersHost.appendChild(group);
+            data.booleanFilters.forEach(filter => {
+                const chip = createToggleChip(filter, 'boolean');
+                if (chip) {
+                    filtersHost.appendChild(chip);
+                }
+            });
         }
         if (data.numericFilters && data.numericFilters.length) {
-            const numericGroup = createNumericGroup(data.numericFilters);
-            if (numericGroup) {
-                filtersHost.appendChild(numericGroup);
-            }
+            data.numericFilters.forEach(filter => {
+                const chip = createNumericChip(filter);
+                if (chip) {
+                    filtersHost.appendChild(chip);
+                }
+            });
         }
     }
 
     buildFilters();
 
+    container.addEventListener('click', event => {
+        if (!numericChipWrappers.length) {
+            return;
+        }
+        const wrapper = event.target.closest('.gabriel-filter-chip-wrapper--numeric');
+        if (!wrapper) {
+            closeNumericWrappers();
+        }
+    });
+
     if (clearFiltersBtn) {
         clearFiltersBtn.addEventListener('click', () => {
             state.snippets.clear();
             state.bools.clear();
-            container.querySelectorAll('.gabriel-filter-toggle[aria-pressed="true"]').forEach(btn => btn.setAttribute('aria-pressed', 'false'));
-            container.querySelectorAll('.gabriel-numeric-control.is-open').forEach(control => {
-                control.classList.remove('is-open');
-                const panel = control.querySelector('.gabriel-numeric-panel');
-                if (panel) {
-                    panel.hidden = true;
+            container.querySelectorAll('.gabriel-filter-chip--toggle.is-active').forEach(chip => {
+                chip.classList.remove('is-active');
+                chip.setAttribute('aria-pressed', 'false');
+            });
+            numericChipWrappers.forEach(wrapper => {
+                wrapper.classList.remove('is-open');
+                const popover = wrapper.querySelector('.gabriel-filter-popover');
+                if (popover) {
+                    popover.hidden = true;
                 }
-                const pill = control.querySelector('.gabriel-numeric-pill');
-                if (pill) {
-                    pill.setAttribute('aria-expanded', 'false');
+                const chip = wrapper.querySelector('.gabriel-filter-chip--numeric');
+                if (chip) {
+                    chip.setAttribute('aria-expanded', 'false');
                 }
             });
             Object.entries(numericDefaults).forEach(([column, defaults]) => {
