@@ -370,16 +370,6 @@ def _format_numeric_chip(value: float) -> str:
     return trimmed
 
 
-def _compute_slider_step(min_value: float, max_value: float) -> float:
-    span = max_value - min_value
-    if not math.isfinite(span) or span <= 0:
-        return 0.1
-    step = span / 200.0
-    if step < 0.001:
-        step = 0.001
-    return step
-
-
 def _passage_matches_filters(
     passage: Mapping[str, Any],
     *,
@@ -579,6 +569,10 @@ _COLAB_STYLE = """
     font: inherit;
     line-height: 1.2;
 }
+.gabriel-codify-viewer .gabriel-legend-item--boolean,
+.gabriel-codify-viewer .gabriel-legend-item--numeric {
+    min-height: 36px;
+}
 .gabriel-codify-viewer .gabriel-legend-item:hover {
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.18);
@@ -608,6 +602,69 @@ _COLAB_STYLE = """
     background: rgba(255, 255, 255, 0.12);
     color: rgba(255, 255, 255, 0.78);
 }
+.gabriel-codify-viewer .gabriel-legend-value {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.82);
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean .gabriel-legend-value {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
+    background: rgba(0, 188, 212, 0.25);
+    color: #e6fcff;
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean.is-false .gabriel-legend-value {
+    background: rgba(244, 67, 54, 0.25);
+    color: #ffd8d5;
+}
+.gabriel-codify-viewer .gabriel-legend-item.is-filtered,
+.gabriel-codify-viewer .gabriel-legend-item.is-sorted {
+    border-color: rgba(0, 188, 212, 0.6);
+    box-shadow: 0 6px 18px rgba(0, 188, 212, 0.25);
+}
+.gabriel-codify-viewer .gabriel-legend-item--numeric .gabriel-sort-indicator {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+}
+.gabriel-codify-viewer .gabriel-legend-item--numeric .gabriel-sort-indicator::before {
+    content: '↕';
+}
+.gabriel-codify-viewer .gabriel-legend-item--numeric.is-sorted-asc .gabriel-sort-indicator::before {
+    content: '↑';
+}
+.gabriel-codify-viewer .gabriel-legend-item--numeric.is-sorted-desc .gabriel-sort-indicator::before {
+    content: '↓';
+}
+.gabriel-codify-viewer .gabriel-reset-button {
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.8);
+    padding: 5px 16px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+.gabriel-codify-viewer .gabriel-reset-button:hover:not(:disabled) {
+    background: rgba(0, 188, 212, 0.15);
+    border-color: rgba(0, 188, 212, 0.6);
+    color: #e6fcff;
+}
+.gabriel-codify-viewer .gabriel-reset-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
 .gabriel-codify-viewer .gabriel-header {
     margin-bottom: 14px;
     padding: 14px 16px;
@@ -636,222 +693,6 @@ _COLAB_STYLE = """
     margin-top: 4px;
     font-size: 13px;
     color: rgba(255, 255, 255, 0.85);
-}
-.gabriel-codify-viewer .gabriel-filter-bar {
-    padding: 8px 0 18px;
-    margin-bottom: 18px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.gabriel-codify-viewer .gabriel-filter-chip-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 10px;
-    align-items: center;
-}
-.gabriel-codify-viewer .gabriel-filter-chip-wrapper {
-    position: relative;
-}
-.gabriel-codify-viewer .gabriel-filter-chip {
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.04);
-    color: rgba(255, 255, 255, 0.9);
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    text-transform: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.gabriel-codify-viewer .gabriel-filter-chip:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.22);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
-}
-.gabriel-codify-viewer .gabriel-filter-chip:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.5);
-}
-.gabriel-codify-viewer .gabriel-filter-chip.is-active {
-    background: linear-gradient(135deg, rgba(0, 188, 212, 0.35), rgba(99, 102, 241, 0.35));
-    border-color: rgba(0, 188, 212, 0.65);
-    color: #e2fbff;
-    box-shadow: 0 12px 28px rgba(0, 188, 212, 0.25);
-}
-.gabriel-codify-viewer .gabriel-filter-chip-label {
-    font-weight: 700;
-    font-size: 12px;
-    letter-spacing: 0.04em;
-}
-.gabriel-codify-viewer .gabriel-filter-chip-value {
-    font-size: 12px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: rgba(0, 0, 0, 0.35);
-}
-.gabriel-codify-viewer .gabriel-filter-chip-hint {
-    font-size: 10px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.58);
-}
-.gabriel-codify-viewer .gabriel-filter-popover {
-    position: absolute;
-    left: 0;
-    top: calc(100% + 10px);
-    min-width: 260px;
-    border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(5, 8, 14, 0.96);
-    padding: 14px 16px 12px;
-    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
-    z-index: 30;
-}
-.gabriel-codify-viewer .gabriel-filter-chip-wrapper:not(.is-open) .gabriel-filter-popover {
-    display: none;
-}
-.gabriel-codify-viewer .gabriel-filter-chip-wrapper--numeric::after {
-    content: "";
-    position: absolute;
-    left: 32px;
-    top: calc(100% + 6px);
-    width: 14px;
-    height: 14px;
-    transform: rotate(45deg);
-    border-left: 1px solid rgba(255, 255, 255, 0.12);
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(5, 8, 14, 0.96);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-}
-.gabriel-codify-viewer .gabriel-filter-chip-wrapper--numeric.is-open::after {
-    opacity: 1;
-}
-.gabriel-codify-viewer .gabriel-filter-footer {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    justify-content: space-between;
-}
-.gabriel-codify-viewer .gabriel-filter-note {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.7);
-}
-.gabriel-codify-viewer .gabriel-filter-clear {
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.04);
-    color: rgba(255, 255, 255, 0.85);
-    padding: 4px 14px;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-}
-.gabriel-codify-viewer .gabriel-filter-clear:hover {
-    background: rgba(0, 188, 212, 0.2);
-    border-color: rgba(0, 188, 212, 0.65);
-    color: #e8fbff;
-}
-.gabriel-codify-viewer .gabriel-numeric-slider {
-    position: relative;
-    height: 34px;
-    margin-bottom: 8px;
-    --start: 0%;
-    --end: 100%;
-}
-.gabriel-codify-viewer .gabriel-numeric-slider::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 50%;
-    height: 4px;
-    transform: translateY(-50%);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.15);
-}
-.gabriel-codify-viewer .gabriel-numeric-slider::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    height: 4px;
-    transform: translateY(-50%);
-    border-radius: 999px;
-    left: var(--start, 0%);
-    right: calc(100% - var(--end, 100%));
-    background: linear-gradient(135deg, rgba(0, 188, 212, 0.85), rgba(99, 102, 241, 0.85));
-}
-.gabriel-codify-viewer .gabriel-range-input {
-    position: absolute;
-    width: 100%;
-    height: 34px;
-    margin: 0;
-    top: 0;
-    left: 0;
-    background: none;
-    pointer-events: none;
-    -webkit-appearance: none;
-    appearance: none;
-}
-.gabriel-codify-viewer .gabriel-range-input--min {
-    z-index: 3;
-}
-.gabriel-codify-viewer .gabriel-range-input--max {
-    z-index: 2;
-}
-.gabriel-codify-viewer .gabriel-range-input::-webkit-slider-runnable-track {
-    height: 4px;
-}
-.gabriel-codify-viewer .gabriel-range-input::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #00bcd4;
-    border: 2px solid #0a0f16;
-    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.35);
-    pointer-events: auto;
-}
-.gabriel-codify-viewer .gabriel-range-input::-moz-range-track {
-    height: 4px;
-}
-.gabriel-codify-viewer .gabriel-range-input::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #00bcd4;
-    border: 2px solid #0a0f16;
-    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.35);
-    pointer-events: auto;
-}
-.gabriel-codify-viewer .gabriel-range-input:focus-visible {
-    outline: none;
-}
-.gabriel-codify-viewer .gabriel-numeric-values {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.8);
-}
-.gabriel-codify-viewer .gabriel-numeric-value-chip {
-    padding: 2px 8px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.08);
-    font-variant-numeric: tabular-nums;
 }
 .gabriel-codify-viewer .gabriel-note {
     font-size: 13px;
@@ -967,55 +808,7 @@ _COLAB_STYLE = """
         background: #2563eb;
         border-color: #ffffff;
     }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-bar {
-        border-color: rgba(15, 23, 42, 0.14);
-        box-shadow: none;
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip {
-        background: rgba(255, 255, 255, 0.92);
-        border-color: rgba(15, 23, 42, 0.16);
-        color: rgba(15, 23, 42, 0.85);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip:hover {
-        background: rgba(226, 244, 255, 0.95);
-        border-color: rgba(59, 130, 246, 0.4);
-        color: rgba(15, 23, 42, 0.95);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip.is-active {
-        background: linear-gradient(135deg, #93c5fd, #c084fc);
-        border-color: rgba(79, 70, 229, 0.4);
-        color: #0f172a;
-        box-shadow: 0 8px 20px rgba(79, 70, 229, 0.18);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip-value {
-        background: rgba(15, 23, 42, 0.08);
-        color: rgba(15, 23, 42, 0.85);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip-hint {
-        color: rgba(15, 23, 42, 0.55);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-popover {
-        background: #ffffff;
-        border-color: rgba(15, 23, 42, 0.14);
-        box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-chip-wrapper--numeric::after {
-        background: #ffffff;
-        border-color: rgba(15, 23, 42, 0.14);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-clear {
-        background: rgba(191, 219, 254, 0.55);
-        border-color: rgba(59, 130, 246, 0.45);
-        color: rgba(15, 23, 42, 0.8);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-clear:hover {
-        background: rgba(147, 197, 253, 0.85);
-        color: rgba(15, 23, 42, 0.95);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-filter-note {
-        color: rgba(15, 23, 42, 0.65);
-    }
-    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-values {
+        .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-values {
         color: rgba(15, 23, 42, 0.7);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-numeric-value-chip {
@@ -1106,42 +899,6 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-slider::-moz-range-thumb {
     background: #2563eb;
     border-color: #ffffff;
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-bar {
-    border-color: rgba(15, 23, 42, 0.12);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip {
-    background: rgba(255, 255, 255, 0.94);
-    border-color: rgba(15, 23, 42, 0.14);
-    color: rgba(15, 23, 42, 0.85);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip.is-active {
-    background: linear-gradient(135deg, #93c5fd, #c084fc);
-    color: #0f172a;
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip-value {
-    background: rgba(15, 23, 42, 0.08);
-    color: rgba(15, 23, 42, 0.85);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip-hint {
-    color: rgba(15, 23, 42, 0.55);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-popover {
-    background: #ffffff;
-    border-color: rgba(15, 23, 42, 0.12);
-    box-shadow: 0 20px 44px rgba(15, 23, 42, 0.18);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-chip-wrapper--numeric::after {
-    background: #ffffff;
-    border-color: rgba(15, 23, 42, 0.12);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-clear {
-    background: rgba(191, 219, 254, 0.7);
-    border-color: rgba(59, 130, 246, 0.5);
-    color: rgba(15, 23, 42, 0.85);
-}
-.gabriel-codify-viewer.gabriel-theme-light .gabriel-filter-clear:hover {
-    background: rgba(147, 197, 253, 0.85);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-values {
     color: rgba(15, 23, 42, 0.7);
@@ -1596,9 +1353,29 @@ def _build_legend_html(
     category_counts: Dict[str, int],
     category_labels: Dict[str, str],
     legend_token: Optional[str] = None,
+    *,
+    boolean_specs: Optional[Sequence[_AttributeSpec]] = None,
+    boolean_values: Optional[Mapping[str, Optional[bool]]] = None,
+    numeric_specs: Optional[Sequence[_AttributeSpec]] = None,
+    numeric_values: Optional[Mapping[str, Optional[float]]] = None,
 ) -> str:
-    if not category_colors:
+    if not category_colors and not boolean_specs and not numeric_specs:
         return ""
+
+    boolean_values = boolean_values or {}
+    numeric_values = numeric_values or {}
+
+    def _format_bool(value: Optional[bool]) -> str:
+        if value is True:
+            return "Yes"
+        if value is False:
+            return "No"
+        return "—"
+
+    def _format_numeric(value: Optional[float]) -> str:
+        if value is None:
+            return "—"
+        return _format_numeric_chip(value)
 
     items = []
     for category, color in category_colors.items():
@@ -1614,11 +1391,45 @@ def _build_legend_html(
         safe_color = html.escape(color, quote=True)
         safe_category = html.escape(category, quote=True)
         items.append(
-            "<button type='button' class='gabriel-legend-item' "
+            "<button type='button' class='gabriel-legend-item gabriel-legend-item--snippet' "
             f"data-category='{safe_category}' data-count='{count}' aria-label='{aria_label}'>"
             f"<span class='gabriel-legend-color' style='background:{safe_color}'></span>"
             f"<span class='gabriel-legend-label'>{label}</span>"
             f"<span class='gabriel-legend-count'>{count}</span>"
+            "</button>"
+        )
+
+    for spec in boolean_specs or ():
+        column = spec.column
+        label_text = spec.label or column.replace("_", " ").title()
+        label = html.escape(label_text)
+        value = boolean_values.get(column)
+        display = html.escape(_format_bool(value))
+        aria_label = html.escape(f"{label_text}: {display}", quote=True)
+        safe_column = html.escape(column, quote=True)
+        state_class = " is-true" if value is True else (" is-false" if value is False else "")
+        items.append(
+            "<button type='button' class='gabriel-legend-item gabriel-legend-item--boolean"
+            f"{state_class}' data-boolean='{safe_column}' aria-pressed='false' aria-label='{aria_label}'>"
+            f"<span class='gabriel-legend-label'>{label}</span>"
+            f"<span class='gabriel-legend-value'>{display}</span>"
+            "</button>"
+        )
+
+    for spec in numeric_specs or ():
+        column = spec.column
+        label_text = spec.label or column.replace("_", " ").title()
+        label = html.escape(label_text)
+        value = numeric_values.get(column)
+        display = html.escape(_format_numeric(value))
+        aria_label = html.escape(f"{label_text}: {display}", quote=True)
+        safe_column = html.escape(column, quote=True)
+        items.append(
+            "<button type='button' class='gabriel-legend-item gabriel-legend-item--numeric' "
+            f"data-numeric='{safe_column}' aria-pressed='false' aria-label='{aria_label}'>"
+            f"<span class='gabriel-legend-label'>{label}</span>"
+            f"<span class='gabriel-legend-value'>{display}</span>"
+            "<span class='gabriel-sort-indicator' aria-hidden='true'></span>"
             "</button>"
         )
 
@@ -1712,7 +1523,6 @@ def _render_passage_viewer(
     category_colors = dict(zip(category_names, colors))
 
     passages: List[Dict[str, Any]] = []
-    numeric_ranges: Dict[str, Tuple[float, float]] = {}
     for _, row in df.iterrows():
         raw_text = row.get(column_name)
         text = "" if _is_na(raw_text) else str(raw_text)
@@ -1749,40 +1559,14 @@ def _render_passage_viewer(
             if spec.kind == "boolean":
                 bool_value = _coerce_bool_value(value)
                 bool_values[spec.column] = bool_value
-                if bool_value is True:
-                    display_val = "True"
-                elif bool_value is False:
-                    display_val = "False"
-                else:
-                    display_val = "—"
-                text_attributes.append((spec.label, display_val))
             elif spec.kind == "numeric":
                 numeric_value = _coerce_numeric_value(value)
                 numeric_values[spec.column] = numeric_value
-                if numeric_value is not None:
-                    if math.isfinite(numeric_value):
-                        existing = numeric_ranges.get(spec.column)
-                        if existing is None:
-                            numeric_ranges[spec.column] = (
-                                numeric_value,
-                                numeric_value,
-                            )
-                        else:
-                            numeric_ranges[spec.column] = (
-                                min(existing[0], numeric_value),
-                                max(existing[1], numeric_value),
-                            )
-                    text_attributes.append(
-                        (spec.label, _format_numeric_chip(numeric_value))
-                    )
-                else:
-                    formatted = _format_header_value(value)
-                    if formatted:
-                        text_attributes.append((spec.label, formatted))
             else:
                 formatted = _format_header_value(value)
                 if formatted:
-                    text_attributes.append((spec.label, formatted))
+                    label = spec.label or spec.column.replace("_", " ").title()
+                    text_attributes.append((label, formatted))
 
         if text_attributes:
             header_rows.extend(text_attributes)
@@ -1856,7 +1640,14 @@ def _render_passage_viewer(
         )
         legend_token = f"interactive-{idx}-{random.random()}"
         legend_html = _build_legend_html(
-            category_colors, payload["counts"], category_labels, legend_token
+            category_colors,
+            payload["counts"],
+            category_labels,
+            legend_token,
+            boolean_specs=boolean_specs,
+            boolean_values=payload.get("bools"),
+            numeric_specs=numeric_specs,
+            numeric_values=payload.get("numeric"),
         )
         snippet_flags = {
             cat: bool(payload["snippets"].get(cat)) for cat in category_names
@@ -1887,49 +1678,14 @@ def _render_passage_viewer(
             }
         )
 
-    category_filter_defs = [
-        {
-            "id": cat,
-            "label": category_labels.get(cat, cat).replace("_", " ").title(),
-        }
-        for cat in category_names
-    ]
-    boolean_filter_defs = [
-        {
-            "column": spec.column,
-            "label": spec.label or spec.column.replace("_", " ").title(),
-        }
-        for spec in boolean_specs
-    ]
-    numeric_filter_defs: List[Dict[str, Any]] = []
-    for spec in numeric_specs:
-        bounds = numeric_ranges.get(spec.column)
-        if not bounds:
-            continue
-        lower, upper = bounds
-        if not (math.isfinite(lower) and math.isfinite(upper)):
-            continue
-        if upper <= lower:
-            continue
-        numeric_filter_defs.append(
-            {
-                "column": spec.column,
-                "label": spec.label or spec.column.replace("_", " ").title(),
-                "min": lower,
-                "max": upper,
-                "step": _compute_slider_step(lower, upper),
-            }
-        )
+    numeric_label_map = {
+        spec.column: spec.label or spec.column.replace("_", " ").title()
+        for spec in numeric_specs
+    }
 
-    has_filters = bool(
-        category_filter_defs or boolean_filter_defs or numeric_filter_defs
-    )
     data_payload = {
         "passages": render_entries,
-        "categoryFilters": category_filter_defs,
-        "booleanFilters": boolean_filter_defs,
-        "numericFilters": numeric_filter_defs,
-        "hasFilters": has_filters,
+        "numericLabels": numeric_label_map,
     }
     data_json = json.dumps(data_payload).replace("</", r"<\/")
     note_block = (
@@ -1953,13 +1709,7 @@ def _render_passage_viewer(
       <input type="range" min="1" max="$slider_max" value="1" class="gabriel-slider" data-role="slider" />
       <div class="gabriel-slider-count" data-role="slider-count">$slider_count</div>
     </div>
-  </div>
-  <div class="gabriel-filter-bar" data-role="filter-bar">
-    <div class="gabriel-filter-chip-row" data-role="filters"></div>
-    <div class="gabriel-filter-footer">
-      <div class="gabriel-filter-note" data-role="filter-note"></div>
-      <button type="button" class="gabriel-filter-clear" data-role="clear-filters">Clear filters</button>
-    </div>
+    <button type="button" class="gabriel-reset-button" data-action="reset" disabled>Reset</button>
   </div>
   <div class="gabriel-passage-panel">
     <div class="gabriel-passage-scroll" data-role="passage"></div>
@@ -1977,14 +1727,12 @@ def _render_passage_viewer(
     const passageEl = container.querySelector('[data-role="passage"]');
     const sliderEl = container.querySelector('[data-role="slider"]');
     const sliderCountEl = container.querySelector('[data-role="slider-count"]');
-    const filterBar = container.querySelector('[data-role="filter-bar"]');
-    const filtersHost = container.querySelector('[data-role="filters"]');
-    const filterNoteEl = container.querySelector('[data-role="filter-note"]');
-    const clearFiltersBtn = container.querySelector('[data-role="clear-filters"]');
     const prevBtn = container.querySelector('[data-action="prev"]');
     const nextBtn = container.querySelector('[data-action="next"]');
     const randomBtn = container.querySelector('[data-action="random"]');
+    const resetBtn = container.querySelector('[data-action="reset"]');
     const total = data.passages.length;
+    const numericLabels = data.numericLabels || {};
     if (!total) {
         if (passageEl) {
             passageEl.innerHTML = "<div class='gabriel-empty'>No passages to display.</div>";
@@ -1992,107 +1740,23 @@ def _render_passage_viewer(
         if (statusEl) {
             statusEl.textContent = "No passages available.";
         }
-        if (filterBar) {
-            filterBar.style.display = "none";
-        }
         if (sliderEl) sliderEl.disabled = true;
         if (prevBtn) prevBtn.disabled = true;
         if (nextBtn) nextBtn.disabled = true;
         if (randomBtn) randomBtn.disabled = true;
+        if (resetBtn) resetBtn.disabled = true;
         return;
     }
     const state = {
         active: data.passages.map((_, idx) => idx),
         index: 0,
-        snippets: new Set(),
         bools: new Set(),
-        numeric: {},
+        sort: null,
     };
-    const numericDefaults = {};
-    const numericHandles = {};
-    const numericChipWrappers = [];
-
-    function updateNumericRange(column, start, end, opts = {}) {
-        const handle = numericHandles[column];
-        if (!handle) {
-            return;
-        }
-        if (!Number.isFinite(start) || !Number.isFinite(end)) {
-            return;
-        }
-        if (start > end) {
-            const temp = start;
-            start = end;
-            end = temp;
-        }
-        const defaults = numericDefaults[column];
-        handle.minInput.value = String(start);
-        handle.maxInput.value = String(end);
-        if (handle.minValue) {
-            handle.minValue.textContent = formatNumber(start);
-        }
-        if (handle.maxValue) {
-            handle.maxValue.textContent = formatNumber(end);
-        }
-        if (handle.displayValue) {
-            handle.displayValue.textContent = formatNumber(start) + ' – ' + formatNumber(end);
-        }
-        if (
-            handle.sliderWrap &&
-            defaults &&
-            Number.isFinite(defaults.min) &&
-            Number.isFinite(defaults.max)
-        ) {
-            const span = defaults.max - defaults.min || 1;
-            const startPct = ((start - defaults.min) / span) * 100;
-            const endPct = ((end - defaults.min) / span) * 100;
-            const clamp = value => Math.max(0, Math.min(100, value));
-            handle.sliderWrap.style.setProperty('--start', clamp(startPct) + '%');
-            handle.sliderWrap.style.setProperty('--end', clamp(endPct) + '%');
-        }
-        const hasDefaults = Boolean(
-            defaults &&
-            Number.isFinite(defaults.min) &&
-            Number.isFinite(defaults.max)
-        );
-        let isActive = true;
-        if (hasDefaults) {
-            isActive =
-                Math.abs(start - defaults.min) > 1e-9 ||
-                Math.abs(end - defaults.max) > 1e-9;
-        }
-        state.numeric[column] = { min: start, max: end, active: Boolean(isActive) };
-        if (!opts.skipApply) {
-            applyFilters(false);
-        }
-    }
-
-    function formatNumber(value) {
-        if (typeof value !== 'number' || !isFinite(value)) {
-            return '—';
-        }
-        const abs = Math.abs(value);
-        let text;
-        if (abs >= 100) {
-            text = value.toFixed(0);
-        } else if (abs >= 10) {
-            text = value.toFixed(1);
-        } else {
-            text = value.toFixed(2);
-        }
-        return text.replace(/\\.0+$$/, '').replace(/(\\.[0-9]*[1-9])0+$$/, '$$1');
-    }
 
     function matchesFilters(entry) {
         if (!entry) {
             return false;
-        }
-        if (state.snippets.size) {
-            for (const cat of state.snippets) {
-                if (!entry.snippets || !entry.snippets[cat]) {
-                    return false;
-                }
-            }
         }
         if (state.bools.size) {
             for (const column of state.bools) {
@@ -2101,19 +1765,34 @@ def _render_passage_viewer(
                 }
             }
         }
-        for (const [column, config] of Object.entries(state.numeric)) {
-            if (!config || !config.active) {
-                continue;
-            }
-            const value = entry.numeric ? entry.numeric[column] : null;
-            if (typeof value !== 'number') {
-                return false;
-            }
-            if (value < config.min - 1e-9 || value > config.max + 1e-9) {
-                return false;
-            }
-        }
         return true;
+    }
+
+    function compareForSort(aIdx, bIdx) {
+        if (!state.sort || !state.sort.column) {
+            return 0;
+        }
+        const column = state.sort.column;
+        const entryA = data.passages[aIdx];
+        const entryB = data.passages[bIdx];
+        const valA = entryA && entryA.numeric ? entryA.numeric[column] : null;
+        const valB = entryB && entryB.numeric ? entryB.numeric[column] : null;
+        const aValid = typeof valA === 'number' && isFinite(valA);
+        const bValid = typeof valB === 'number' && isFinite(valB);
+        if (!aValid && !bValid) {
+            return 0;
+        }
+        if (!aValid) {
+            return 1;
+        }
+        if (!bValid) {
+            return -1;
+        }
+        if (valA === valB) {
+            return 0;
+        }
+        const base = valA < valB ? -1 : 1;
+        return state.sort.direction === 'asc' ? base : -base;
     }
 
     function renderPassage() {
@@ -2121,12 +1800,57 @@ def _render_passage_viewer(
             return;
         }
         if (!state.active.length) {
-            passageEl.innerHTML = "<div class='gabriel-empty'>No passages match the current filters.</div>";
+            passageEl.innerHTML = "<div class='gabriel-empty'>No passages match the current selection.</div>";
             return;
         }
         const idx = state.active[state.index];
         const payload = data.passages[idx];
-        passageEl.innerHTML = payload.html;
+        passageEl.innerHTML = payload && payload.html ? payload.html : '';
+        bindLegendInteractions();
+        syncLegendStates();
+    }
+
+    function bindLegendInteractions() {
+        if (!passageEl) {
+            return;
+        }
+        passageEl.querySelectorAll('.gabriel-legend-item').forEach(item => {
+            if (!(item instanceof Element) || item.dataset.interactionBound === '1') {
+                return;
+            }
+            if (item.hasAttribute('data-boolean')) {
+                item.addEventListener('click', event => {
+                    event.preventDefault();
+                    toggleBooleanFilter(item.getAttribute('data-boolean'));
+                });
+            } else if (item.hasAttribute('data-numeric')) {
+                item.addEventListener('click', event => {
+                    event.preventDefault();
+                    cycleNumericSort(item.getAttribute('data-numeric'));
+                });
+            }
+            item.dataset.interactionBound = '1';
+        });
+    }
+
+    function syncLegendStates() {
+        if (!passageEl) {
+            return;
+        }
+        passageEl.querySelectorAll('[data-boolean]').forEach(chip => {
+            const column = chip.getAttribute('data-boolean');
+            const active = column && state.bools.has(column);
+            chip.classList.toggle('is-filtered', Boolean(active));
+            chip.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        passageEl.querySelectorAll('[data-numeric]').forEach(chip => {
+            const column = chip.getAttribute('data-numeric');
+            const isActive = Boolean(state.sort && state.sort.column === column);
+            chip.classList.toggle('is-sorted', isActive);
+            chip.classList.toggle('is-sorted-asc', Boolean(isActive && state.sort && state.sort.direction === 'asc'));
+            chip.classList.toggle('is-sorted-desc', Boolean(isActive && state.sort && state.sort.direction === 'desc'));
+            chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
     }
 
     function updateStatus() {
@@ -2134,13 +1858,22 @@ def _render_passage_viewer(
             return;
         }
         if (!state.active.length) {
-            statusEl.textContent = 'No passages match the current filters.';
+            statusEl.textContent = 'No passages match the current selection.';
             return;
         }
-        statusEl.innerHTML = 'Passage <strong>' + (state.index + 1) + '</strong> of ' + state.active.length;
+        let message = 'Passage <strong>' + (state.index + 1) + '</strong> of ' + state.active.length;
+        if (state.active.length !== total) {
+            message += ' • ' + state.active.length + ' / ' + total + ' match';
+        }
+        if (state.sort && state.sort.column) {
+            const label = numericLabels[state.sort.column] || state.sort.column;
+            const arrow = state.sort.direction === 'asc' ? '↑' : '↓';
+            message += ' • ' + arrow + ' ' + label;
+        }
+        statusEl.innerHTML = message;
     }
 
-    function updateSlider(forceValue) {
+    function updateSlider(forceValue = true) {
         if (!sliderEl || !sliderCountEl) {
             return;
         }
@@ -2153,26 +1886,6 @@ def _render_passage_viewer(
         sliderCountEl.textContent = state.active.length ? (state.index + 1) + ' / ' + state.active.length : '0 / 0';
     }
 
-    function updateFilterNote() {
-        if (!filterNoteEl) {
-            return;
-        }
-        if (!state.active.length) {
-            filterNoteEl.textContent = '0 of ' + total + ' passages match filters.';
-            return;
-        }
-        if (
-            state.active.length === total &&
-            !state.snippets.size &&
-            !state.bools.size &&
-            !Object.values(state.numeric).some(cfg => cfg && cfg.active)
-        ) {
-            filterNoteEl.textContent = '';
-        } else {
-            filterNoteEl.textContent = state.active.length + ' of ' + total + ' passages match filters.';
-        }
-    }
-
     function updateNavDisabled() {
         const disabled = state.active.length === 0;
         if (prevBtn) prevBtn.disabled = disabled;
@@ -2180,24 +1893,12 @@ def _render_passage_viewer(
         if (randomBtn) randomBtn.disabled = disabled;
     }
 
-    function applyFilters(resetIndex = true) {
-        const matches = [];
-        data.passages.forEach((entry, idx) => {
-            if (matchesFilters(entry)) {
-                matches.push(idx);
-            }
-        });
-        state.active = matches;
-        if (!matches.length) {
-            state.index = 0;
-        } else if (resetIndex || state.index >= matches.length) {
-            state.index = 0;
+    function updateResetButton() {
+        if (!resetBtn) {
+            return;
         }
-        renderPassage();
-        updateStatus();
-        updateSlider();
-        updateFilterNote();
-        updateNavDisabled();
+        const hasActive = state.bools.size > 0 || Boolean(state.sort);
+        resetBtn.disabled = !hasActive;
     }
 
     function moveIndex(delta) {
@@ -2211,249 +1912,60 @@ def _render_passage_viewer(
         updateSlider();
     }
 
-    function handleNumericChange(column) {
-        const handle = numericHandles[column];
-        if (!handle) {
+    function toggleBooleanFilter(column) {
+        if (!column) {
             return;
         }
-        const start = parseFloat(handle.minInput.value);
-        const end = parseFloat(handle.maxInput.value);
-        if (!Number.isFinite(start) || !Number.isFinite(end)) {
-            return;
+        if (state.bools.has(column)) {
+            state.bools.delete(column);
+        } else {
+            state.bools.add(column);
         }
-        updateNumericRange(column, start, end);
+        applyFilters(true);
     }
 
-    function closeNumericWrappers(exceptWrapper = null) {
-        numericChipWrappers.forEach(wrapper => {
-            if (exceptWrapper && wrapper === exceptWrapper) {
-                return;
-            }
-            wrapper.classList.remove('is-open');
-            const popover = wrapper.querySelector('.gabriel-filter-popover');
-            if (popover) {
-                popover.hidden = true;
-            }
-            const chip = wrapper.querySelector('.gabriel-filter-chip--numeric');
-            if (chip) {
-                chip.setAttribute('aria-expanded', 'false');
+    function cycleNumericSort(column) {
+        if (!column) {
+            return;
+        }
+        const current = state.sort && state.sort.column === column ? state.sort : null;
+        if (!current) {
+            state.sort = { column, direction: 'desc' };
+        } else if (current.direction === 'desc') {
+            state.sort = { column, direction: 'asc' };
+        } else {
+            state.sort = null;
+        }
+        applyFilters(false);
+    }
+
+    function resetSelections() {
+        state.bools.clear();
+        state.sort = null;
+        applyFilters(true);
+    }
+
+    function applyFilters(resetIndex = true) {
+        const matches = [];
+        data.passages.forEach((entry, idx) => {
+            if (matchesFilters(entry)) {
+                matches.push(idx);
             }
         });
-    }
-
-    function createToggleChip(filter, kind) {
-        if (!filter) {
-            return null;
+        if (state.sort && state.sort.column) {
+            matches.sort(compareForSort);
         }
-        const wrapper = document.createElement('div');
-        wrapper.className = 'gabriel-filter-chip-wrapper';
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'gabriel-filter-chip gabriel-filter-chip--toggle';
-        chip.dataset.filterRole = 'toggle';
-        chip.setAttribute('aria-pressed', 'false');
-        if (kind === 'category') {
-            chip.dataset.category = filter.id;
-        } else if (kind === 'boolean') {
-            chip.dataset.boolean = filter.column;
+        state.active = matches;
+        if (!matches.length) {
+            state.index = 0;
+        } else if (resetIndex || state.index >= matches.length) {
+            state.index = 0;
         }
-        const label = document.createElement('span');
-        label.className = 'gabriel-filter-chip-label';
-        label.textContent = filter.label;
-        chip.appendChild(label);
-        chip.addEventListener('click', () => {
-            const key = kind === 'category' ? chip.dataset.category : chip.dataset.boolean;
-            if (!key) {
-                return;
-            }
-            const target = kind === 'category' ? state.snippets : state.bools;
-            if (target.has(key)) {
-                target.delete(key);
-                chip.classList.remove('is-active');
-                chip.setAttribute('aria-pressed', 'false');
-            } else {
-                target.add(key);
-                chip.classList.add('is-active');
-                chip.setAttribute('aria-pressed', 'true');
-            }
-            applyFilters(true);
-        });
-        wrapper.appendChild(chip);
-        return wrapper;
-    }
-
-    function createNumericChip(filter) {
-        if (
-            !filter ||
-            typeof filter.min !== 'number' ||
-            typeof filter.max !== 'number'
-        ) {
-            return null;
-        }
-        numericDefaults[filter.column] = { min: filter.min, max: filter.max };
-        const wrapper = document.createElement('div');
-        wrapper.className = 'gabriel-filter-chip-wrapper gabriel-filter-chip-wrapper--numeric';
-        wrapper.dataset.numeric = filter.column;
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'gabriel-filter-chip gabriel-filter-chip--numeric';
-        chip.setAttribute('aria-expanded', 'false');
-        const chipLabel = document.createElement('span');
-        chipLabel.className = 'gabriel-filter-chip-label';
-        chipLabel.textContent = filter.label;
-        const chipValue = document.createElement('span');
-        chipValue.className = 'gabriel-filter-chip-value';
-        const chipHint = document.createElement('span');
-        chipHint.className = 'gabriel-filter-chip-hint';
-        chipHint.textContent = 'Adjust';
-        chip.appendChild(chipLabel);
-        chip.appendChild(chipValue);
-        chip.appendChild(chipHint);
-        wrapper.appendChild(chip);
-        const popover = document.createElement('div');
-        popover.className = 'gabriel-filter-popover';
-        popover.hidden = true;
-        const sliderWrap = document.createElement('div');
-        sliderWrap.className = 'gabriel-numeric-slider';
-        sliderWrap.style.setProperty('--start', '0%');
-        sliderWrap.style.setProperty('--end', '100%');
-        const minInput = document.createElement('input');
-        minInput.type = 'range';
-        minInput.className = 'gabriel-range-input gabriel-range-input--min';
-        minInput.min = String(filter.min);
-        minInput.max = String(filter.max);
-        minInput.step = String(filter.step);
-        minInput.value = String(filter.min);
-        const maxInput = document.createElement('input');
-        maxInput.type = 'range';
-        maxInput.className = 'gabriel-range-input gabriel-range-input--max';
-        maxInput.min = String(filter.min);
-        maxInput.max = String(filter.max);
-        maxInput.step = String(filter.step);
-        maxInput.value = String(filter.max);
-        sliderWrap.appendChild(minInput);
-        sliderWrap.appendChild(maxInput);
-        const values = document.createElement('div');
-        values.className = 'gabriel-numeric-values';
-        const minValue = document.createElement('span');
-        minValue.className = 'gabriel-numeric-value-chip';
-        minValue.textContent = formatNumber(filter.min);
-        const maxValue = document.createElement('span');
-        maxValue.className = 'gabriel-numeric-value-chip';
-        maxValue.textContent = formatNumber(filter.max);
-        values.appendChild(minValue);
-        values.appendChild(maxValue);
-        popover.appendChild(sliderWrap);
-        popover.appendChild(values);
-        wrapper.appendChild(popover);
-        numericChipWrappers.push(wrapper);
-        numericHandles[filter.column] = {
-            minInput,
-            maxInput,
-            minValue,
-            maxValue,
-            displayValue: chipValue,
-            sliderWrap,
-            wrapper,
-            chip,
-        };
-        updateNumericRange(filter.column, filter.min, filter.max, { skipApply: true });
-        const handler = () => handleNumericChange(filter.column);
-        minInput.addEventListener('input', handler);
-        maxInput.addEventListener('input', handler);
-        chip.addEventListener('click', () => {
-            const isOpen = wrapper.classList.contains('is-open');
-            closeNumericWrappers(wrapper);
-            if (isOpen) {
-                wrapper.classList.remove('is-open');
-                popover.hidden = true;
-                chip.setAttribute('aria-expanded', 'false');
-            } else {
-                wrapper.classList.add('is-open');
-                popover.hidden = false;
-                chip.setAttribute('aria-expanded', 'true');
-            }
-        });
-        return wrapper;
-    }
-
-    function buildFilters() {
-        if (!filtersHost || !filterBar) {
-            return;
-        }
-        filtersHost.innerHTML = '';
-        numericChipWrappers.length = 0;
-        Object.keys(numericHandles).forEach(key => delete numericHandles[key]);
-        if (!data.hasFilters) {
-            filterBar.style.display = 'none';
-            return;
-        }
-        filterBar.style.display = '';
-        if (data.categoryFilters && data.categoryFilters.length) {
-            data.categoryFilters.forEach(filter => {
-                const chip = createToggleChip(filter, 'category');
-                if (chip) {
-                    filtersHost.appendChild(chip);
-                }
-            });
-        }
-        if (data.booleanFilters && data.booleanFilters.length) {
-            data.booleanFilters.forEach(filter => {
-                const chip = createToggleChip(filter, 'boolean');
-                if (chip) {
-                    filtersHost.appendChild(chip);
-                }
-            });
-        }
-        if (data.numericFilters && data.numericFilters.length) {
-            data.numericFilters.forEach(filter => {
-                const chip = createNumericChip(filter);
-                if (chip) {
-                    filtersHost.appendChild(chip);
-                }
-            });
-        }
-    }
-
-    buildFilters();
-
-    container.addEventListener('click', event => {
-        if (!numericChipWrappers.length) {
-            return;
-        }
-        const wrapper = event.target.closest('.gabriel-filter-chip-wrapper--numeric');
-        if (!wrapper) {
-            closeNumericWrappers();
-        }
-    });
-
-    if (clearFiltersBtn) {
-        clearFiltersBtn.addEventListener('click', () => {
-            state.snippets.clear();
-            state.bools.clear();
-            container.querySelectorAll('.gabriel-filter-chip--toggle.is-active').forEach(chip => {
-                chip.classList.remove('is-active');
-                chip.setAttribute('aria-pressed', 'false');
-            });
-            numericChipWrappers.forEach(wrapper => {
-                wrapper.classList.remove('is-open');
-                const popover = wrapper.querySelector('.gabriel-filter-popover');
-                if (popover) {
-                    popover.hidden = true;
-                }
-                const chip = wrapper.querySelector('.gabriel-filter-chip--numeric');
-                if (chip) {
-                    chip.setAttribute('aria-expanded', 'false');
-                }
-            });
-            Object.entries(numericDefaults).forEach(([column, defaults]) => {
-                if (!defaults) {
-                    return;
-                }
-                updateNumericRange(column, defaults.min, defaults.max, { skipApply: true });
-            });
-            applyFilters(true);
-        });
+        renderPassage();
+        updateStatus();
+        updateSlider();
+        updateNavDisabled();
+        updateResetButton();
     }
 
     if (prevBtn) {
@@ -2473,6 +1985,9 @@ def _render_passage_viewer(
             updateStatus();
             updateSlider();
         });
+    }
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => resetSelections());
     }
     if (sliderEl) {
         sliderEl.addEventListener('input', event => {
