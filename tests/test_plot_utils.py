@@ -159,6 +159,38 @@ def test_bar_plot_auto_size_limits_width_for_small_counts():
     assert fig.get_figwidth() <= 24.0, "small bar counts should not explode the figure width"
 
 
+def test_bar_plot_wrapped_story_style_labels_prefer_balanced_widths():
+    features = [
+        "Winning arguments are longer, syntactically complex, and deployed more than losing arguments",
+        "Losing arguments are concise, single focused, corrective, or terse compared with persuasive replies",
+        "Winning arguments hedge, qualify, and display nuance more than losing arguments",
+        "Winning arguments deploy hypotheticals, scenarios, and slippery slope thought experiments",
+        "Winning arguments use concrete examples far more than losing arguments",
+        "Winning arguments employ formal, philosophical, legal, or logical reasoning more than losing arguments",
+    ]
+    df = pd.DataFrame(
+        {
+            "feature": features,
+            "score": [36.9, 23.8, 17.5, 17.1, 16.8, 15.7],
+        }
+    )
+
+    bar_plot(
+        data=df,
+        category_column="feature",
+        value_column="score",
+        as_percent=True,
+    )
+
+    fig_numbers = plt.get_fignums()
+    assert fig_numbers
+    fig = plt.figure(fig_numbers[0])
+    width = fig.get_figwidth()
+    assert 13.5 <= width <= 18.5, "long narrative labels should stay in a reviewable range"
+    tick_texts = [tick.get_text() for tick in fig.axes[0].get_xticklabels()]
+    assert any("\n" in text for text in tick_texts if text)
+
+
 def test_bar_plot_label_wrap_mode_none_disables_wrapping():
     df = pd.DataFrame(
         {
