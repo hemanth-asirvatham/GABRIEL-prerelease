@@ -474,7 +474,9 @@ def _format_numeric_chip(value: float) -> str:
         text = f"{value:.1f}"
     else:
         text = f"{value:.2f}"
-    trimmed = text.rstrip("0").rstrip(".")
+    trimmed = text
+    if "." in trimmed:
+        trimmed = trimmed.rstrip("0").rstrip(".")
     if len(trimmed) > 4:
         trimmed = trimmed[:4]
     return trimmed
@@ -666,7 +668,7 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer .gabriel-legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     padding: 6px 12px;
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.05);
@@ -739,31 +741,47 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer .gabriel-legend-value {
     font-size: 11px;
-    padding: 2px 10px;
+    padding: 2px 8px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.82);
+    background: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.85);
     display: inline-flex;
     justify-content: center;
-    min-width: 52px;
+    align-items: center;
+    min-width: calc(3ch + 10px);
     text-align: center;
+    line-height: 1.3;
     font-variant-numeric: tabular-nums;
     font-feature-settings: 'tnum' 1, 'liga' 0;
-}
-.gabriel-codify-viewer .gabriel-legend-item--boolean .gabriel-legend-value {
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean {
     --gabriel-chip-bg: rgba(0, 188, 212, 0.18);
     --gabriel-chip-border: rgba(0, 188, 212, 0.55);
     --gabriel-chip-glow: rgba(0, 188, 212, 0.25);
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+    opacity: 0.85;
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean .gabriel-legend-value {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean .gabriel-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--gabriel-chip-border, rgba(0, 188, 212, 0.55));
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+    opacity: 0.75;
+    transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+    flex-shrink: 0;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-true {
     background: var(--gabriel-chip-bg);
     border-color: var(--gabriel-chip-border);
     box-shadow: 0 12px 28px var(--gabriel-chip-glow);
     color: #e6fcff;
+    opacity: 1;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-true:hover {
     background: var(--gabriel-chip-bg);
@@ -774,12 +792,17 @@ _COLAB_STYLE = """
     background: var(--gabriel-chip-bg);
     color: #e6fcff;
 }
+.gabriel-codify-viewer .gabriel-legend-item--boolean.is-true .gabriel-legend-swatch {
+    opacity: 1;
+    box-shadow: 0 0 12px var(--gabriel-chip-glow, rgba(0, 188, 212, 0.3));
+    transform: scale(1.1);
+}
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-false {
-    opacity: 0.85;
+    opacity: 0.6;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-false .gabriel-legend-value {
-    background: rgba(244, 67, 54, 0.25);
-    color: #ffd8d5;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.65);
 }
 .gabriel-codify-viewer .gabriel-legend-item.is-filtered,
 .gabriel-codify-viewer .gabriel-legend-item.is-sorted {
@@ -839,23 +862,30 @@ _COLAB_STYLE = """
     box-shadow: 0 18px 36px rgba(5, 8, 13, 0.55);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 14px;
+}
+.gabriel-codify-viewer .gabriel-header-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    width: 100%;
 }
 .gabriel-codify-viewer .gabriel-header-row {
-    display: grid;
-    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
-    column-gap: 14px;
-    row-gap: 2px;
-    align-items: baseline;
-    margin: 0;
-    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+    min-height: 64px;
 }
 .gabriel-codify-viewer .gabriel-header-label {
     font-weight: 600;
     text-transform: uppercase;
     font-size: 11px;
-    letter-spacing: 0.06em;
-    color: rgba(255, 255, 255, 0.72);
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.68);
     white-space: nowrap;
     line-height: 1.2;
 }
@@ -879,9 +909,8 @@ _COLAB_STYLE = """
     }
 }
 @media (max-width: 640px) {
-    .gabriel-codify-viewer .gabriel-header-row {
+    .gabriel-codify-viewer .gabriel-header-grid {
         grid-template-columns: 1fr;
-        row-gap: 4px;
     }
     .gabriel-codify-viewer .gabriel-header-label {
         white-space: normal;
@@ -890,8 +919,29 @@ _COLAB_STYLE = """
     }
 }
 .gabriel-codify-viewer .gabriel-active-cats {
-    margin-top: 4px;
-    font-size: 13px;
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    align-items: center;
+}
+.gabriel-codify-viewer .gabriel-active-label {
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: rgba(255, 255, 255, 0.62);
+}
+.gabriel-codify-viewer .gabriel-active-pill-stack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.gabriel-codify-viewer .gabriel-active-pill {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     color: rgba(255, 255, 255, 0.85);
 }
 .gabriel-codify-viewer .gabriel-note {
@@ -965,6 +1015,10 @@ _COLAB_STYLE = """
         background: rgba(15, 23, 42, 0.06);
         border-color: rgba(15, 23, 42, 0.12);
     }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-header-row {
+        background: rgba(255, 255, 255, 0.92);
+        border-color: rgba(15, 23, 42, 0.12);
+    }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-header-label {
         color: rgba(15, 23, 42, 0.65);
     }
@@ -992,6 +1046,14 @@ _COLAB_STYLE = """
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--snippet[data-count]:not([data-count="0"]) {
         box-shadow: 0 12px 24px var(--gabriel-chip-glow, rgba(15, 23, 42, 0.18));
     }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean {
+        background: rgba(15, 23, 42, 0.04);
+        border-color: rgba(15, 23, 42, 0.08);
+        color: rgba(15, 23, 42, 0.82);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean .gabriel-legend-swatch {
+        box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.2);
+    }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true {
         background: var(--gabriel-chip-bg, rgba(37, 99, 235, 0.18));
         border-color: var(--gabriel-chip-border, rgba(37, 99, 235, 0.4));
@@ -1001,6 +1063,21 @@ _COLAB_STYLE = """
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
         background: var(--gabriel-chip-bg, rgba(37, 99, 235, 0.35));
         color: rgba(15, 23, 42, 0.92);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true .gabriel-legend-swatch {
+        box-shadow: 0 0 12px var(--gabriel-chip-glow, rgba(37, 99, 235, 0.3));
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-false .gabriel-legend-value {
+        background: rgba(15, 23, 42, 0.08);
+        color: rgba(15, 23, 42, 0.6);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-active-label {
+        color: rgba(15, 23, 42, 0.55);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-active-pill {
+        background: rgba(15, 23, 42, 0.06);
+        border-color: rgba(15, 23, 42, 0.15);
+        color: rgba(15, 23, 42, 0.8);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--numeric {
         background: var(--gabriel-chip-bg, rgba(15, 23, 42, 0.06));
@@ -1079,6 +1156,10 @@ _COLAB_STYLE = """
     border-color: rgba(15, 23, 42, 0.12);
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
 }
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-header-row {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(15, 23, 42, 0.12);
+}
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-header-label {
     color: rgba(15, 23, 42, 0.65);
 }
@@ -1103,6 +1184,31 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-count {
     background: rgba(15, 23, 42, 0.1);
     color: rgba(15, 23, 42, 0.75);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-item--boolean {
+    background: rgba(15, 23, 42, 0.04);
+    border-color: rgba(15, 23, 42, 0.08);
+    color: rgba(15, 23, 42, 0.82);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-item--boolean .gabriel-legend-swatch {
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.2);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-item--boolean.is-true {
+    background: var(--gabriel-chip-bg, rgba(37, 99, 235, 0.18));
+    border-color: var(--gabriel-chip-border, rgba(37, 99, 235, 0.4));
+    box-shadow: 0 12px 24px var(--gabriel-chip-glow, rgba(37, 99, 235, 0.2));
+    color: rgba(15, 23, 42, 0.92);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
+    background: var(--gabriel-chip-bg, rgba(37, 99, 235, 0.35));
+    color: rgba(15, 23, 42, 0.92);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-item--boolean.is-true .gabriel-legend-swatch {
+    box-shadow: 0 0 12px var(--gabriel-chip-glow, rgba(37, 99, 235, 0.3));
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-legend-item--boolean.is-false .gabriel-legend-value {
+    background: rgba(15, 23, 42, 0.08);
+    color: rgba(15, 23, 42, 0.6);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-nav-button {
     background: linear-gradient(135deg, #ffffff, #e0e7ff);
@@ -1134,6 +1240,14 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-numeric-slider::after {
     background: linear-gradient(135deg, rgba(37, 99, 235, 0.85), rgba(14, 165, 233, 0.85));
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-active-label {
+    color: rgba(15, 23, 42, 0.55);
+}
+.gabriel-codify-viewer.gabriel-theme-light .gabriel-active-pill {
+    background: rgba(15, 23, 42, 0.06);
+    border-color: rgba(15, 23, 42, 0.15);
+    color: rgba(15, 23, 42, 0.8);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-range-input::-webkit-slider-thumb,
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-range-input::-moz-range-thumb {
@@ -1527,27 +1641,38 @@ def _build_header_html(
     if not header_rows and not active_categories:
         return ""
 
-    parts: List[str] = []
+    card_rows: List[str] = []
     for label, value in header_rows:
         safe_label = html.escape(label)
         safe_value = html.escape(value).replace("\n", "<br/>")
-        parts.append(
+        card_rows.append(
             f"<div class='gabriel-header-row'>"
-            f"<span class='gabriel-header-label'>{safe_label}:</span>"
+            f"<span class='gabriel-header-label'>{safe_label}</span>"
             f"<span class='gabriel-header-value'>{safe_value}</span>"
             f"</div>"
         )
 
-    if active_categories:
-        active = ", ".join(
-            html.escape(cat.replace("_", " ").title()) for cat in active_categories
-        )
-        parts.append(
-            "<div class='gabriel-active-cats'><strong>Categories:</strong> "
-            f"{active}</div>"
+    sections: List[str] = []
+    if card_rows:
+        sections.append(
+            "<div class='gabriel-header-grid'>" + "".join(card_rows) + "</div>"
         )
 
-    return "<div class='gabriel-header'>" + "".join(parts) + "</div>"
+    if active_categories:
+        pills = "".join(
+            "<span class='gabriel-active-pill'>"
+            + html.escape(cat.replace("_", " ").title())
+            + "</span>"
+            for cat in active_categories
+        )
+        sections.append(
+            "<div class='gabriel-active-cats'>"
+            "<span class='gabriel-active-label'>Categories</span>"
+            f"<div class='gabriel-active-pill-stack'>{pills}</div>"
+            "</div>"
+        )
+
+    return "<div class='gabriel-header'>" + "".join(sections) + "</div>"
 
 
 def _build_note_html(notes: Optional[Sequence[Any]]) -> str:
@@ -1651,8 +1776,9 @@ def _build_legend_html(
             else ""
         )
         items.append(
-            "<button type='button' class='gabriel-legend-item gabriel-legend-item--boolean'"
+            "<button type='button' class='gabriel-legend-item gabriel-legend-item--boolean"
             f"{state_class}' data-boolean='{safe_column}' aria-pressed='false' aria-label='{aria_label}'{style_attr}>"
+            "<span class='gabriel-legend-swatch' aria-hidden='true'></span>"
             f"<span class='gabriel-legend-label'>{label}</span>"
             f"<span class='gabriel-legend-value'>{display}</span>"
             "</button>"
