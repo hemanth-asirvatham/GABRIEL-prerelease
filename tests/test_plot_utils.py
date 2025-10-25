@@ -123,6 +123,23 @@ def test_bar_plot_vertical_auto_size_prefers_wider_layout():
     assert fig.get_figwidth() >= fig.get_figheight(), "auto sizing should prefer wider-than-tall figures"
 
 
+def test_bar_plot_long_labels_expand_figure_width():
+    long_label = "This is an extremely long feature description that should wrap across multiple lines"
+    df = pd.DataFrame(
+        {
+            "feature": [long_label + str(idx) for idx in range(3)],
+            "score": [1.0, 2.0, 3.0],
+        }
+    )
+
+    bar_plot(data=df, category_column="feature", value_column="score")
+
+    fig_numbers = plt.get_fignums()
+    assert fig_numbers
+    fig = plt.figure(fig_numbers[0])
+    assert fig.get_figwidth() > 13.0, "long labels should trigger a wider figure"
+
+
 def test_bar_plot_aliases_x_label_font_size():
     df = pd.DataFrame(
         {
