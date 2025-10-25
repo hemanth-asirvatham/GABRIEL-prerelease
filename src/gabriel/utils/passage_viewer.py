@@ -6,7 +6,6 @@ import json
 import random
 import re
 import uuid
-import warnings
 from string import Template
 from dataclasses import dataclass
 from typing import (
@@ -418,7 +417,7 @@ class PassageViewer:
     def __init__(self, *_, **__):
         raise RuntimeError(
             "The tkinter-based PassageViewer has been retired. "
-            "Use gabriel.view(..., colab=True) to access the notebook interface."
+            "Use gabriel.view(...) inside a notebook environment."
         )
 
     def show(self):
@@ -1403,7 +1402,7 @@ def _build_legend_html(
     )
 
 
-def _view_coded_passages_colab(
+def _render_passage_viewer(
     df: pd.DataFrame,
     column_name: str,
     attributes: Optional[Union[Mapping[str, Any], Sequence[Any], Any]] = None,
@@ -1813,7 +1812,7 @@ def _view_coded_passages_colab(
         } else {
             text = value.toFixed(2);
         }
-        return text.replace(/\\.0+$/, '').replace(/(\\.[0-9]*[1-9])0+$/, '$1');
+        return text.replace(/\\.0+$$/, '').replace(/(\\.[0-9]*[1-9])0+$$/, '$$1');
     }
 
     function matchesFilters(entry) {
@@ -2175,7 +2174,6 @@ def view(
     column_name: str,
     attributes: Optional[Union[Mapping[str, Any], Sequence[Any], Any]] = None,
     *,
-    colab: bool = True,
     header_columns: Optional[Union[Sequence[Any], Any]] = None,
     max_passages: Optional[int] = None,
     font_scale: float = 1.0,
@@ -2194,9 +2192,6 @@ def view(
         Attribute columns to render. Accepts sequences of column names, tuples
         of ``(column, label)``, mappings, or the special string
         ``"coded_passages"`` for Codify outputs.
-    colab:
-        Legacy flag retained for backwards compatibility. The notebook viewer
-        is always used; setting ``False`` simply emits a warning.
     header_columns:
         Optional sequence of column names (or ``(column, label)`` tuples)
         displayed above each passage. Values are rendered in the provided
@@ -2212,14 +2207,7 @@ def view(
         ``"auto"`` (default), ``"dark"``, or ``"light"`` to force a theme.
     """
 
-    if not colab:
-        warnings.warn(
-            "The desktop viewer has been retired; falling back to the notebook interface.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
-    _view_coded_passages_colab(
+    _render_passage_viewer(
         df,
         column_name,
         attributes=attributes,
