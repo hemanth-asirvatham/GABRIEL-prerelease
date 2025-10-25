@@ -1,3 +1,5 @@
+import textwrap
+
 import pytest
 
 matplotlib = pytest.importorskip("matplotlib")
@@ -138,6 +140,84 @@ def test_bar_plot_long_labels_expand_figure_width():
     assert fig_numbers
     fig = plt.figure(fig_numbers[0])
     assert fig.get_figwidth() > 13.0, "long labels should trigger a wider figure"
+
+
+def test_bar_plot_auto_size_limits_width_for_small_counts():
+    long_label = "This is a deliberately verbose label that previously forced absurd widths"
+    df = pd.DataFrame(
+        {
+            "feature": [f"{long_label} {idx}" for idx in range(6)],
+            "score": [float(idx) for idx in range(6)],
+        }
+    )
+
+    bar_plot(data=df, category_column="feature", value_column="score")
+
+    fig_numbers = plt.get_fignums()
+    assert fig_numbers
+    fig = plt.figure(fig_numbers[0])
+    assert fig.get_figwidth() <= 24.0, "small bar counts should not explode the figure width"
+
+
+def test_bar_plot_label_wrap_mode_none_disables_wrapping():
+    df = pd.DataFrame(
+        {
+            "feature": [
+                "A fairly long feature name with spaces",
+                "Another reasonably descriptive label",
+            ],
+            "score": [1.0, 2.0],
+        }
+    )
+
+    bar_plot(
+        data=df,
+        category_column="feature",
+        value_column="score",
+        label_wrap_mode="none",
+    )
+
+    fig_numbers = plt.get_fignums()
+    fig = plt.figure(fig_numbers[0])
+    fig.canvas.draw()
+    tick_texts = [tick.get_text() for tick in fig.axes[0].get_xticklabels()]
+    assert all("\n" not in text for text in tick_texts if text)
+
+
+def test_bar_plot_label_wrap_mode_fixed_honours_wrap_width():
+    df = pd.DataFrame(
+        {
+            "feature": ["alpha beta gamma delta epsilon"],
+            "score": [1.0],
+        }
+    )
+
+    bar_plot(
+        data=df,
+        category_column="feature",
+        value_column="score",
+        wrap_width=10,
+        label_wrap_mode="fixed",
+        min_wrap_chars=5,
+    )
+
+    fig_numbers = plt.get_fignums()
+    fig = plt.figure(fig_numbers[0])
+    fig.canvas.draw()
+    text = fig.axes[0].get_xticklabels()[0].get_text()
+    assert text == textwrap.fill("alpha beta gamma delta epsilon", width=10)
+
+
+def test_bar_plot_label_wrap_mode_rejects_invalid_values():
+    df = pd.DataFrame({"feature": ["alpha"], "score": [1.0]})
+
+    with pytest.raises(ValueError, match="label_wrap_mode"):
+        bar_plot(
+            data=df,
+            category_column="feature",
+            value_column="score",
+            label_wrap_mode="diagonal",
+        )
 
 
 def test_bar_plot_aliases_x_label_font_size():
