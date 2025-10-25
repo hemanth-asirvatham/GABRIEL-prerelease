@@ -67,6 +67,65 @@ def _generate_distinct_colors(n: int) -> List[str]:
     return base_colors[:n]
 
 
+def _parse_hex_color(value: str) -> Optional[Tuple[int, int, int]]:
+    """Return an RGB tuple from a hex color string."""
+
+    if not value:
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+    if text.startswith("#"):
+        text = text[1:]
+    if len(text) == 3:
+        text = "".join(ch * 2 for ch in text)
+    if len(text) != 6:
+        return None
+    try:
+        r = int(text[0:2], 16)
+        g = int(text[2:4], 16)
+        b = int(text[4:6], 16)
+    except ValueError:
+        return None
+    return r, g, b
+
+
+def _rgba_string_from_hex(value: str, alpha: float) -> Optional[str]:
+    """Convert a hex color to an ``rgba()`` string with the given alpha."""
+
+    rgb = _parse_hex_color(value)
+    if rgb is None:
+        return None
+    try:
+        alpha_float = float(alpha)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        alpha_float = 1.0
+    alpha_float = max(0.0, min(1.0, alpha_float))
+    r, g, b = rgb
+    return f"rgba({r}, {g}, {b}, {alpha_float:.3f})"
+
+
+def _build_chip_style_tokens(color: str) -> Optional[str]:
+    """Produce inline CSS custom properties for legend chips."""
+
+    if not color:
+        return None
+    tokens: List[str] = []
+    bg = _rgba_string_from_hex(color, 0.22)
+    border = _rgba_string_from_hex(color, 0.55)
+    glow = _rgba_string_from_hex(color, 0.35)
+    if bg:
+        tokens.append(f"--gabriel-chip-bg:{bg}")
+    if border:
+        tokens.append(f"--gabriel-chip-border:{border}")
+    if glow:
+        tokens.append(f"--gabriel-chip-glow:{glow}")
+    if not tokens:
+        return None
+    return ";".join(tokens)
+
+
 @dataclass(frozen=True)
 class _AttributeRequest:
     column: str
@@ -564,7 +623,7 @@ _COLAB_STYLE = """
     font-size: 13px;
     color: rgba(255, 255, 255, 0.88);
     cursor: pointer;
-    transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
     text-decoration: none;
     font: inherit;
     line-height: 1.2;
@@ -576,7 +635,7 @@ _COLAB_STYLE = """
 .gabriel-codify-viewer .gabriel-legend-item:hover {
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.18);
-    transform: translateY(-1px);
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.25);
 }
 .gabriel-codify-viewer .gabriel-legend-item:focus-visible {
     outline: none;
@@ -584,6 +643,28 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer .gabriel-legend-item span {
     pointer-events: none;
+}
+.gabriel-codify-viewer .gabriel-legend-item--snippet {
+    --gabriel-chip-bg: rgba(255, 255, 255, 0.12);
+    --gabriel-chip-border: rgba(255, 255, 255, 0.3);
+    --gabriel-chip-glow: rgba(0, 0, 0, 0.25);
+    padding: 6px 14px;
+}
+.gabriel-codify-viewer .gabriel-legend-item--snippet[data-count]:not([data-count="0"]) {
+    background: var(--gabriel-chip-bg);
+    border-color: var(--gabriel-chip-border);
+    box-shadow: 0 12px 26px var(--gabriel-chip-glow);
+}
+.gabriel-codify-viewer .gabriel-legend-item--snippet[data-count]:not([data-count="0"]):hover {
+    background: var(--gabriel-chip-bg);
+    border-color: var(--gabriel-chip-border);
+    box-shadow: 0 16px 32px var(--gabriel-chip-glow);
+}
+.gabriel-codify-viewer .gabriel-legend-item--snippet[data-count="0"] {
+    opacity: 0.55;
+}
+.gabriel-codify-viewer .gabriel-legend-item--snippet .gabriel-legend-count {
+    background: rgba(0, 0, 0, 0.4);
 }
 .gabriel-codify-viewer .gabriel-legend-color {
     width: 16px;
@@ -613,9 +694,23 @@ _COLAB_STYLE = """
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
+.gabriel-codify-viewer .gabriel-legend-item--boolean.is-true {
+    background: rgba(0, 188, 212, 0.18);
+    border-color: rgba(0, 188, 212, 0.55);
+    box-shadow: 0 12px 28px rgba(0, 188, 212, 0.25);
+    color: #e6fcff;
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean.is-true:hover {
+    background: rgba(0, 188, 212, 0.22);
+    border-color: rgba(0, 188, 212, 0.65);
+    box-shadow: 0 16px 34px rgba(0, 188, 212, 0.35);
+}
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
     background: rgba(0, 188, 212, 0.25);
     color: #e6fcff;
+}
+.gabriel-codify-viewer .gabriel-legend-item--boolean.is-false {
+    opacity: 0.85;
 }
 .gabriel-codify-viewer .gabriel-legend-item--boolean.is-false .gabriel-legend-value {
     background: rgba(244, 67, 54, 0.25);
@@ -671,12 +766,16 @@ _COLAB_STYLE = """
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 .gabriel-codify-viewer .gabriel-header-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 6px;
+    display: grid;
+    grid-template-columns: minmax(110px, auto) 1fr;
+    gap: 4px 12px;
+    align-items: center;
+    margin: 0;
 }
 .gabriel-codify-viewer .gabriel-header-label {
     font-weight: 600;
@@ -684,10 +783,23 @@ _COLAB_STYLE = """
     font-size: 11px;
     letter-spacing: 0.05em;
     color: rgba(255, 255, 255, 0.7);
+    white-space: nowrap;
 }
 .gabriel-codify-viewer .gabriel-header-value {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.94);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+    word-break: break-word;
+}
+@media (max-width: 640px) {
+    .gabriel-codify-viewer .gabriel-header-row {
+        grid-template-columns: 1fr;
+    }
+    .gabriel-codify-viewer .gabriel-header-label {
+        white-space: normal;
+    }
 }
 .gabriel-codify-viewer .gabriel-active-cats {
     margin-top: 4px;
@@ -785,6 +897,22 @@ _COLAB_STYLE = """
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item:focus-visible {
         box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.4);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--snippet .gabriel-legend-count {
+        background: rgba(15, 23, 42, 0.15);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--snippet[data-count]:not([data-count="0"]) {
+        box-shadow: 0 12px 24px var(--gabriel-chip-glow, rgba(15, 23, 42, 0.18));
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true {
+        background: rgba(37, 99, 235, 0.18);
+        border-color: rgba(37, 99, 235, 0.4);
+        box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2);
+        color: rgba(15, 23, 42, 0.92);
+    }
+    .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-item--boolean.is-true .gabriel-legend-value {
+        background: rgba(37, 99, 235, 0.35);
+        color: rgba(15, 23, 42, 0.92);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-legend-count {
         background: rgba(15, 23, 42, 0.1);
@@ -1390,9 +1518,15 @@ def _build_legend_html(
         count = html.escape(str(count_value))
         safe_color = html.escape(color, quote=True)
         safe_category = html.escape(category, quote=True)
+        chip_style = _build_chip_style_tokens(color)
+        style_attr = (
+            f" style=\"{html.escape(chip_style, quote=True)}\""
+            if chip_style
+            else ""
+        )
         items.append(
             "<button type='button' class='gabriel-legend-item gabriel-legend-item--snippet' "
-            f"data-category='{safe_category}' data-count='{count}' aria-label='{aria_label}'>"
+            f"data-category='{safe_category}' data-count='{count}' aria-label='{aria_label}'{style_attr}>"
             f"<span class='gabriel-legend-color' style='background:{safe_color}'></span>"
             f"<span class='gabriel-legend-label'>{label}</span>"
             f"<span class='gabriel-legend-count'>{count}</span>"
