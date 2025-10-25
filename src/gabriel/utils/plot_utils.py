@@ -2036,10 +2036,14 @@ def bar_plot(
         if not raw_labels:
             return base_width
         longest = max(len(label) for label in raw_labels)
-        bonus = int(round(max(longest - base_width, 0) * 0.4))
+        overflow = max(longest - base_width, 0)
+        relief_cap = int(round(max(base_width * 0.5, min_wrap_chars)))
+        relief = 0
+        if overflow > 0:
+            relief = int(round(min(overflow * 0.18, relief_cap)))
         penalty_scale = 0.4 if orientation == "vertical" else 0.2
         penalty = int(round(max(chunk_count - 8, 0) * penalty_scale))
-        effective_width = base_width - penalty + bonus
+        effective_width = base_width + relief - penalty
         return max(effective_width, min_wrap_chars)
 
     def _label_density_scale(
@@ -2059,6 +2063,12 @@ def bar_plot(
         overflow = max(longest_raw - reference, 0)
         overflow_ratio = overflow / max(reference, 1)
 
+        has_wrapping = bool(
+            wrapped_labels and any("\n" in label for label in wrapped_labels if label)
+        )
+        if has_wrapping:
+            overflow_ratio *= 0.03
+
         if wrapped_labels:
             line_counts = [label.count("\n") + 1 for label in wrapped_labels]
             max_lines = max(line_counts)
@@ -2073,9 +2083,15 @@ def bar_plot(
         line_overflow = max(max_line_len - reference, 0)
         line_ratio = line_overflow / max(reference, 1)
 
-        scale = 1.0 + 0.35 * overflow_ratio + 0.25 * line_ratio + 0.1 * max(max_lines - 1, 0)
+        line_weight = 0.18 if has_wrapping else 0.25
+        multiline_weight = 0.07 if has_wrapping else 0.1
+
+        scale = 1.0 + 0.35 * overflow_ratio + line_weight * line_ratio + multiline_weight * max(max_lines - 1, 0)
         clamped_count = max(1, min(int(chunk_count), 12))
-        dynamic_cap = 1.25 + clamped_count * 0.07
+        if has_wrapping:
+            dynamic_cap = min(1.6, 1.1 + clamped_count * 0.04)
+        else:
+            dynamic_cap = min(2.4, 1.25 + clamped_count * 0.07)
         return max(1.0, min(scale, dynamic_cap))
 
     def _auto_figsize(chunk_count: int) -> Tuple[float, float]:
