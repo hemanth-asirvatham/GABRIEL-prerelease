@@ -1539,6 +1539,7 @@ def bar_plot(
     tick_label_size: int = 11,
     title_font_size: int = 14,
     wrap_width: Optional[int] = 18,
+    label_wrap_mode: str = "auto",
     min_wrap_chars: int = 12,
     rotate_xlabels: bool = False,
     annotation_font_size: int = 10,
@@ -1622,6 +1623,12 @@ def bar_plot(
         Base width (in characters) used when wrapping category labels.  Values
         ``<= 0`` disable wrapping entirely.  When ``None`` a default width of
         ``18`` characters is used before scaling.
+    label_wrap_mode : {"auto", "fixed", "none"}, default "auto"
+        Controls how category labels are wrapped.  ``"auto"`` retains the
+        adaptive behaviour that widens the wrap width for long labels, while
+        ``"fixed"`` enforces the value provided by ``wrap_width``.  Pass
+        ``"none"`` to disable wrapping altogether regardless of
+        ``wrap_width``.
     min_wrap_chars : int, default 12
         Minimum wrap width applied after auto-scaling so labels never collapse
         into unreadably narrow columns.
@@ -1668,6 +1675,9 @@ def bar_plot(
     if orientation not in {"vertical", "horizontal"}:
         raise ValueError("orientation must be 'vertical' or 'horizontal'.")
     min_wrap_chars = max(int(min_wrap_chars), 1)
+    label_wrap_mode = (label_wrap_mode or "auto").strip().lower()
+    if label_wrap_mode not in {"auto", "fixed", "none"}:
+        raise ValueError("label_wrap_mode must be 'auto', 'fixed', or 'none'.")
     try:
         horizontal_label_fraction = float(horizontal_label_fraction)
     except (TypeError, ValueError):
@@ -1994,7 +2004,13 @@ def bar_plot(
     else:
         manual_figsize = (float(figsize[0]), float(figsize[1]))
     default_figsize = (13.0, 6.5)
-    configured_wrap_width = 18 if wrap_width is None else wrap_width
+    if wrap_width is None:
+        configured_wrap_width: Optional[float] = 18
+    else:
+        try:
+            configured_wrap_width = float(wrap_width)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("wrap_width must be a numeric value or None.") from exc
     if max_bars_per_plot is None or int(max_bars_per_plot) <= 0:
         effective_limit = n_categories
     else:
@@ -2004,9 +2020,19 @@ def bar_plot(
     total_chunks = (n_categories + effective_limit - 1) // effective_limit if effective_limit else 1
 
     def _label_wrap_width(raw_labels: Sequence[str], chunk_count: int) -> Optional[int]:
-        if configured_wrap_width is None or configured_wrap_width <= 0:
+        if label_wrap_mode == "none":
             return None
-        base_width = max(int(round(configured_wrap_width)), min_wrap_chars)
+        if configured_wrap_width is None:
+            return None
+        try:
+            base_width = int(round(configured_wrap_width))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("wrap_width must be a numeric value or None.") from exc
+        if base_width <= 0:
+            return None
+        base_width = max(base_width, min_wrap_chars)
+        if label_wrap_mode == "fixed":
+            return base_width
         if not raw_labels:
             return base_width
         longest = max(len(label) for label in raw_labels)
@@ -2016,7 +2042,9 @@ def bar_plot(
         effective_width = base_width - penalty + bonus
         return max(effective_width, min_wrap_chars)
 
-    def _label_density_scale(raw_labels: Sequence[str], wrapped_labels: Sequence[str]) -> float:
+    def _label_density_scale(
+        raw_labels: Sequence[str], wrapped_labels: Sequence[str], chunk_count: int
+    ) -> float:
         """Return a multiplier for figure width based on label complexity."""
 
         if not raw_labels:
@@ -2046,7 +2074,9 @@ def bar_plot(
         line_ratio = line_overflow / max(reference, 1)
 
         scale = 1.0 + 0.35 * overflow_ratio + 0.25 * line_ratio + 0.1 * max(max_lines - 1, 0)
-        return max(1.0, min(scale, 2.8))
+        clamped_count = max(1, min(int(chunk_count), 12))
+        dynamic_cap = 1.25 + clamped_count * 0.07
+        return max(1.0, min(scale, dynamic_cap))
 
     def _auto_figsize(chunk_count: int) -> Tuple[float, float]:
         width, height = default_figsize
@@ -2108,7 +2138,7 @@ def bar_plot(
         if manual_figsize is None:
             fig_width, fig_height = _auto_figsize(chunk_count)
             if orientation == "vertical":
-                density_scale = _label_density_scale(raw_labels, chunk_labels)
+                density_scale = _label_density_scale(raw_labels, chunk_labels, chunk_count)
                 fig_width = min(30.0, fig_width * density_scale)
         else:
             fig_width, fig_height = manual_figsize
