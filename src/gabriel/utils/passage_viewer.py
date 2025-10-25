@@ -1,11 +1,3 @@
-try:  # pragma: no cover - optional dependency
-    import tkinter as tk
-    from tkinter import ttk, scrolledtext
-except Exception:  # pragma: no cover - optional dependency
-    tk = None  # type: ignore
-    ttk = None  # type: ignore
-    scrolledtext = None  # type: ignore
-
 import ast
 import colorsys
 import math
@@ -13,6 +5,9 @@ import html
 import json
 import random
 import re
+import uuid
+import warnings
+from string import Template
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -78,6 +73,7 @@ class _AttributeRequest:
     column: str
     label: str
     dynamic: bool = False
+    description: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +82,7 @@ class _AttributeSpec:
     label: str
     kind: Literal["snippet", "boolean", "numeric", "text"]
     dynamic: bool = False
+    description: Optional[str] = None
 
 def _coerce_category_spec(
     categories: Optional[Union[Sequence[Any], Any]]
@@ -117,8 +114,26 @@ def _normalize_attribute_requests(
     if attributes is None:
         return []
 
+    label_overrides: Dict[str, str] = {}
+    descriptions: Dict[str, str] = {}
     if isinstance(attributes, Mapping):
-        iterable: Iterable[Any] = attributes.items()
+        iterable: Iterable[Any] = attributes.keys()
+        for key, value in attributes.items():
+            if value is None:
+                continue
+            column_key = str(key)
+            if isinstance(value, Mapping):
+                label_hint = str(value.get("label", "")).strip()
+                desc_hint = str(value.get("description", "")).strip()
+                if label_hint:
+                    label_overrides[column_key] = label_hint
+                if desc_hint:
+                    descriptions[column_key] = desc_hint
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            descriptions[column_key] = text
     elif isinstance(attributes, (str, bytes)):
         iterable = [attributes]
     elif isinstance(attributes, Iterable):
@@ -130,59 +145,136 @@ def _normalize_attribute_requests(
     seen: set[Tuple[str, bool]] = set()
     for entry in iterable:
         dynamic = False
+        label_hint: Optional[str] = None
+        description_hint: Optional[str] = None
         if isinstance(entry, tuple) and entry:
             column = str(entry[0])
-            label = str(entry[1]) if len(entry) > 1 else column
+            label_hint = str(entry[1]) if len(entry) > 1 else None
         elif isinstance(entry, list) and entry:
             column = str(entry[0])
-            label = str(entry[1]) if len(entry) > 1 else column
+            label_hint = str(entry[1]) if len(entry) > 1 else None
         elif isinstance(entry, tuple) and not entry:
             continue
         elif isinstance(entry, Mapping):
             for key, value in entry.items():
                 column = str(key)
-                label = str(value)
+                override = str(value).strip() if value is not None else ""
                 dynamic = column == "coded_passages"
-                pretty = label.replace("_", " ").title()
+                pretty = override or column.replace("_", " ").title()
                 identity = (column, dynamic)
                 if identity in seen:
                     continue
                 seen.add(identity)
                 requests.append(
-                    _AttributeRequest(column=column, label=pretty, dynamic=dynamic)
+                    _AttributeRequest(
+                        column=column,
+                        label=pretty,
+                        dynamic=dynamic,
+                        description=descriptions.get(column),
+                    )
                 )
             continue
         else:
             column = str(entry)
-            label = column
 
         dynamic = column == "coded_passages"
-        pretty = label.replace("_", " ").title()
+        label_source = label_overrides.get(column) or label_hint
+        description_hint = descriptions.get(column)
+        if label_source:
+            pretty = label_source
+        else:
+            pretty = column.replace("_", " ").title()
         identity = (column, dynamic)
         if identity in seen:
             continue
         seen.add(identity)
         requests.append(
-            _AttributeRequest(column=column, label=pretty, dynamic=dynamic)
+            _AttributeRequest(
+                column=column,
+                label=pretty,
+                dynamic=dynamic,
+                description=description_hint,
+            )
         )
 
     return requests
 
 
+def _collect_mapping_keys(series: pd.Series, limit: int = 64) -> List[str]:
+    keys: List[str] = []
+    seen: Set[str] = set()
+    for value in series:
+        parsed = _parse_structured_cell(value)
+        if not isinstance(parsed, Mapping):
+            continue
+        for key in parsed.keys():
+            if key is None:
+                continue
+            text = str(key).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            keys.append(text)
+            if len(keys) >= limit:
+                return keys
+    return keys
+
+
+def _extract_mapping_value(value: Any, key: str) -> Any:
+    parsed = _parse_structured_cell(value)
+    if not isinstance(parsed, Mapping):
+        return None
+    raw = parsed.get(key)
+    if isinstance(raw, Mapping):
+        for candidate in ("value", "rating", "score", "answer", "label", "text"):
+            if candidate in raw and raw[candidate] is not None:
+                return raw[candidate]
+        return raw.get("value")
+    return raw
+
+
+def _expand_mapping_attribute_requests(
+    df: pd.DataFrame,
+    requests: List[_AttributeRequest],
+) -> Tuple[pd.DataFrame, List[_AttributeRequest]]:
+    if df.empty or not requests:
+        return df, requests
+
+    expanded: List[_AttributeRequest] = []
+    for request in requests:
+        if request.dynamic or request.column not in df.columns:
+            expanded.append(request)
+            continue
+        series = df[request.column]
+        mapping_keys = _collect_mapping_keys(series)
+        if not mapping_keys:
+            expanded.append(request)
+            continue
+        for key in mapping_keys:
+            derived_column = f"{request.column}::{key}"
+            if derived_column not in df.columns:
+                df[derived_column] = series.apply(
+                    lambda value, key=key: _extract_mapping_value(value, key)
+                )
+            expanded.append(
+                _AttributeRequest(
+                    column=derived_column,
+                    label=str(key),
+                    dynamic=False,
+                    description=request.description,
+                )
+            )
+    return df, expanded
+
+
 def _coerce_bool_value(value: Any) -> Optional[bool]:
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if value == 1:
-            return True
-        if value == 0:
-            return False
-        return None
     if isinstance(value, str):
         lowered = value.strip().lower()
-        if lowered in {"true", "yes", "y", "1"}:
+        if lowered in {"true", "yes", "y"}:
             return True
-        if lowered in {"false", "no", "n", "0"}:
+        if lowered in {"false", "no", "n"}:
             return False
     return None
 
@@ -321,466 +413,19 @@ def _passage_matches_filters(
 
 
 class PassageViewer:
-    def __init__(self, df: pd.DataFrame, column_name: str, categories: Optional[Union[List[str], str]] = None):
-        self.df = df.copy()
-        self.column_name = column_name
-        self.current_index = 0
-        self.last_tooltip_cats = None
-        self.selected_snippet_tag = None
-        self.dark_mode = True  # Default to dark mode
-        category_spec = _coerce_category_spec(categories)
-        self.df = _normalize_structured_dataframe(self.df, category_spec)
-        # Detect mode: static categories or dynamic coded_passages
-        if (
-            category_spec is None
-            and "coded_passages" in self.df.columns
-        ):
-            self.dynamic_mode = True
-            self.categories = _extract_categories_from_coded_passages(self.df)
-        elif category_spec == 'coded_passages':
-            self.dynamic_mode = True
-            if 'coded_passages' in self.df.columns:
-                self.categories = _extract_categories_from_coded_passages(self.df)
-            else:
-                self.categories = []
-        else:
-            self.dynamic_mode = False
-            self.categories = list(category_spec) if category_spec else []
-        self.colors = _generate_distinct_colors(len(self.categories))
-        self.category_colors = dict(zip(self.categories, self.colors))
-        self.tooltip = None
-        self._setup_gui()
-        self._display_current_text()
+    """Legacy desktop viewer placeholder."""
 
-    def _setup_gui(self):
-        self.root = tk.Tk()
-        self.root.title("Passage Viewer - Modern Text Analysis")
-        self.root.geometry("1600x1000")
-        self._apply_theme()
-
-    def _apply_theme(self):
-        # Set up theme colors and fonts
-        if self.dark_mode:
-            bg_main = '#181a1b'
-            bg_secondary = '#23272a'
-            text_primary = '#f7f7f7'
-            text_accent = '#00bcd4'
-            text_info = '#b0b0b0'
-            legend_border = '#444'
-            highlight_sel = '#fff176'
-            font_main = ('Quicksand', 20, 'bold')
-            font_header = ('Quicksand', 16, 'bold')
-            font_legend = ('Quicksand', 15)
-            font_info = ('Quicksand', 14)
-            font_text = ('Quicksand', 20)
-            font_popup = ('Quicksand', 22, 'bold')
-        else:
-            bg_main = '#f7f7f7'
-            bg_secondary = '#eaeaea'
-            text_primary = '#23272a'
-            text_accent = '#00bcd4'
-            text_info = '#444'
-            legend_border = '#bbb'
-            highlight_sel = '#fff176'
-            font_main = ('Quicksand', 20, 'bold')
-            font_header = ('Quicksand', 16, 'bold')
-            font_legend = ('Quicksand', 15)
-            font_info = ('Quicksand', 14)
-            font_text = ('Quicksand', 20)
-            font_popup = ('Quicksand', 22, 'bold')
-        self.bg_main = bg_main
-        self.bg_secondary = bg_secondary
-        self.text_primary = text_primary
-        self.text_accent = text_accent
-        self.text_info = text_info
-        self.legend_border = legend_border
-        self.highlight_sel = highlight_sel
-        self.font_main = font_main
-        self.font_header = font_header
-        self.font_legend = font_legend
-        self.font_info = font_info
-        self.font_text = font_text
-        self.font_popup = font_popup
-        self._build_gui()
-
-    def _build_gui(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('Title.TLabel', font=self.font_main, background=self.bg_main, foreground=self.text_primary)
-        style.configure('Header.TLabel', font=self.font_header, background=self.bg_main, foreground=self.text_accent)
-        style.configure('Info.TLabel', font=self.font_info, background=self.bg_main, foreground=self.text_info)
-        style.configure('Legend.TLabel', font=self.font_legend, background=self.bg_main, foreground=self.text_primary)
-        style.configure('TFrame', background=self.bg_main)
-        style.configure('TLabelFrame', background=self.bg_main, foreground=self.text_primary, borderwidth=0, relief='flat')
-        style.configure('TLabelFrame.Label', background=self.bg_main, foreground=self.text_primary, font=self.font_main)
-        style.configure('Modern.TButton', font=self.font_header, padding=(20, 10), background=self.bg_secondary, foreground=self.text_primary, borderwidth=0, relief='flat')
-        style.map('Modern.TButton', background=[('active', self.text_accent), ('pressed', self.text_accent)])
-        main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        top_frame = ttk.Frame(main_frame)
-        top_frame.pack(fill=tk.X, pady=(0, 15))
-        self.info_label = ttk.Label(top_frame, text="", style='Title.TLabel')
-        self.info_label.pack(side=tk.LEFT)
-        button_frame = ttk.Frame(top_frame)
-        button_frame.pack(side=tk.RIGHT)
-        ttk.Button(button_frame, text="◀ Previous", command=self._previous_text, style='Modern.TButton').pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(button_frame, text="Next ▶", command=self._next_text, style='Modern.TButton').pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(button_frame, text="🎲 Random", command=self._random_text, style='Modern.TButton').pack(side=tk.LEFT, padx=(0, 8))
-        self.mode_toggle = ttk.Button(button_frame, text="🌙" if self.dark_mode else "☀️", command=self._toggle_mode, style='Modern.TButton')
-        self.mode_toggle.pack(side=tk.LEFT, padx=(0, 8))
-        legend_frame = ttk.LabelFrame(main_frame, text="Categories", padding=15)
-        legend_frame.pack(fill=tk.X, pady=(0, 0))
-        legend_canvas = tk.Canvas(legend_frame, bg=self.bg_main, highlightthickness=0, bd=0, height=120)
-        legend_canvas.pack(fill=tk.X, expand=False)
-        legend_inner = ttk.Frame(legend_canvas)
-        legend_window = legend_canvas.create_window((0, 0), window=legend_inner, anchor='nw')
-        n_cats = len(self.categories)
-        n_cols = min(5, max(3, (n_cats + 7) // 8))
-        self.legend_labels = {}
-        self.category_snippet_positions = {cat: [] for cat in self.categories}
-        self.category_snippet_indices = {cat: 0 for cat in self.categories}
-        for i, (category, color) in enumerate(self.category_colors.items()):
-            row = i // n_cols
-            col = i % n_cols
-            category_frame = ttk.Frame(legend_inner)
-            category_frame.grid(row=row, column=col, padx=18, pady=6, sticky='w')
-            color_canvas = tk.Canvas(category_frame, width=38, height=24, bg=self.bg_main, highlightthickness=0, bd=0)
-            color_canvas.pack(side=tk.LEFT, padx=(0, 12))
-            color_canvas.create_rectangle(4, 4, 34, 20, fill=color, outline=self.legend_border, width=2)
-            legend_label = ttk.Label(category_frame, text=f"{category.replace('_', ' ').title()} (0)", style='Legend.TLabel', cursor="hand2")
-            legend_label.pack(side=tk.LEFT)
-            legend_label.bind('<Button-1>', lambda e, cat=category: self._find_next_snippet(cat))
-            legend_label.bind('<Enter>', lambda e, lbl=legend_label: lbl.config(foreground=self.text_accent))
-            legend_label.bind('<Leave>', lambda e, lbl=legend_label: lbl.config(foreground=self.text_primary))
-            self.legend_labels[category] = legend_label
-        legend_inner.update_idletasks()
-        legend_canvas.config(scrollregion=legend_canvas.bbox("all"))
-        if legend_inner.winfo_reqwidth() > legend_canvas.winfo_width():
-            legend_canvas.config(width=legend_inner.winfo_reqwidth())
-        # Add separator line
-        sep = tk.Frame(main_frame, height=2, bg=self.legend_border)
-        sep.pack(fill=tk.X, pady=(0, 0))
-        text_frame = ttk.LabelFrame(main_frame, text="Text Content", padding=15)
-        text_frame.pack(fill=tk.BOTH, expand=True)
-        self.text_widget = scrolledtext.ScrolledText(
-            text_frame,
-            wrap=tk.WORD,
-            font=self.font_text,
-            bg='#23272a' if self.dark_mode else '#ffffff',
-            fg='#f7f7f7' if self.dark_mode else '#000000',
-            relief=tk.FLAT,
-            borderwidth=2,
-            padx=15,
-            pady=15,
-            selectbackground=self.text_accent,
-            selectforeground='#23272a' if self.dark_mode else '#ffffff',
-            insertbackground='#f7f7f7' if self.dark_mode else '#000000',
-            spacing1=4,
-            spacing3=4
+    def __init__(self, *_, **__):
+        raise RuntimeError(
+            "The tkinter-based PassageViewer has been retired. "
+            "Use gabriel.view(..., colab=True) to access the notebook interface."
         )
-        self.text_widget.pack(fill=tk.BOTH, expand=True)
-        for category, color in self.category_colors.items():
-            self.text_widget.tag_configure(
-                category,
-                background=color,
-                foreground='#23272a' if self.dark_mode else '#000000',
-                relief=tk.RAISED,
-                borderwidth=1,
-                font=self.font_text
-            )
-            # Emphasis tag for selected snippet
-            self.text_widget.tag_configure(f"{category}_emph", background=color, borderwidth=4, relief=tk.SOLID)
-        for i, category in enumerate(self.categories):
-            self.text_widget.tag_raise(category)
-        self.snippet_info = ttk.Label(main_frame, text="", style='Info.TLabel')
-        self.snippet_info.pack(pady=(10, 0))
-        self.text_widget.bind('<Motion>', self._on_mouse_motion)
-        self.text_widget.bind('<Leave>', self._on_mouse_leave)
 
-    def _toggle_mode(self):
-        self.dark_mode = not self.dark_mode
-        self._apply_theme()
-        self._display_current_text()
-
-    def _letters_only(self, text: str) -> str:
-        """Keep only lowercase letters a-z, remove everything else."""
-        if not text:
-            return ""
-        return re.sub(r'[^a-z]', '', text.lower())
-
-    def _find_text_position(self, text: str, snippet: str) -> tuple:
-        """Robust text position finding using the same logic as codify."""
-        clean_snippet = snippet.strip()
-        if not clean_snippet:
-            return None, None
-        
-        # Strategy 1: Direct exact match
-        start = text.find(clean_snippet)
-        if start != -1:
-            return start, start + len(clean_snippet)
-        
-        # Strategy 2: Case-insensitive match  
-        start = text.lower().find(clean_snippet.lower())
-        if start != -1:
-            return start, start + len(clean_snippet)
-        
-        # Strategy 3: Letters-only matching (most robust)
-        text_letters = self._letters_only(text)
-        snippet_letters = self._letters_only(clean_snippet)
-        
-        if snippet_letters and snippet_letters in text_letters:
-            # Find approximate position using letters-only
-            letters_idx = text_letters.find(snippet_letters)
-            ratio = letters_idx / len(text_letters) if text_letters else 0
-            approx_start = int(ratio * len(text))
-            
-            # Search in a window around the approximate position
-            window_size = len(clean_snippet) * 3
-            search_start = max(0, approx_start - window_size)
-            search_end = min(len(text), approx_start + window_size)
-            search_text = text[search_start:search_end]
-            
-            # Try to find exact match in this window
-            local_pos = self._find_in_window(search_text, clean_snippet)
-            if local_pos is not None:
-                return search_start + local_pos[0], search_start + local_pos[1]
-        
-        # Strategy 4: Try with first/last parts for partial matches
-        if len(snippet_letters) >= 20:
-            # Try first 20 letters
-            first_20 = snippet_letters[:20]
-            if first_20 in text_letters:
-                letters_idx = text_letters.find(first_20)
-                ratio = letters_idx / len(text_letters) if text_letters else 0
-                approx_start = int(ratio * len(text))
-                
-                # Search window
-                window_size = len(clean_snippet) * 2
-                search_start = max(0, approx_start - window_size//2)
-                search_end = min(len(text), approx_start + window_size)
-                search_text = text[search_start:search_end]
-                
-                local_pos = self._find_in_window(search_text, clean_snippet)
-                if local_pos is not None:
-                    return search_start + local_pos[0], search_start + local_pos[1]
-        
-        # Strategy 5: Fallback to regex (last resort)
-        try:
-            pattern = re.escape(clean_snippet[:50])
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                return match.start(), match.end()
-        except:
-            pass
-        
-        return None, None
-
-    def _find_in_window(self, window_text: str, target: str) -> tuple:
-        """Find target in window using multiple strategies."""
-        # Direct match
-        idx = window_text.find(target)
-        if idx != -1:
-            return idx, idx + len(target)
-        
-        # Case insensitive
-        idx = window_text.lower().find(target.lower())
-        if idx != -1:
-            return idx, idx + len(target)
-        
-        # Try with some normalization
-        normalized_window = re.sub(r'\s+', ' ', window_text.lower())
-        normalized_target = re.sub(r'\s+', ' ', target.lower())
-        
-        idx = normalized_window.find(normalized_target)
-        if idx != -1:
-            return idx, idx + len(normalized_target)
-        
-        return None
-
-    def _display_current_text(self):
-        if self.current_index >= len(self.df):
-            self.current_index = 0
-        row = self.df.iloc[self.current_index]
-        text = str(row[self.column_name])
-        additional_info = ""
-        if 'conversation_id' in self.df.columns:
-            additional_info = f" | ID: {row['conversation_id']}"
-        elif 'id' in self.df.columns:
-            additional_info = f" | ID: {row['id']}"
-        self.info_label.config(
-            text=f"Text {self.current_index + 1} of {len(self.df)}{additional_info}"
-        )
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.delete(1.0, tk.END)
-        self.text_widget.insert(1.0, text)
-        highlights = []
-        snippet_count = 0
-        self.category_snippet_positions = {cat: [] for cat in self.categories}
-        if self.dynamic_mode:
-            coded_passages = row['coded_passages'] if 'coded_passages' in row else {}
-            if isinstance(coded_passages, dict):
-                for category in self.categories:
-                    snippets = _coerce_snippet_list(coded_passages.get(category, []))
-                    for snippet in snippets:
-                        start_pos, end_pos = self._find_text_position(text, snippet)
-                        if start_pos is not None:
-                            highlights.append({
-                                'start': start_pos,
-                                'end': end_pos,
-                                'category': category,
-                                'snippet': snippet
-                            })
-                            self.category_snippet_positions[category].append((start_pos, end_pos))
-                            snippet_count += 1
-        else:
-            for category in self.categories:
-                snippets = _coerce_snippet_list(row.get(category, []))
-                for snippet in snippets:
-                    start_pos, end_pos = self._find_text_position(text, snippet)
-                    if start_pos is not None:
-                        highlights.append({
-                            'start': start_pos,
-                            'end': end_pos,
-                            'category': category,
-                            'snippet': snippet
-                        })
-                        self.category_snippet_positions[category].append((start_pos, end_pos))
-                        snippet_count += 1
-        highlights.sort(key=lambda x: x['start'])
-        self.text_widget.tag_remove('highlight', '1.0', tk.END)
-        for tag in self.text_widget.tag_names():
-            if tag.startswith('hover_') or tag.endswith('_emph'):
-                self.text_widget.tag_delete(tag)
-        for highlight in highlights:
-            start_idx = f"1.0+{highlight['start']}c"
-            end_idx = f"1.0+{highlight['end']}c"
-            tag_name = f"{highlight['category']}_{highlight['start']}_{highlight['end']}"
-            self.text_widget.tag_add(tag_name, start_idx, end_idx)
-            color = self.category_colors[highlight['category']]
-            self.text_widget.tag_configure(
-                tag_name,
-                background=color,
-                foreground='#23272a' if self.dark_mode else '#000000',
-                relief=tk.RAISED,
-                borderwidth=1,
-                font=self.font_text
-            )
-        self.text_widget.config(state=tk.DISABLED)
-        self.current_highlights = highlights
-        self._update_legend_counts()
-        self._update_snippet_info()
-        self.selected_snippet_tag = None
-
-    def _update_legend_counts(self):
-        for cat, label in self.legend_labels.items():
-            count = len(self.category_snippet_positions.get(cat, []))
-            label.config(text=f"{cat.replace('_', ' ').title()} ({count})")
-
-    def _find_next_snippet(self, category):
-        positions = self.category_snippet_positions.get(category, [])
-        if not positions:
-            return  # No snippets for this category
-        idx = self.category_snippet_indices.get(category, 0)
-        start, end = positions[idx]
-        start_idx = f"1.0+{start}c"
-        end_idx = f"1.0+{end}c"
-        self.text_widget.tag_remove('sel', '1.0', tk.END)
-        # Remove previous emphasis
-        if self.selected_snippet_tag:
-            self.text_widget.tag_remove(self.selected_snippet_tag, '1.0', tk.END)
-        # Add emphasis to the selected snippet
-        emph_tag = f"{category}_emph"
-        self.text_widget.tag_add(emph_tag, start_idx, end_idx)
-        self.text_widget.tag_raise(emph_tag)
-        self.selected_snippet_tag = emph_tag
-        self.text_widget.see(start_idx)
-        idx = (idx + 1) % len(positions)
-        self.category_snippet_indices[category] = idx
-
-    def _update_snippet_info(self):
-        if not hasattr(self, 'current_highlights'):
-            self.snippet_info.config(text="")
-            return
-        category_counts = {}
-        for highlight in self.current_highlights:
-            cat = highlight['category']
-            category_counts[cat] = category_counts.get(cat, 0) + 1
-        if category_counts:
-            count_text = ", ".join([f"{cat.replace('_', ' ').title()}: {count}" for cat, count in category_counts.items()])
-            self.snippet_info.config(text=f"Highlighted snippets - {count_text}")
-        else:
-            self.snippet_info.config(text="No snippets found for this text")
-
-    def _next_text(self):
-        self.current_index = (self.current_index + 1) % len(self.df)
-        self._display_current_text()
-    
-    def _previous_text(self):
-        self.current_index = (self.current_index - 1) % len(self.df)
-        self._display_current_text()
-    
-    def _random_text(self):
-        self.current_index = random.randint(0, len(self.df) - 1)
-        self._display_current_text()
-    
     def show(self):
-        self.root.mainloop()
-    
-    def destroy(self):
-        self.root.destroy()
-
-    def _on_mouse_motion(self, event):
-        index = self.text_widget.index(f"@{event.x},{event.y}")
-        pos = self.text_widget.count('1.0', index, 'chars')[0]
-        hovered = []
-        for highlight in self.current_highlights:
-            if highlight['start'] <= pos < highlight['end']:
-                hovered.append(highlight)
-        if hovered:
-            cats = sorted(set(h['category'] for h in hovered))
-            if cats != self.last_tooltip_cats:
-                # Show each category in its highlight color
-                label_text = " | ".join([
-                    f"\u25A0 {cat.replace('_', ' ').title()}" for cat in cats
-                ])
-                self._show_tooltip(event.x_root, event.y_root, cats)
-                self.last_tooltip_cats = cats
-        else:
-            self._hide_tooltip()
-            self.last_tooltip_cats = None
-
-    def _on_mouse_leave(self, event):
-        self._hide_tooltip()
-        self.last_tooltip_cats = None
-
-    def _show_tooltip(self, x, y, cats):
-        if self.tooltip:
-            self.tooltip.destroy()
-        self.tooltip = tk.Toplevel(self.root)
-        self.tooltip.wm_overrideredirect(True)
-        self.tooltip.wm_geometry(f"+{x+20}+{y+20}")
-        frame = tk.Frame(self.tooltip, bg='#23272a' if self.dark_mode else '#f7f7f7', bd=0, highlightthickness=0)
-        frame.pack()
-        for cat in cats:
-            color = self.category_colors.get(cat, '#00bcd4')
-            label = tk.Label(frame, text=cat.replace('_', ' ').title(), font=self.font_popup,
-                             background='#23272a' if self.dark_mode else '#f7f7f7',
-                             foreground=color, padx=18, pady=8, borderwidth=0)
-            label.pack(anchor='w')
-        # Drop shadow effect
-        self.tooltip.lift()
-        self.tooltip.attributes('-topmost', True)
-        try:
-            self.tooltip.attributes('-alpha', 0.98)
-        except Exception:
-            pass
-
-    def _hide_tooltip(self):
-        if self.tooltip:
-            self.tooltip.destroy()
-            self.tooltip = None
+        raise RuntimeError(
+            "gabriel.view now renders exclusively via the notebook interface; "
+            "desktop mode is no longer available."
+        )
 
 _COLAB_STYLE = """
 <style>
@@ -1028,8 +673,18 @@ _COLAB_STYLE = """
     opacity: 0.3;
 }
 .gabriel-codify-viewer .gabriel-chip--numeric .gabriel-chip-value {
-    background: rgba(255, 255, 255, 0.25);
-    color: #0d1014;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(235, 240, 255, 0.9));
+    color: #0b0d11;
+    border-radius: 8px;
+    border: 1px solid rgba(9, 12, 16, 0.35);
+    padding: 4px 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    letter-spacing: 0.04em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    font-variant-numeric: tabular-nums;
 }
 .gabriel-codify-viewer .gabriel-note {
     font-size: 13px;
@@ -1167,7 +822,10 @@ _COLAB_STYLE = """
         color: rgba(15, 23, 42, 0.6);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-chip--numeric .gabriel-chip-value {
-        color: rgba(15, 23, 42, 0.9);
+        background: linear-gradient(135deg, #ffffff, #edf2ff);
+        border-color: rgba(15, 23, 42, 0.2);
+        color: rgba(15, 23, 42, 0.95);
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
     }
     .gabriel-codify-viewer:not(.gabriel-theme-dark) .gabriel-note {
         color: rgba(15, 23, 42, 0.6);
@@ -1235,7 +893,10 @@ _COLAB_STYLE = """
     color: rgba(15, 23, 42, 0.85);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-chip--numeric .gabriel-chip-value {
+    background: linear-gradient(135deg, #ffffff, #eef3ff);
+    border-color: rgba(15, 23, 42, 0.18);
     color: rgba(15, 23, 42, 0.9);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
 }
 .gabriel-codify-viewer.gabriel-theme-light .gabriel-note {
     color: rgba(15, 23, 42, 0.6);
@@ -1346,18 +1007,6 @@ _COLAB_STYLE = """
 })();
 </script>
 """
-
-_FONT_SIZE_OVERRIDES = {
-    ".gabriel-codify-viewer .gabriel-status": 14,
-    ".gabriel-codify-viewer .gabriel-legend-item": 13,
-    ".gabriel-codify-viewer .gabriel-header-label": 11,
-    ".gabriel-codify-viewer .gabriel-header-value": 13,
-    ".gabriel-codify-viewer .gabriel-text": 15,
-    ".gabriel-codify-viewer .gabriel-chip": 12,
-    ".gabriel-codify-viewer .gabriel-chip-value": 12,
-    ".gabriel-codify-viewer .gabriel-note": 13,
-}
-
 
 def _build_style_overrides(
     font_scale: float = 1.0,
@@ -1775,6 +1424,7 @@ def _view_coded_passages_colab(
         attribute_requests = [
             _AttributeRequest("coded_passages", "Coded Passages", dynamic=True)
         ]
+    df, attribute_requests = _expand_mapping_attribute_requests(df, attribute_requests)
 
     attribute_specs: List[_AttributeSpec] = []
     boolean_specs: List[_AttributeSpec] = []
@@ -1783,12 +1433,24 @@ def _view_coded_passages_colab(
     for request in attribute_requests:
         if request.dynamic:
             attribute_specs.append(
-                _AttributeSpec(request.column, request.label, "snippet", dynamic=True)
+                _AttributeSpec(
+                    request.column,
+                    request.label,
+                    "snippet",
+                    dynamic=True,
+                    description=request.description,
+                )
             )
             continue
         series = df[request.column] if request.column in df.columns else None
         kind = _infer_attribute_kind(series)
-        spec = _AttributeSpec(request.column, request.label, kind, dynamic=False)
+        spec = _AttributeSpec(
+            request.column,
+            request.label,
+            kind,
+            dynamic=False,
+            description=request.description,
+        )
         attribute_specs.append(spec)
         if kind == "snippet":
             snippet_columns.append(request.column)
@@ -1872,6 +1534,7 @@ def _view_coded_passages_colab(
                         "value": display_val,
                         "state": state,
                         "kind": "boolean",
+                        "title": spec.description,
                     }
                 )
             elif spec.kind == "numeric":
@@ -1896,6 +1559,7 @@ def _view_coded_passages_colab(
                             "value": _format_numeric_chip(numeric_value),
                             "state": "number",
                             "kind": "numeric",
+                            "title": spec.description,
                         }
                     )
                 else:
@@ -1943,15 +1607,8 @@ def _view_coded_passages_colab(
         color_mode=color_choice,
     )
 
-    try:  # pragma: no cover - optional dependency
-        import ipywidgets as widgets  # type: ignore
-    except Exception:  # pragma: no cover - optional dependency
-        widgets = None  # type: ignore
-
     original_total = len(passages)
     limit = max_passages
-    if limit is None and widgets is None:
-        limit = 500
     trunc_note: Optional[str] = None
     if limit is not None and limit >= 0 and original_total > limit:
         trunc_note = f"Showing first {limit} of {original_total} passages."
@@ -1968,431 +1625,549 @@ def _view_coded_passages_colab(
     note_html = _build_note_html(note_messages)
     root_class = f"gabriel-codify-viewer{theme_class}"
 
-    display(HTML(style_html))
-
-    if widgets is not None:
-        if total == 0:
-            display(
-                widgets.HTML(
-                    f"<div class='{root_class} gabriel-empty'>No passages to display.</div>"
-                    + note_html
-                )
-            )
-            return
-
-        status = widgets.HTML()
-        slider = widgets.IntSlider(
-            min=1,
-            max=max(1, total),
-            value=1,
-            description="Passage",
-            continuous_update=False,
+    viewer_id = f"gabriel-viewer-{uuid.uuid4().hex}"
+    if total == 0:
+        empty_html = (
+            f"<div class='{root_class}'><div class='gabriel-empty'>No passages to display.</div>"
+            f"{note_html}</div>"
         )
-        slider.layout = widgets.Layout(width="100%")
-
-        prev_button = widgets.Button(description="◀ Previous")
-        next_button = widgets.Button(description="Next ▶")
-        random_button = widgets.Button(description="🎲 Random")
-
-        controls_box = widgets.HBox([prev_button, next_button, random_button, slider])
-        try:
-            controls_box.add_class("gabriel-controls")
-        except Exception:  # pragma: no cover - best effort styling
-            pass
-
-        passage_display = widgets.HTML()
-        passage_display.layout = widgets.Layout(width="100%")
-
-        active_indices: List[int] = list(range(total))
-        current = {"pos": 0}
-        snippet_filters: Set[str] = set()
-        boolean_filters: Set[str] = set()
-        numeric_filters: Dict[str, Tuple[float, float]] = {}
-        filter_guard = {"locked": False}
-
-        def _render(position: int) -> None:
-            if not active_indices:
-                return
-            total_matches = len(active_indices)
-            position = max(0, min(total_matches - 1, position))
-            current["pos"] = position
-            actual_index = active_indices[position]
-            payload = passages[actual_index]
-            body_html = _build_highlighted_text(
-                payload["text"],
-                payload["snippets"],
-                category_colors,
-                category_labels,
-            )
-            header_html = _build_header_html(
-                payload["header"], payload["active"], payload.get("chips")
-            )
-            legend_token = f"interactive-{actual_index}-{random.random()}"
-            legend_html = _build_legend_html(
-                category_colors,
-                payload["counts"],
-                category_labels,
-                legend_token,
-            )
-            passage_html = (
-                f"<div class='{root_class}'><div class='gabriel-passage-panel'>"
-                "<div class='gabriel-passage-scroll'>"
-                f"{legend_html}{header_html}<div class='gabriel-text'>{body_html}</div>"
-                "</div></div></div>"
-            )
-            passage_display.value = passage_html
-            filter_note = (
-                f"<div class='gabriel-filter-note'>{total_matches} of {total} passages match filters.</div>"
-                if total_matches != total
-                else ""
-            )
-            status_html = (
-                f"<div class='{root_class}'><div class='gabriel-status'>Passage "
-                f"<strong>{position + 1}</strong> of {total_matches}</div>{filter_note}{note_html}</div>"
-            )
-            status.value = status_html
-            if slider.max != total_matches:
-                slider.max = max(1, total_matches)
-            if slider.value != position + 1:
-                slider.value = position + 1
-
-        def _apply_filters(reset_position: bool = True) -> None:
-            filtered = [
-                idx
-                for idx, payload in enumerate(passages)
-                if _passage_matches_filters(
-                    payload,
-                    required_snippets=snippet_filters,
-                    required_bools=boolean_filters,
-                    numeric_filters=numeric_filters,
-                )
-            ]
-            active_indices.clear()
-            active_indices.extend(filtered)
-            has_results = bool(filtered)
-            slider.disabled = not has_results
-            prev_button.disabled = not has_results
-            next_button.disabled = not has_results
-            random_button.disabled = not has_results
-            if not has_results:
-                slider.max = 1
-                slider.value = 1
-                empty_html = (
-                    f"<div class='{root_class}'><div class='gabriel-empty'>No passages match the current filters.</div>"
-                    f"{note_html}</div>"
-                )
-                passage_display.value = empty_html
-                status.value = (
-                    f"<div class='{root_class}'><div class='gabriel-status'>0 passages match current filters.</div>"
-                    f"{note_html}</div>"
-                )
-                return
-            if reset_position or current["pos"] >= len(filtered):
-                _render(0)
-            else:
-                _render(current["pos"])
-
-        def _prev(_event: Any) -> None:
-            if not active_indices:
-                return
-            new_index = (current["pos"] - 1) % len(active_indices)
-            _render(new_index)
-
-        def _next(_event: Any) -> None:
-            if not active_indices:
-                return
-            new_index = (current["pos"] + 1) % len(active_indices)
-            _render(new_index)
-
-        def _random(_event: Any) -> None:
-            if not active_indices:
-                return
-            new_index = random.randrange(len(active_indices))
-            _render(new_index)
-
-        def _slider_change(change: Dict[str, Any]) -> None:
-            if not active_indices:
-                return
-            if change.get("name") == "value" and isinstance(change.get("new"), int):
-                _render(change["new"] - 1)
-
-        prev_button.on_click(_prev)
-        next_button.on_click(_next)
-        random_button.on_click(_random)
-        slider.observe(_slider_change, names="value")
-
-        filter_groups: List[Any] = []
-        snippet_buttons: List[Any] = []
-        boolean_buttons: List[Any] = []
-        numeric_slider_widgets: Dict[str, Any] = {}
-
-        if category_names:
-            snippet_row = widgets.HBox()
-            snippet_row.layout = widgets.Layout(
-                flex_flow="row wrap",
-                display="flex",
-                gap="6px",
-                justify_content="flex-start",
-            )
-            try:
-                snippet_row.add_class("gabriel-filter-row")
-            except Exception:
-                pass
-
-            for category in category_names:
-                pretty = category_labels.get(category, category).replace("_", " ").title()
-                btn = widgets.ToggleButton(
-                    value=False,
-                    description=pretty,
-                    tooltip=f"Show passages coded with {pretty}",
-                )
-                btn.layout = widgets.Layout(margin="0")
-                try:
-                    btn.add_class("gabriel-filter-toggle")
-                except Exception:
-                    pass
-
-                def _make_snippet_handler(cat: str):
-                    def _handler(change: Dict[str, Any]) -> None:
-                        if change.get("name") != "value" or filter_guard["locked"]:
-                            return
-                        if change.get("new"):
-                            snippet_filters.add(cat)
-                        else:
-                            snippet_filters.discard(cat)
-                        _apply_filters()
-
-                    return _handler
-
-                btn.observe(_make_snippet_handler(category), names="value")
-                snippet_buttons.append(btn)
-
-            snippet_row.children = tuple(snippet_buttons)
-            snippet_group = widgets.VBox(
-                [widgets.HTML("<div class='gabriel-filter-title'>Categories</div>"), snippet_row]
-            )
-            try:
-                snippet_group.add_class("gabriel-filter-group")
-            except Exception:
-                pass
-            filter_groups.append(snippet_group)
-
-        if boolean_specs:
-            bool_row = widgets.HBox()
-            bool_row.layout = widgets.Layout(
-                flex_flow="row wrap",
-                display="flex",
-                gap="6px",
-                justify_content="flex-start",
-            )
-            try:
-                bool_row.add_class("gabriel-filter-row")
-            except Exception:
-                pass
-
-            for spec in boolean_specs:
-                btn = widgets.ToggleButton(
-                    value=False,
-                    description=spec.label,
-                    tooltip=f"Require {spec.label}",
-                )
-                btn.layout = widgets.Layout(margin="0")
-                try:
-                    btn.add_class("gabriel-filter-toggle")
-                except Exception:
-                    pass
-
-                def _make_bool_handler(column: str):
-                    def _handler(change: Dict[str, Any]) -> None:
-                        if change.get("name") != "value" or filter_guard["locked"]:
-                            return
-                        if change.get("new"):
-                            boolean_filters.add(column)
-                        else:
-                            boolean_filters.discard(column)
-                        _apply_filters()
-
-                    return _handler
-
-                btn.observe(_make_bool_handler(spec.column), names="value")
-                boolean_buttons.append(btn)
-
-            bool_row.children = tuple(boolean_buttons)
-            bool_group = widgets.VBox(
-                [widgets.HTML("<div class='gabriel-filter-title'>Attributes</div>"), bool_row]
-            )
-            try:
-                bool_group.add_class("gabriel-filter-group")
-            except Exception:
-                pass
-            filter_groups.append(bool_group)
-
-        if numeric_specs:
-            numeric_children: List[Any] = []
-            for spec in numeric_specs:
-                bounds = numeric_ranges.get(spec.column)
-                if not bounds:
-                    continue
-                lower, upper = bounds
-                if not (math.isfinite(lower) and math.isfinite(upper)):
-                    continue
-                if lower == upper:
-                    continue
-                slider_widget = widgets.FloatRangeSlider(
-                    value=bounds,
-                    min=lower,
-                    max=upper,
-                    step=_compute_slider_step(lower, upper),
-                    description=spec.label,
-                    continuous_update=False,
-                )
-                slider_widget.layout = widgets.Layout(width="100%")
-                try:
-                    slider_widget.add_class("gabriel-filter-slider")
-                except Exception:
-                    pass
-
-                def _make_numeric_handler(
-                    column: str,
-                    base: Tuple[float, float],
-                ):
-                    def _handler(change: Dict[str, Any]) -> None:
-                        if change.get("name") != "value" or filter_guard["locked"]:
-                            return
-                        value = change.get("new")
-                        if not isinstance(value, (tuple, list)) or len(value) != 2:
-                            return
-                        lower_val = float(value[0])
-                        upper_val = float(value[1])
-                        base_lower, base_upper = base
-                        tolerance = max(1e-9, abs(base_upper - base_lower) * 1e-6)
-                        if (
-                            abs(lower_val - base_lower) <= tolerance
-                            and abs(upper_val - base_upper) <= tolerance
-                        ):
-                            numeric_filters.pop(column, None)
-                        else:
-                            numeric_filters[column] = (lower_val, upper_val)
-                        _apply_filters()
-
-                    return _handler
-
-                slider_widget.observe(
-                    _make_numeric_handler(spec.column, bounds), names="value"
-                )
-                numeric_slider_widgets[spec.column] = slider_widget
-                numeric_children.append(slider_widget)
-
-            if numeric_children:
-                numeric_group = widgets.VBox(
-                    [
-                        widgets.HTML(
-                            "<div class='gabriel-filter-title'>Numeric Ranges</div>"
-                        )
-                    ]
-                    + numeric_children
-                )
-                try:
-                    numeric_group.add_class("gabriel-filter-group")
-                except Exception:
-                    pass
-                filter_groups.append(numeric_group)
-
-        filter_panel = None
-        if filter_groups:
-            filter_stack = widgets.VBox(filter_groups)
-            try:
-                filter_stack.add_class("gabriel-filter-groups")
-            except Exception:
-                pass
-
-            clear_button = widgets.Button(description="Clear filters")
-            try:
-                clear_button.add_class("gabriel-filter-clear")
-            except Exception:
-                pass
-
-            def _reset_filters(_event: Any) -> None:
-                filter_guard["locked"] = True
-                snippet_filters.clear()
-                boolean_filters.clear()
-                numeric_filters.clear()
-                for btn in snippet_buttons:
-                    btn.value = False
-                for btn in boolean_buttons:
-                    btn.value = False
-                for column, slider_widget in numeric_slider_widgets.items():
-                    bounds = numeric_ranges.get(column)
-                    if bounds:
-                        slider_widget.value = bounds
-                filter_guard["locked"] = False
-                _apply_filters()
-
-            clear_button.on_click(_reset_filters)
-            actions = widgets.HBox([clear_button])
-            try:
-                actions.add_class("gabriel-filter-actions")
-            except Exception:
-                pass
-
-            filter_panel = widgets.VBox(
-                [
-                    widgets.HTML("<div class='gabriel-filter-title'>Filters</div>"),
-                    filter_stack,
-                    actions,
-                ]
-            )
-            try:
-                filter_panel.add_class("gabriel-filter-panel")
-            except Exception:
-                pass
-
-        children: List[Any] = [status]
-        if filter_panel is not None:
-            children.append(filter_panel)
-        children.extend([controls_box, passage_display])
-        ui = widgets.VBox(children)
-        display(ui)
-        _apply_filters()
+        display(HTML(style_html + empty_html))
         return
 
-    html_parts: List[str] = [style_html, f"<div class='{root_class}'>"]
-    if note_html:
-        html_parts.append(note_html)
-    if total == 0:
-        html_parts.append("<div class='gabriel-empty'>No passages to display.</div>")
-    else:
-        for idx, payload in enumerate(passages):
-            legend_token = f"static-{idx}-{random.random()}"
-            legend_html = _build_legend_html(
-                category_colors,
-                payload["counts"],
-                category_labels,
-                legend_token,
-            )
-            body_html = _build_highlighted_text(
-                payload["text"],
-                payload["snippets"],
-                category_colors,
-                category_labels,
-            )
-            header_html = _build_header_html(
-                payload["header"], payload["active"], payload.get("chips")
-            )
-            html_parts.append(
-                "<div class='gabriel-passage-panel' style='margin-bottom:18px'>"
-            )
-            html_parts.append(
-                f"<div class='gabriel-status'>Passage <strong>{idx + 1}</strong> of {total}</div>"
-            )
-            html_parts.append(
-                "<div class='gabriel-passage-scroll'>"
-                f"{legend_html}{header_html}<div class='gabriel-text'>{body_html}</div>"
-                "</div>"
-            )
-            html_parts.append("</div>")
-    html_parts.append("</div>")
-    display(HTML("".join(html_parts)))
+    render_entries: List[Dict[str, Any]] = []
+    for idx, payload in enumerate(passages):
+        body_html = _build_highlighted_text(
+            payload["text"], payload["snippets"], category_colors, category_labels
+        )
+        header_html = _build_header_html(
+            payload["header"], payload["active"], payload.get("chips")
+        )
+        legend_token = f"interactive-{idx}-{random.random()}"
+        legend_html = _build_legend_html(
+            category_colors, payload["counts"], category_labels, legend_token
+        )
+        snippet_flags = {
+            cat: bool(payload["snippets"].get(cat)) for cat in category_names
+        }
+        bool_map: Dict[str, Optional[bool]] = {}
+        for column, value in (payload.get("bools") or {}).items():
+            if value is True:
+                bool_map[column] = True
+            elif value is False:
+                bool_map[column] = False
+            else:
+                bool_map[column] = None
+        numeric_map: Dict[str, Optional[float]] = {}
+        for column, value in (payload.get("numeric") or {}).items():
+            if value is None:
+                numeric_map[column] = None
+            else:
+                try:
+                    numeric_map[column] = float(value)
+                except (TypeError, ValueError):
+                    numeric_map[column] = None
+        render_entries.append(
+            {
+                "html": f"{legend_html}{header_html}<div class='gabriel-text'>{body_html}</div>",
+                "snippets": snippet_flags,
+                "bools": bool_map,
+                "numeric": numeric_map,
+            }
+        )
+
+    category_filter_defs = [
+        {
+            "id": cat,
+            "label": category_labels.get(cat, cat).replace("_", " ").title(),
+        }
+        for cat in category_names
+    ]
+    boolean_filter_defs = [
+        {
+            "column": spec.column,
+            "label": spec.label or spec.column.replace("_", " ").title(),
+        }
+        for spec in boolean_specs
+    ]
+    numeric_filter_defs: List[Dict[str, Any]] = []
+    for spec in numeric_specs:
+        bounds = numeric_ranges.get(spec.column)
+        if not bounds:
+            continue
+        lower, upper = bounds
+        if not (math.isfinite(lower) and math.isfinite(upper)):
+            continue
+        if upper <= lower:
+            continue
+        numeric_filter_defs.append(
+            {
+                "column": spec.column,
+                "label": spec.label or spec.column.replace("_", " ").title(),
+                "min": lower,
+                "max": upper,
+                "step": _compute_slider_step(lower, upper),
+            }
+        )
+
+    has_filters = bool(
+        category_filter_defs or boolean_filter_defs or numeric_filter_defs
+    )
+    data_payload = {
+        "passages": render_entries,
+        "categoryFilters": category_filter_defs,
+        "booleanFilters": boolean_filter_defs,
+        "numericFilters": numeric_filter_defs,
+        "hasFilters": has_filters,
+    }
+    data_json = json.dumps(data_payload).replace("</", r"<\/")
+    note_block = (
+        f"<div class='gabriel-note-stack' data-role='note'>{note_html}</div>"
+        if note_html
+        else ""
+    )
+    slider_max = max(1, total)
+    slider_count = f"1 / {total}"
+    viewer_template = Template(
+        """
+<div id="$viewer_id" class="$root_class">
+  <div class="gabriel-status" data-role="status"></div>
+  <div class="gabriel-controls">
+    <div class="gabriel-nav-group">
+      <button type="button" class="gabriel-nav-button" data-action="prev">◀ Previous</button>
+      <button type="button" class="gabriel-nav-button" data-action="random">Random</button>
+      <button type="button" class="gabriel-nav-button" data-action="next">Next ▶</button>
+    </div>
+    <div class="gabriel-slider-shell">
+      <input type="range" min="1" max="$slider_max" value="1" class="gabriel-slider" data-role="slider" />
+      <div class="gabriel-slider-count" data-role="slider-count">$slider_count</div>
+    </div>
+  </div>
+  <div class="gabriel-filter-panel" data-role="filter-panel">
+    <div class="gabriel-filter-title">Filters</div>
+    <div class="gabriel-filter-groups" data-role="filters"></div>
+    <div class="gabriel-filter-actions">
+      <button type="button" class="gabriel-filter-clear" data-role="clear-filters">Clear filters</button>
+    </div>
+    <div class="gabriel-filter-note" data-role="filter-note"></div>
+  </div>
+  <div class="gabriel-passage-panel">
+    <div class="gabriel-passage-scroll" data-role="passage"></div>
+  </div>
+  $note_block
+</div>
+<script>
+(function() {
+    const container = document.getElementById("$viewer_id");
+    if (!container) {
+        return;
+    }
+    const data = $data_json;
+    const statusEl = container.querySelector('[data-role="status"]');
+    const passageEl = container.querySelector('[data-role="passage"]');
+    const sliderEl = container.querySelector('[data-role="slider"]');
+    const sliderCountEl = container.querySelector('[data-role="slider-count"]');
+    const filterPanel = container.querySelector('[data-role="filter-panel"]');
+    const filtersHost = container.querySelector('[data-role="filters"]');
+    const filterNoteEl = container.querySelector('[data-role="filter-note"]');
+    const clearFiltersBtn = container.querySelector('[data-role="clear-filters"]');
+    const prevBtn = container.querySelector('[data-action="prev"]');
+    const nextBtn = container.querySelector('[data-action="next"]');
+    const randomBtn = container.querySelector('[data-action="random"]');
+    const total = data.passages.length;
+    if (!total) {
+        if (passageEl) {
+            passageEl.innerHTML = "<div class='gabriel-empty'>No passages to display.</div>";
+        }
+        if (statusEl) {
+            statusEl.textContent = "No passages available.";
+        }
+        if (filterPanel) {
+            filterPanel.style.display = "none";
+        }
+        if (sliderEl) sliderEl.disabled = true;
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        if (randomBtn) randomBtn.disabled = true;
+        return;
+    }
+    const state = {
+        active: data.passages.map((_, idx) => idx),
+        index: 0,
+        snippets: new Set(),
+        bools: new Set(),
+        numeric: {},
+    };
+    const numericDefaults = {};
+    const numericHandles = {};
+
+    function formatNumber(value) {
+        if (typeof value !== 'number' || !isFinite(value)) {
+            return '—';
+        }
+        const abs = Math.abs(value);
+        let text;
+        if (abs >= 100) {
+            text = value.toFixed(0);
+        } else if (abs >= 10) {
+            text = value.toFixed(1);
+        } else {
+            text = value.toFixed(2);
+        }
+        return text.replace(/\\.0+$/, '').replace(/(\\.[0-9]*[1-9])0+$/, '$1');
+    }
+
+    function matchesFilters(entry) {
+        if (!entry) {
+            return false;
+        }
+        if (state.snippets.size) {
+            for (const cat of state.snippets) {
+                if (!entry.snippets || !entry.snippets[cat]) {
+                    return false;
+                }
+            }
+        }
+        if (state.bools.size) {
+            for (const column of state.bools) {
+                if (!entry.bools || entry.bools[column] !== true) {
+                    return false;
+                }
+            }
+        }
+        for (const [column, config] of Object.entries(state.numeric)) {
+            if (!config || !config.active) {
+                continue;
+            }
+            const value = entry.numeric ? entry.numeric[column] : null;
+            if (typeof value !== 'number') {
+                return false;
+            }
+            if (value < config.min - 1e-9 || value > config.max + 1e-9) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function renderPassage() {
+        if (!passageEl) {
+            return;
+        }
+        if (!state.active.length) {
+            passageEl.innerHTML = "<div class='gabriel-empty'>No passages match the current filters.</div>";
+            return;
+        }
+        const idx = state.active[state.index];
+        const payload = data.passages[idx];
+        passageEl.innerHTML = payload.html;
+    }
+
+    function updateStatus() {
+        if (!statusEl) {
+            return;
+        }
+        if (!state.active.length) {
+            statusEl.textContent = 'No passages match the current filters.';
+            return;
+        }
+        statusEl.innerHTML = 'Passage <strong>' + (state.index + 1) + '</strong> of ' + state.active.length;
+    }
+
+    function updateSlider(forceValue) {
+        if (!sliderEl || !sliderCountEl) {
+            return;
+        }
+        const max = Math.max(1, state.active.length || 1);
+        sliderEl.max = String(max);
+        if (forceValue !== false) {
+            sliderEl.value = state.active.length ? String(state.index + 1) : '1';
+        }
+        sliderEl.disabled = state.active.length <= 1;
+        sliderCountEl.textContent = state.active.length ? (state.index + 1) + ' / ' + state.active.length : '0 / 0';
+    }
+
+    function updateFilterNote() {
+        if (!filterNoteEl) {
+            return;
+        }
+        if (!state.active.length) {
+            filterNoteEl.textContent = '0 of ' + total + ' passages match filters.';
+            return;
+        }
+        if (
+            state.active.length === total &&
+            !state.snippets.size &&
+            !state.bools.size &&
+            !Object.values(state.numeric).some(cfg => cfg && cfg.active)
+        ) {
+            filterNoteEl.textContent = '';
+        } else {
+            filterNoteEl.textContent = state.active.length + ' of ' + total + ' passages match filters.';
+        }
+    }
+
+    function updateNavDisabled() {
+        const disabled = state.active.length === 0;
+        if (prevBtn) prevBtn.disabled = disabled;
+        if (nextBtn) nextBtn.disabled = disabled;
+        if (randomBtn) randomBtn.disabled = disabled;
+    }
+
+    function applyFilters(resetIndex = true) {
+        const matches = [];
+        data.passages.forEach((entry, idx) => {
+            if (matchesFilters(entry)) {
+                matches.push(idx);
+            }
+        });
+        state.active = matches;
+        if (!matches.length) {
+            state.index = 0;
+        } else if (resetIndex || state.index >= matches.length) {
+            state.index = 0;
+        }
+        renderPassage();
+        updateStatus();
+        updateSlider();
+        updateFilterNote();
+        updateNavDisabled();
+    }
+
+    function moveIndex(delta) {
+        if (!state.active.length) {
+            return;
+        }
+        const length = state.active.length;
+        state.index = (state.index + delta + length) % length;
+        renderPassage();
+        updateStatus();
+        updateSlider();
+    }
+
+    function handleNumericChange(column) {
+        const handle = numericHandles[column];
+        if (!handle) {
+            return;
+        }
+        let start = parseFloat(handle.minInput.value);
+        let end = parseFloat(handle.maxInput.value);
+        if (isNaN(start) || isNaN(end)) {
+            return;
+        }
+        if (start > end) {
+            const temp = start;
+            start = end;
+            end = temp;
+        }
+        handle.minInput.value = String(start);
+        handle.maxInput.value = String(end);
+        handle.minValue.textContent = formatNumber(start);
+        handle.maxValue.textContent = formatNumber(end);
+        const defaults = numericDefaults[column];
+        const isActive = !defaults || Math.abs(start - defaults.min) > 1e-9 || Math.abs(end - defaults.max) > 1e-9;
+        state.numeric[column] = { min: start, max: end, active: Boolean(isActive) };
+        applyFilters(false);
+    }
+
+    function createToggleGroup(title, filters, kind) {
+        const group = document.createElement('div');
+        group.className = 'gabriel-filter-group';
+        const heading = document.createElement('div');
+        heading.className = 'gabriel-filter-title';
+        heading.textContent = title;
+        group.appendChild(heading);
+        const row = document.createElement('div');
+        row.className = 'gabriel-filter-row';
+        filters.forEach(filter => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'gabriel-filter-toggle';
+            button.setAttribute('aria-pressed', 'false');
+            button.textContent = filter.label;
+            if (kind === 'category') {
+                button.dataset.category = filter.id;
+            } else if (kind === 'boolean') {
+                button.dataset.boolean = filter.column;
+            }
+            button.addEventListener('click', () => {
+                const key = kind === 'category' ? button.dataset.category : button.dataset.boolean;
+                if (!key) {
+                    return;
+                }
+                const target = kind === 'category' ? state.snippets : state.bools;
+                if (target.has(key)) {
+                    target.delete(key);
+                    button.setAttribute('aria-pressed', 'false');
+                } else {
+                    target.add(key);
+                    button.setAttribute('aria-pressed', 'true');
+                }
+                applyFilters(true);
+            });
+            row.appendChild(button);
+        });
+        group.appendChild(row);
+        return group;
+    }
+
+    function createNumericGroup(filters) {
+        const group = document.createElement('div');
+        group.className = 'gabriel-filter-group';
+        const heading = document.createElement('div');
+        heading.className = 'gabriel-filter-title';
+        heading.textContent = 'Numeric Ranges';
+        group.appendChild(heading);
+        const grid = document.createElement('div');
+        grid.className = 'gabriel-numeric-grid';
+        filters.forEach(filter => {
+            if (typeof filter.min !== 'number' || typeof filter.max !== 'number') {
+                return;
+            }
+            numericDefaults[filter.column] = { min: filter.min, max: filter.max };
+            state.numeric[filter.column] = { min: filter.min, max: filter.max, active: false };
+            const control = document.createElement('div');
+            control.className = 'gabriel-numeric-control';
+            control.dataset.numeric = filter.column;
+            const label = document.createElement('div');
+            label.className = 'gabriel-numeric-label';
+            label.textContent = filter.label;
+            control.appendChild(label);
+            const sliderWrap = document.createElement('div');
+            sliderWrap.className = 'gabriel-numeric-slider';
+            const minInput = document.createElement('input');
+            minInput.type = 'range';
+            minInput.min = String(filter.min);
+            minInput.max = String(filter.max);
+            minInput.step = String(filter.step);
+            minInput.value = String(filter.min);
+            const maxInput = document.createElement('input');
+            maxInput.type = 'range';
+            maxInput.min = String(filter.min);
+            maxInput.max = String(filter.max);
+            maxInput.step = String(filter.step);
+            maxInput.value = String(filter.max);
+            sliderWrap.appendChild(minInput);
+            sliderWrap.appendChild(maxInput);
+            control.appendChild(sliderWrap);
+            const values = document.createElement('div');
+            values.className = 'gabriel-numeric-values';
+            const minValue = document.createElement('span');
+            minValue.className = 'gabriel-numeric-value-chip';
+            minValue.textContent = formatNumber(filter.min);
+            const maxValue = document.createElement('span');
+            maxValue.className = 'gabriel-numeric-value-chip';
+            maxValue.textContent = formatNumber(filter.max);
+            values.appendChild(minValue);
+            values.appendChild(maxValue);
+            control.appendChild(values);
+            grid.appendChild(control);
+            numericHandles[filter.column] = { minInput, maxInput, minValue, maxValue };
+            const handler = () => handleNumericChange(filter.column);
+            minInput.addEventListener('input', handler);
+            maxInput.addEventListener('input', handler);
+        });
+        if (!grid.children.length) {
+            return null;
+        }
+        group.appendChild(grid);
+        return group;
+    }
+
+    function buildFilters() {
+        if (!filtersHost || !filterPanel) {
+            return;
+        }
+        filtersHost.innerHTML = '';
+        if (!data.hasFilters) {
+            filterPanel.style.display = 'none';
+            return;
+        }
+        filterPanel.style.display = '';
+        if (data.categoryFilters && data.categoryFilters.length) {
+            const group = createToggleGroup('Categories', data.categoryFilters, 'category');
+            filtersHost.appendChild(group);
+        }
+        if (data.booleanFilters && data.booleanFilters.length) {
+            const group = createToggleGroup('Attributes', data.booleanFilters, 'boolean');
+            filtersHost.appendChild(group);
+        }
+        if (data.numericFilters && data.numericFilters.length) {
+            const numericGroup = createNumericGroup(data.numericFilters);
+            if (numericGroup) {
+                filtersHost.appendChild(numericGroup);
+            }
+        }
+    }
+
+    buildFilters();
+
+    if (clearFiltersBtn) {
+        clearFiltersBtn.addEventListener('click', () => {
+            state.snippets.clear();
+            state.bools.clear();
+            container.querySelectorAll('.gabriel-filter-toggle[aria-pressed="true"]').forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+            Object.entries(numericDefaults).forEach(([column, defaults]) => {
+                state.numeric[column] = { min: defaults.min, max: defaults.max, active: false };
+                const handle = numericHandles[column];
+                if (handle) {
+                    handle.minInput.value = String(defaults.min);
+                    handle.maxInput.value = String(defaults.max);
+                    handle.minValue.textContent = formatNumber(defaults.min);
+                    handle.maxValue.textContent = formatNumber(defaults.max);
+                }
+            });
+            applyFilters(true);
+        });
+    }
+
+    if (prevBtn) {
+        prevBtn.addEventListener('click', () => moveIndex(-1));
+    }
+    if (nextBtn) {
+        nextBtn.addEventListener('click', () => moveIndex(1));
+    }
+    if (randomBtn) {
+        randomBtn.addEventListener('click', () => {
+            if (!state.active.length) {
+                return;
+            }
+            const idx = Math.floor(Math.random() * state.active.length);
+            state.index = idx;
+            renderPassage();
+            updateStatus();
+            updateSlider();
+        });
+    }
+    if (sliderEl) {
+        sliderEl.addEventListener('input', event => {
+            if (!state.active.length) {
+                return;
+            }
+            const value = parseInt(event.target.value, 10);
+            if (Number.isNaN(value)) {
+                return;
+            }
+            state.index = Math.min(state.active.length - 1, Math.max(0, value - 1));
+            renderPassage();
+            updateStatus();
+            updateSlider(false);
+        });
+    }
+
+    applyFilters(true);
+})();
+</script>
+"""
+    )
+    viewer_html = viewer_template.substitute(
+        viewer_id=viewer_id,
+        root_class=root_class,
+        slider_max=slider_max,
+        slider_count=slider_count,
+        note_block=note_block,
+        data_json=data_json,
+    )
+    display(HTML(style_html + viewer_html))
 
 
 def view(
@@ -2420,15 +2195,15 @@ def view(
         of ``(column, label)``, mappings, or the special string
         ``"coded_passages"`` for Codify outputs.
     colab:
-        When ``True`` (default) use the lightweight HTML/Colab viewer. Passing
-        ``False`` launches the desktop ``tkinter`` GUI.
+        Legacy flag retained for backwards compatibility. The notebook viewer
+        is always used; setting ``False`` simply emits a warning.
     header_columns:
         Optional sequence of column names (or ``(column, label)`` tuples)
         displayed above each passage. Values are rendered in the provided
         order to expose metadata such as speaker names or timestamps.
     max_passages:
-        Maximum passages rendered when the notebook cannot rely on widgets.
-        Defaults to ``500`` in that scenario; set explicitly to override.
+        Optional cap on the number of passages rendered in the notebook.
+        When ``None`` (default) all passages are available inside the viewer.
     font_scale:
         Multiplier applied to key font sizes inside the viewer.
     font_family:
@@ -2437,39 +2212,24 @@ def view(
         ``"auto"`` (default), ``"dark"``, or ``"light"`` to force a theme.
     """
 
-    if colab:
-        _view_coded_passages_colab(
-            df,
-            column_name,
-            attributes=attributes,
-            header_columns=header_columns,
-            max_passages=max_passages,
-            font_scale=font_scale,
-            font_family=font_family,
-            color_mode=color_mode,
+    if not colab:
+        warnings.warn(
+            "The desktop viewer has been retired; falling back to the notebook interface.",
+            RuntimeWarning,
+            stacklevel=2,
         )
-        return None
 
-    legacy_categories: Optional[Union[List[str], str]] = None
-    attrs = attributes
-    if isinstance(attrs, Mapping):
-        legacy_categories = list(attrs.keys())
-    elif isinstance(attrs, (str, bytes)):
-        legacy_categories = attrs
-    elif isinstance(attrs, Iterable) and not isinstance(attrs, (str, bytes)):
-        extracted: List[str] = []
-        for entry in attrs:
-            if isinstance(entry, (list, tuple)) and entry:
-                extracted.append(str(entry[0]))
-            else:
-                extracted.append(str(entry))
-        legacy_categories = extracted if extracted else None
-    else:
-        legacy_categories = attrs
-
-    viewer = PassageViewer(df, column_name, legacy_categories)
-    viewer.show()
-    return viewer
+    _view_coded_passages_colab(
+        df,
+        column_name,
+        attributes=attributes,
+        header_columns=header_columns,
+        max_passages=max_passages,
+        font_scale=font_scale,
+        font_family=font_family,
+        color_mode=color_mode,
+    )
+    return None
 
 
 if __name__ == "__main__":
