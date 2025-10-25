@@ -2,8 +2,12 @@ import pandas as pd
 import pytest
 
 from gabriel.utils.passage_viewer import (
+    _AttributeRequest,
     _build_highlighted_text,
     _build_note_html,
+    _coerce_bool_value,
+    _expand_mapping_attribute_requests,
+    _normalize_attribute_requests,
     _normalize_structured_dataframe,
     _passage_matches_filters,
 )
@@ -137,6 +141,39 @@ def test_note_builder_handles_multiple_messages():
     assert html_output.count("gabriel-note") == 2
     assert "First message" in html_output
     assert "Second" in html_output
+
+
+def test_normalize_attribute_requests_uses_mapping_keys_for_labels():
+    requests = _normalize_attribute_requests({"score": "Measures intensity"})
+    assert len(requests) == 1
+    req = requests[0]
+    assert req.column == "score"
+    assert req.label == "Score"
+    assert req.description == "Measures intensity"
+
+
+def test_expand_mapping_attribute_requests_extracts_nested_values():
+    df = pd.DataFrame(
+        {
+            "text": ["Alpha"],
+            "attributes": [
+                {"rating": 42, "flag": {"value": True}, "notes": {"answer": "ignored"}}
+            ],
+        }
+    )
+    df2, expanded = _expand_mapping_attribute_requests(
+        df.copy(), [_AttributeRequest("attributes", "Attributes")]
+    )
+    columns = {req.column for req in expanded}
+    assert "attributes::rating" in columns
+    assert "attributes::flag" in columns
+    assert df2.at[0, "attributes::rating"] == 42
+    assert bool(df2.at[0, "attributes::flag"]) is True
+
+
+def test_coerce_bool_value_does_not_treat_numeric_strings_as_bool():
+    assert _coerce_bool_value("0") is None
+    assert _coerce_bool_value("1") is None
 
 
 def test_top_level_view_colab_runs():
