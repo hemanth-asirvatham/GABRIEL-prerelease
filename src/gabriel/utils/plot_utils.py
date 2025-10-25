@@ -2016,6 +2016,38 @@ def bar_plot(
         effective_width = base_width - penalty + bonus
         return max(effective_width, min_wrap_chars)
 
+    def _label_density_scale(raw_labels: Sequence[str], wrapped_labels: Sequence[str]) -> float:
+        """Return a multiplier for figure width based on label complexity."""
+
+        if not raw_labels:
+            return 1.0
+
+        reference = configured_wrap_width
+        if reference is None or reference <= 0:
+            reference = 18
+        reference = max(reference, min_wrap_chars)
+
+        longest_raw = max(len(label) for label in raw_labels)
+        overflow = max(longest_raw - reference, 0)
+        overflow_ratio = overflow / max(reference, 1)
+
+        if wrapped_labels:
+            line_counts = [label.count("\n") + 1 for label in wrapped_labels]
+            max_lines = max(line_counts)
+            max_line_len = max(
+                max(len(segment) for segment in label.split("\n")) if label else 0
+                for label in wrapped_labels
+            )
+        else:
+            max_lines = 1
+            max_line_len = 0
+
+        line_overflow = max(max_line_len - reference, 0)
+        line_ratio = line_overflow / max(reference, 1)
+
+        scale = 1.0 + 0.35 * overflow_ratio + 0.25 * line_ratio + 0.1 * max(max_lines - 1, 0)
+        return max(1.0, min(scale, 2.8))
+
     def _auto_figsize(chunk_count: int) -> Tuple[float, float]:
         width, height = default_figsize
         count = max(chunk_count, 1)
@@ -2075,6 +2107,9 @@ def bar_plot(
             ]
         if manual_figsize is None:
             fig_width, fig_height = _auto_figsize(chunk_count)
+            if orientation == "vertical":
+                density_scale = _label_density_scale(raw_labels, chunk_labels)
+                fig_width = min(30.0, fig_width * density_scale)
         else:
             fig_width, fig_height = manual_figsize
 
