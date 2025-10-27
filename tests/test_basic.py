@@ -368,6 +368,43 @@ def test_get_all_responses_custom_callable(tmp_path):
     assert df.loc[0, "Response"] == ["CUSTOM::x"]
 
 
+def test_get_all_responses_keyword_only_prompt(tmp_path):
+    seen = []
+
+    async def custom(*, prompt: str, model: str, json_mode: bool):
+        seen.append((prompt, model, json_mode))
+        return [prompt.upper()]
+
+    df = asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["hello"],
+            identifiers=["row-1"],
+            save_path=str(tmp_path / "kw.csv"),
+            response_fn=custom,
+            json_mode=True,
+            model="alt-model",
+            reset_files=True,
+        )
+    )
+    assert seen == [("hello", "alt-model", True)]
+    assert df.loc[0, "Response"] == ["HELLO"]
+
+
+def test_get_all_responses_custom_callable_requires_prompt(tmp_path):
+    async def missing_prompt_parameter():
+        return ["oops"]
+
+    with pytest.raises(TypeError, match="must accept a `prompt` argument"):
+        asyncio.run(
+            openai_utils.get_all_responses(
+                prompts=["hello"],
+                identifiers=["row-1"],
+                save_path=str(tmp_path / "missing.csv"),
+                response_fn=missing_prompt_parameter,  # type: ignore[arg-type]
+            )
+        )
+
+
 def test_get_all_responses_cancellation_stops_workers(tmp_path):
     prompts = [f"p{i}" for i in range(6)]
     call_log: List[str] = []
