@@ -166,8 +166,11 @@ def _compute_numeric_intensity(
     if not math.isfinite(upper_bound):
         upper_bound = numeric_value
 
+    # If every datapoint shares the exact same numeric value the rating should
+    # not appear highlighted. Treat effectively zero-width ranges as having no
+    # intensity so the chip renders in its neutral state.
     if math.isclose(lower_bound, upper_bound, rel_tol=1e-9, abs_tol=1e-12):
-        return 1.0
+        return 0.0
 
     span = upper_bound - lower_bound
     if span == 0:
