@@ -2201,6 +2201,7 @@ async def get_all_responses(
     use_dummy: bool = False,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
     base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
     print_example_prompt: bool = True,
     save_path: str = "responses.csv",
     reset_files: bool = False,
@@ -2326,7 +2327,11 @@ async def get_all_responses(
     global filters before each request, enabling DataFrame-driven location hints
     without hand-crafting separate dictionaries.
 """
+    print("Initializing model calls and loading data...")
+    if api_key is not None:
+        os.environ["OPENAI_API_KEY"] = api_key
     response_callable = response_fn or get_response
+    provided_api_key = api_key
     underlying_callable = response_callable
     if isinstance(underlying_callable, functools.partial):
         underlying_callable = underlying_callable.func  # type: ignore[attr-defined]
@@ -2335,6 +2340,7 @@ async def get_all_responses(
     except Exception:
         pass
     using_custom_response_fn = response_fn is not None and underlying_callable is not get_response
+    manage_rate_limits = not using_custom_response_fn
     if not use_dummy and not using_custom_response_fn:
         _require_api_key()
     set_log_level(logging_level)
@@ -2510,13 +2516,13 @@ async def get_all_responses(
     # rather than probing the unsupported ``/v1/models`` endpoint.
     rate_headers = (
         _get_rate_limit_headers(model, base_url=base_url)
-        if not using_custom_response_fn
+        if manage_rate_limits
         else {}
     )
     user_cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
     cutoff = (
         _decide_default_max_output_tokens(user_cutoff, rate_headers, base_url=base_url)
-        if not using_custom_response_fn
+        if manage_rate_limits
         else user_cutoff
     )
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
@@ -2682,7 +2688,7 @@ async def get_all_responses(
         1.0, (initial_estimated_output_tokens + 1) * max(1, n)
     )
     allowed_tok_pm = int(max(1, requested_n_parallels * estimated_tokens_per_call))
-    if not use_batch:
+    if not use_batch and manage_rate_limits:
         try:
             # Estimate the average number of tokens per call using tiktoken
             # for more accurate gating.  We include the expected output length
@@ -2763,7 +2769,7 @@ async def get_all_responses(
             max_parallel_ceiling = concurrency_cap
             allowed_req_pm = max(1, requested_n_parallels)
             allowed_tok_pm = int(max(1, requested_n_parallels * estimated_tokens_per_call))
-    else:
+    elif use_batch:
         # In batch mode we don't set concurrency or limiters here; they are
         # handled by the batch API submission.
         allowed_req_pm = 1
@@ -3223,8 +3229,11 @@ async def get_all_responses(
     # the budgets and average prompt length.
     max_timeout_val = float("inf") if max_timeout is None else float(max_timeout)
     nonlocal_timeout: float = float("inf") if dynamic_timeout else max_timeout_val
-    req_lim = AsyncLimiter(allowed_req_pm, 60)
-    tok_lim = AsyncLimiter(allowed_tok_pm, 60)
+    req_lim: Optional[AsyncLimiter] = None
+    tok_lim: Optional[AsyncLimiter] = None
+    if not use_batch and manage_rate_limits:
+        req_lim = AsyncLimiter(allowed_req_pm, 60)
+        tok_lim = AsyncLimiter(allowed_tok_pm, 60)
     success_times: List[float] = []
     timeout_initialized = False
     observed_latency_p90 = float("inf")
@@ -3406,6 +3415,8 @@ async def get_all_responses(
 
     def maybe_adjust_concurrency() -> None:
         nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust, max_parallel_ceiling, last_concurrency_scale_down
+        if not manage_rate_limits:
+            return
         now = time.time()
         window_start = now - rate_limit_window
         while rate_limit_error_times and rate_limit_error_times[0] < window_start:
@@ -3477,12 +3488,14 @@ async def get_all_responses(
                 input_tokens = len(tokenizer.encode(prompt))
                 gating_output = estimated_output_tokens
                 limiter_wait_time = 0.0
-                wait_start = time.perf_counter()
-                await req_lim.acquire()
-                limiter_wait_time += time.perf_counter() - wait_start
-                wait_start = time.perf_counter()
-                await tok_lim.acquire((input_tokens + gating_output) * n)
-                limiter_wait_time += time.perf_counter() - wait_start
+                if req_lim is not None:
+                    wait_start = time.perf_counter()
+                    await req_lim.acquire()
+                    limiter_wait_time += time.perf_counter() - wait_start
+                if tok_lim is not None:
+                    wait_start = time.perf_counter()
+                    await tok_lim.acquire((input_tokens + gating_output) * n)
+                    limiter_wait_time += time.perf_counter() - wait_start
                 call_count += 1
                 error_logs.setdefault(ident, [])
                 start = time.time()
@@ -3517,6 +3530,8 @@ async def get_all_responses(
                         "use_dummy": use_dummy,
                     }
                 )
+                if using_custom_response_fn and provided_api_key is not None:
+                    call_kwargs.setdefault("api_key", provided_api_key)
                 if response_accepts_return_raw:
                     call_kwargs.setdefault("return_raw", True)
                 else:
@@ -3614,7 +3629,7 @@ async def get_all_responses(
                 usage_samples.append((total_input, total_output, total_reasoning))
                 if len(usage_samples) > token_sample_size:
                     usage_samples.pop(0)
-                if len(usage_samples) >= token_sample_size:
+                if manage_rate_limits and len(usage_samples) >= token_sample_size:
                     avg_in = statistics.mean(u[0] for u in usage_samples)
                     avg_out = statistics.mean(u[1] for u in usage_samples)
                     avg_reason = statistics.mean(u[2] for u in usage_samples)
