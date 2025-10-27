@@ -6,6 +6,7 @@ from gabriel.utils.passage_viewer import (
     _build_highlighted_text,
     _build_note_html,
     _coerce_bool_value,
+    _infer_attribute_kind,
     _expand_mapping_attribute_requests,
     _normalize_attribute_requests,
     _normalize_structured_dataframe,
@@ -174,6 +175,16 @@ def test_expand_mapping_attribute_requests_extracts_nested_values():
 def test_coerce_bool_value_does_not_treat_numeric_strings_as_bool():
     assert _coerce_bool_value("0") is None
     assert _coerce_bool_value("1") is None
+
+
+def test_infer_attribute_kind_treats_empty_lists_as_snippets():
+    series = pd.Series([[], [], []])
+    assert _infer_attribute_kind(series) == "snippet"
+
+
+def test_infer_attribute_kind_handles_stringified_empty_lists():
+    series = pd.Series(["[]", "[]", "[]"])
+    assert _infer_attribute_kind(series) == "snippet"
 
 
 def test_top_level_view_colab_runs():
