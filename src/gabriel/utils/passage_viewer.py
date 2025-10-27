@@ -407,28 +407,37 @@ def _coerce_numeric_value(value: Any) -> Optional[float]:
 def _looks_like_snippet_column(values: Sequence[Any]) -> bool:
     hits = 0
     inspected = 0
+    structured = 0
     for value in values:
         if _is_na(value):
             continue
         inspected += 1
         parsed = _parse_structured_cell(value)
-        if isinstance(parsed, dict) and parsed:
-            hits += 1
-            continue
-        if isinstance(parsed, (list, tuple, set)):
-            if any(str(item).strip() for item in parsed if not _is_na(item)):
-                hits += 1
-                continue
+
+        candidate = parsed
         if isinstance(parsed, str):
             candidate = _parse_structured_cell(parsed)
-            if isinstance(candidate, (list, tuple, set)) and any(
-                str(item).strip() for item in candidate if not _is_na(item)
-            ):
+
+        if isinstance(candidate, dict):
+            structured += 1
+            if candidate:
                 hits += 1
-                continue
+            continue
+
+        if isinstance(candidate, (list, tuple, set)):
+            structured += 1
+            if any(str(item).strip() for item in candidate if not _is_na(item)):
+                hits += 1
+            continue
+
     if inspected == 0:
         return False
-    return hits >= max(1, inspected // 2)
+
+    threshold = max(1, inspected // 2)
+    if hits >= threshold:
+        return True
+
+    return structured >= threshold
 
 
 def _infer_attribute_kind(series: Optional[pd.Series]) -> Literal["snippet", "boolean", "numeric", "text"]:
@@ -855,49 +864,53 @@ _COLAB_STYLE = """
 }
 .gabriel-codify-viewer .gabriel-header {
     margin-bottom: 18px;
-    padding: 18px 20px;
-    border-radius: 14px;
+    padding: 14px 16px;
+    border-radius: 16px;
     background: linear-gradient(140deg, rgba(255, 255, 255, 0.05), rgba(9, 12, 18, 0.2));
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 18px 36px rgba(5, 8, 13, 0.55);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
 }
 .gabriel-codify-viewer .gabriel-header-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
     width: 100%;
 }
 .gabriel-codify-viewer .gabriel-header-row {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 12px 14px;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
-    min-height: 64px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.03);
+    min-height: 0;
+    flex-wrap: wrap;
 }
 .gabriel-codify-viewer .gabriel-header-label {
     font-weight: 600;
     text-transform: uppercase;
-    font-size: 11px;
-    letter-spacing: 0.08em;
+    font-size: 10px;
+    letter-spacing: 0.12em;
     color: rgba(255, 255, 255, 0.68);
     white-space: nowrap;
-    line-height: 1.2;
+    line-height: 1.1;
+    flex-shrink: 0;
 }
 .gabriel-codify-viewer .gabriel-header-value {
     font-size: 13px;
     color: rgba(248, 250, 252, 0.96);
     font-weight: 600;
     letter-spacing: 0.01em;
-    line-height: 1.45;
+    line-height: 1.35;
     word-break: break-word;
     text-align: left;
     max-width: 100%;
+    flex: 1;
+    min-width: 0;
 }
 .gabriel-codify-viewer .gabriel-header-label,
 .gabriel-codify-viewer .gabriel-header-value {
@@ -1561,7 +1574,15 @@ def _format_header_value(value: Any) -> str:
         return ""
 
     if isinstance(value, str):
-        return value.strip()
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        parsed = _parse_structured_cell(value)
+        if isinstance(parsed, dict) and not parsed:
+            return ""
+        if isinstance(parsed, (list, tuple, set)) and not parsed:
+            return ""
+        return stripped
     if isinstance(value, (list, tuple, set)):
         parts = [str(item).strip() for item in value if str(item).strip()]
         return ", ".join(parts)
