@@ -5,6 +5,7 @@ from gabriel.utils.passage_viewer import (
     _AttributeRequest,
     _build_highlighted_text,
     _build_note_html,
+    _compute_numeric_intensity,
     _coerce_bool_value,
     _infer_attribute_kind,
     _expand_mapping_attribute_requests,
@@ -125,6 +126,10 @@ def test_passage_matches_filters_helper():
     assert not _passage_matches_filters(payload, required_bools={"is_negative"})
     assert _passage_matches_filters(payload, numeric_filters={"score": (4.0, 5.0)})
     assert not _passage_matches_filters(payload, numeric_filters={"score": (4.3, 4.9)})
+
+
+def test_numeric_intensity_defaults_to_neutral_for_uniform_values():
+    assert _compute_numeric_intensity(0.0, (0.0, 0.0)) == 0.0
 
 
 def test_highlight_builder_returns_plain_text_without_snippets():
