@@ -2342,21 +2342,60 @@ async def get_all_responses(
     response_param_names: Set[str] = set()
     response_accepts_var_kw = False
     response_accepts_return_raw = False
+    prompt_param_kind: Optional[inspect._ParameterKind] = None
+    has_generic_positional_slot = False
+    has_var_positional = False
+    has_var_keyword = False
+    prompt_call_via_keyword = False
     try:
         sig = inspect.signature(response_callable)
     except (TypeError, ValueError):
         response_accepts_var_kw = True
         response_accepts_return_raw = True
+        prompt_call_via_keyword = False
     else:
         for name, param in sig.parameters.items():
+            if name in {"self", "cls"}:
+                continue
+            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                has_var_positional = True
+                continue
             if param.kind == inspect.Parameter.VAR_KEYWORD:
                 response_accepts_var_kw = True
+                has_var_keyword = True
                 continue
-            if name in {"self", "cls", "prompt"}:
+            if name == "prompt":
+                prompt_param_kind = param.kind
                 continue
             if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
                 response_param_names.add(name)
+            if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY):
+                has_generic_positional_slot = True
         response_accepts_return_raw = response_accepts_var_kw or ("return_raw" in response_param_names)
+        prompt_can_be_positional = False
+        prompt_can_be_keyword = False
+        if prompt_param_kind is not None:
+            if prompt_param_kind == inspect.Parameter.POSITIONAL_ONLY:
+                prompt_can_be_positional = True
+            elif prompt_param_kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+                prompt_can_be_positional = True
+                prompt_can_be_keyword = True
+            elif prompt_param_kind == inspect.Parameter.KEYWORD_ONLY:
+                prompt_can_be_keyword = True
+            elif prompt_param_kind == inspect.Parameter.VAR_POSITIONAL:
+                prompt_can_be_positional = True
+            elif prompt_param_kind == inspect.Parameter.VAR_KEYWORD:
+                prompt_can_be_keyword = True
+        else:
+            if has_generic_positional_slot or has_var_positional:
+                prompt_can_be_positional = True
+            if has_var_keyword:
+                prompt_can_be_keyword = True
+        if not prompt_can_be_positional and not prompt_can_be_keyword:
+            raise TypeError(
+                "Custom response_fn must accept a `prompt` argument as a positional or keyword parameter."
+            )
+        prompt_call_via_keyword = prompt_can_be_keyword and not prompt_can_be_positional
     dummy_response_specs: Dict[str, DummyResponseSpec] = {}
     dummy_default_spec: Optional[DummyResponseSpec] = None
     if dummy_responses:
@@ -3486,7 +3525,13 @@ async def get_all_responses(
                     call_kwargs = {
                         k: v for k, v in call_kwargs.items() if k in response_param_names
                     }
-                task = asyncio.create_task(response_callable(prompt, **call_kwargs))
+                if prompt_call_via_keyword:
+                    call_kwargs = dict(call_kwargs)
+                    call_kwargs["prompt"] = prompt
+                    call_args = ()
+                else:
+                    call_args = (prompt,)
+                task = asyncio.create_task(response_callable(*call_args, **call_kwargs))
                 inflight[ident] = (
                     start,
                     task,
