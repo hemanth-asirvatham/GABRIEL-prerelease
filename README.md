@@ -71,7 +71,7 @@ The tutorial notebook walks through these ideas step-by-step—from setting up a
 pip install gabriel
 
 # or work from this prerelease repo
-git clone https://github.com/allenai/GABRIEL-prerelease.git
+git clone https://github.com/hemanth-asirvatham/GABRIEL-prerelease.git
 cd GABRIEL-prerelease
 pip install -e .
 ```
@@ -93,12 +93,21 @@ The tutorial notebook walks through many complete projects; here’s the minimal
 ```python
 import os
 import pandas as pd
+
 import gabriel
 
 PATH = os.path.expanduser("~/Documents/gabriel_runs")
-toy_data = pd.DataFrame({
-    "entity": ["turkey", "pumpkin pie", "green bean casserole", "cornbread"],
-})
+toy_data = pd.DataFrame(
+    {
+        "entity": [
+            "turkey",
+            "pumpkin pie",
+            "green bean casserole",
+            "cornbread",
+        ]
+    }
+)
+
 attributes = {
     "savory taste": "How savory the dish is",
     "sweet taste": "Dessert-like sweetness",
@@ -124,95 +133,81 @@ The helper returns a `pandas.DataFrame` with one column per attribute and writes
 
 All helpers share the same ergonomics: pass a DataFrame (or folder path prepared with `gabriel.load`), choose the relevant text/image/audio column, and specify task-specific settings. Useful knobs such as `model`, `n_parallels` (concurrency), `n_runs`, `reasoning_effort`, `reasoning_summary`, `additional_instructions`, and `template_path` are available everywhere.
 
-### Measure “how much” of an attribute exists
+### 1. Measurement primitives
 - **`gabriel.rate`** – assign 0–100 scores per attribute. Supports batching attributes, reasoning traces, and modalities (`text`, `entity`, `image`, `audio`, `web`).
-- **`gabriel.rank`** – tournament-style pairwise comparisons that yield grounded relative z-scores. Configure `n_rounds`, `matches_per_round`, and `recursive=True` to iteratively surface the best performers.
+- **`gabriel.rank`** – tournament-style pairwise comparisons that yield grounded relative z-scores. Configure `n_rounds`, `matches_per_round`, and `recursive=True` to iteratively surface the best performers (as in the ideation example).
 - **`gabriel.classify`** – multi- or single-label tagging with label definitions, consensus columns, and optional differentiation prompts when you want richer rationales.
 - **`gabriel.extract`** – turn unstructured passages into tidy tables by naming attributes and optional data types; great for biographies, filings, and multimodal product cards.
 - **`gabriel.discover`** – contrast two labeled corpora to surface discriminating features, combining compare → bucket → classify under the hood.
 
-### Labeling, filtering, and coding workflows
+### 2. Qualitative coding, review, and taxonomy building
 - **`gabriel.filter`** screens very large candidate lists with boolean conditions (e.g., keep only inventions) and tunable thresholds.
-- **`gabriel.codify`** highlights excerpts that match qualitative codes, and works hand-in-hand with **`gabriel.view`** to audit coded passages with chips and sliders.
+- **`gabriel.codify`** highlights snippets that match qualitative codes and pairs with **`gabriel.view`** to audit coded passages with chips and sliders.
+- **`gabriel.view`** reads any saved run (rate/classify/codify/etc.) and renders interactive tables so you can spot-check results in the browser.
 - **`gabriel.compare`** explains differences or similarities for paired items (op-eds, policies, drafts).
 - **`gabriel.bucket`** groups terms or entities into emergent taxonomies, which can then be fed back into rate/classify calls.
 
-### Cleaning, anonymizing, and rewriting data
+### 3. Data prep, linkage, and rewriting
 - **`gabriel.merge`** and **`gabriel.deduplicate`** combine embeddings with GPT adjudication to produce clean entity lists or fuzzy joins.
 - **`gabriel.deidentify`** replaces PII with realistic stand-ins, respecting grouping columns and optionally reusing an existing mapping.
-- **`gabriel.paraphrase`** and **`gabriel.whatever`** let you rewrite or completely customize prompts while retaining parallelization, retries, and logging.
+- **`gabriel.paraphrase`** rewrites passages under strict guidance (e.g., remove brand mentions) with optional recursive validation loops.
+- **`gabriel.debias`** regresses out unwanted signals by measuring confounds (via rate/codify) and stripping them from your primary measurement.
 
-### Discovery pipelines and helper utilities
+### 4. Discovery, seeding, and ideation pipelines
 - **`gabriel.seed`** generates diverse seed entities/personas, enforcing representation constraints before you collect more data.
 - **`gabriel.ideate`** brainstorms hundreds of candidate hypotheses, then filters/ranks them (often chained with `gabriel.rank`).
-- **`gabriel.debias`** regresses out unwanted signals by measuring confounds (via rate/codify) and stripping them from your primary measurement.
-- **`gabriel.load`** builds spreadsheets from folders of media so every downstream task can attach images or audio by file path.
-- **`gabriel.whatever`** also supports `web_search=True`, letting GPT gather fresh evidence before you rate or extract against it.
+
+### 5. Data ingestion and automation
+- **`gabriel.load`** walks a folder of text/image/audio files and produces a spreadsheet with identifiers + file paths so downstream tasks can attach those modalities.
+- **`gabriel.whatever`** accepts fully custom prompts, attachments, and advanced flags (`json_mode`, `web_search`, `response_fn`) while reusing retries, parallelism, and checkpointing.
 
 ## Detailed usage
 
 The tutorial notebook shows full projects end-to-end; the summaries below serve as a quick reference to the knobs each helper exposes.
 
-### Rating (`gabriel.rate` / `Rate`)
-- Provide a DataFrame, the column to evaluate, and an attribute→definition mapping.
-- Supports batching (`n_parallels`), multiple passes (`n_runs`), modality-specific prompts (`modality`), and optional reasoning traces (`reasoning_effort`, `reasoning_summary`).
-- Saves intermediate CSVs (`file_name`, default `ratings.csv`) under `save_dir` alongside raw responses.
+### Measurement primitives
+- **Rating (`gabriel.rate` / `Rate`)** – Provide a DataFrame, the column to evaluate, and an attribute→definition mapping. Supports batching (`n_parallels`), multiple passes (`n_runs`), modality-specific prompts (`modality`), and optional reasoning traces (`reasoning_effort`, `reasoning_summary`). Saves intermediate CSVs (`file_name`, default `ratings.csv`) under `save_dir` alongside raw responses.
+- **Ranking (`gabriel.rank` / `Rank`)** – Runs pairwise tournaments with Elo-style updates to capture fine-grained differences. Configure `n_rounds`, `matches_per_round`, `learning_rate`, and `recursive=True` to iteratively refine the leaderboard. Use `initial_rating_pass` or `initial_rating_field` to seed scores from a prior `rate` run when helpful.
+- **Classification (`gabriel.classify` / `Classify`)** – Map label names to definitions; results include per-label probabilities and consensus columns. Optional differentiation mode asks the model to contrast close labels for richer rationales. Works well for multimodal tagging when paired with `modality="image"/"audio"` and for mutually exclusive labels using `additional_instructions`.
+- **Extraction (`gabriel.extract` / `Extract`)** – Define attributes alongside descriptions of the desired outputs; optional `types` enforce schemas (e.g. `{ "year": "int" }`). Handles JSON mode and nested schemas for complex cards (e.g., product + specs + price). Combine with `gabriel.load` to attach file paths for multimodal product cards.
+- **Discovery (`gabriel.discover` / `Discover`)** – Chains compare → bucket → classify to surface discriminating features across two classes of data. Configure reference columns, feature counts, and optional follow-up classification thresholds.
 
-### Ranking (`gabriel.rank` / `Rank`)
-- Runs pairwise tournaments with Elo-style updates to capture fine-grained differences.
-- Configure `n_rounds`, `matches_per_round`, `learning_rate`, and `recursive=True` to iteratively refine the leaderboard.
-- Use `initial_rating_pass` or `initial_rating_field` to seed scores from a prior `rate` run when helpful.
+### Qualitative coding, review, and taxonomy building
+- **Filtering (`gabriel.filter` / `Filter`)** – Screens huge candidate lists with a natural-language condition; tune `entities_per_call`, `threshold`, and `shuffle` to balance recall vs. throughput.
+- **Passage coding (`gabriel.codify` / `Codify`)** – Highlights snippets that match qualitative codes and writes token-level spans you can audit later. Works hand-in-hand with `gabriel.view` for UI-based inspection.
+- **Interactive review (`gabriel.view` / `View`)** – Loads any saved output directory and exposes sliders, chips, and search so analysts can examine results without leaving the browser.
+- **Comparisons (`gabriel.compare` / `Compare`)** – Provides bullet-point similarities/differences for paired entries (e.g., draft A vs. draft B). Adjust `perspective` or `comparison_prompt` to focus on specific axes.
+- **Taxonomies (`gabriel.bucket` / `Bucket`)** – Groups long lists of entities or terms into emergent categories; configure `n_buckets`, `n_examples_per_bucket`, and optional seeding labels. Outputs can be piped back into `classify` or `rate`.
 
-### Classification (`gabriel.classify` / `Classify`)
-- Map label names to definitions; results include per-label probabilities and consensus columns.
-- Optional differentiation mode asks the model to contrast close labels for richer rationales.
-- Works well for multimodal tagging when paired with `modality="image"`/`"audio"`.
+### Data prep, linkage, rewriting, and bias correction
+- **Entity cleanup (`gabriel.merge` / `Merge` and `gabriel.deduplicate` / `Deduplicate`)** – Combine embeddings, string similarity, and GPT adjudication to produce clean entity lists or fuzzy joins. Control chunk sizes, timeout behavior, and auto-matching thresholds; outputs include mapping columns you can feed to downstream analyses.
+- **Privacy-preserving transforms (`gabriel.deidentify` / `Deidentify`)** – Replace PII with realistic stand-ins, respecting grouping columns and optionally reusing existing mappings to maintain consistency over time.
+- **Guided rewriting (`gabriel.paraphrase` / `Paraphrase`)** – Rewrite passages under strict guidance (e.g., remove brand mentions or standardize tone) with optional recursive validation loops.
+- **Bias correction (`gabriel.debias` / `Debias`)** – Measure confounds (typically with `rate`/`codify`), regress them out of your main measurements, and export adjusted scores alongside diagnostics.
 
-### Extraction (`gabriel.extract` / `Extract`)
-- Define attributes alongside descriptions of the desired outputs; optional `types` enforce schemas (e.g. `{ "year": "int" }`).
-- Handles JSON mode and nested schemas for complex cards (e.g. product + specs + price).
-- Combine with `gabriel.load` to attach file paths for multimodal product cards.
+### Discovery, seeding, and ideation pipelines
+- **Idea generation (`gabriel.ideate` / `Ideate`)** – Provide a topic, number of ideas, and optional filtering heuristics; the helper generates candidates in parallel, logs intermediate vetting, and can be chained to `rank` for tournament selection.
+- **Diversity seeding (`gabriel.seed` / `Seed`)** – Specify the traits you need in your seed set (e.g., demographic quotas, experience levels). The helper enforces representativeness while surfacing rich descriptions to feed downstream measurement.
 
-### Filtering and coding (`gabriel.filter`, `gabriel.codify`, `gabriel.view`)
-- `filter` screens huge candidate lists with a natural-language condition; tune `entities_per_call`, `threshold`, and `shuffle` to balance recall vs. throughput.
-- `codify` highlights snippets that match qualitative codes and pairs nicely with `view` for UI-based audits.
-- `gabriel.view` renders interactive tables/sliders over the saved outputs so you can inspect ratings, classifications, or passage coding runs.
-
-### Discovery and ideation (`gabriel.discover`, `gabriel.bucket`, `gabriel.compare`, `gabriel.seed`, `gabriel.ideate`)
-- `discover` chains compare → bucket → classify to surface discriminating features across two classes of data.
-- `bucket` groups long lists of entities or terms into emergent taxonomies you can feed back into classification or ranking.
-- `compare` writes bullet-point similarities/differences for paired entries (e.g. draft A vs. draft B).
-- `seed` enforces distributional constraints when generating starter personas/entities for follow-on measurement.
-- `ideate` produces many candidate theories/ideas, then filters/ranks them—great for brainstorming research hypotheses before measurement.
-
-### Cleaning and matching (`gabriel.merge`, `gabriel.deduplicate`)
-- Combine embeddings with GPT adjudication to produce clean entity lists or fuzzy joins.
-- Control chunk sizes, timeout behavior, and auto-matching thresholds; outputs include mapping columns you can feed to downstream analyses.
-
-### Privacy, rewriting, and bias correction (`gabriel.deidentify`, `gabriel.paraphrase`, `gabriel.debias`)
-- `deidentify` replaces PII with realistic stand-ins, respecting grouping columns and optionally reusing an existing mapping.
-- `paraphrase` rewrites passages under strict guidance (e.g. remove brand mentions) with optional recursive validation loops.
-- `debias` regresses out unwanted signals by measuring confounds (via rate/codify) and stripping them from your primary measurement.
-
-### Loading media and custom prompts (`gabriel.load`, `gabriel.whatever`)
-- `load` walks a folder of text/image/audio files and produces a spreadsheet with identifiers + file paths so every downstream task can attach those modalities.
-- `whatever` accepts fully custom prompts, attachments, and advanced flags (`json_mode`, `web_search`, `response_fn`) while reusing retries, parallelism, and checkpointing.
+### Data ingestion and custom prompts
+- **Loading media (`gabriel.load` / `Load`)** – Walk a folder of text/image/audio files and produce a spreadsheet with identifiers + file paths so every downstream task can attach those modalities. Handy for multimodal runs and for the county-level web search example when you later rate the generated reports.
+- **Fully custom prompts (`gabriel.whatever` / `Whatever`)** – Accepts arbitrary prompt text, attachments, and settings such as `json_mode`, `response_fn`, or `web_search`. You keep retries, rate-limit handling, parallelism, and persistent logging even when you bypass the built-in templates.
 
 ## Multimodal data and web search
 
-All measurement helpers accept a `modality` argument (`text`, `entity`, `image`, `audio`, or `web`). When working with folders of media, run `gabriel.load` first to expand files into rows with clean IDs. Set `web_search=True` (plus optional domain/location filters) on `gabriel.whatever` or pass `modality="web"` to `gabriel.rate`/`gabriel.extract` when you want GPT to gather the relevant context before answering. The same batching, retries, and checkpointing apply regardless of modality.
+All measurement helpers accept a `modality` argument (`text`, `entity`, `image`, `audio`, or `web`). When working with folders of media, run `gabriel.load` first to expand files into rows with clean IDs. Set `web_search=True` (plus optional domain/location filters) on `gabriel.whatever` or pass `modality="web"` to `gabriel.rate`/`gabriel.extract` when you want GPT to gather the relevant context before answering. The same batching, retries, and checkpointing apply regardless of modality, and the tutorial’s county-level example shows how to chain web search → rating → mapping in one flow.
 
 ## Custom prompts and model routing
 
 Tweak any task by:
 
-- Passing extra instructions via `additional_instructions` (appended to our prompt templates), or supplying your own Jinja template with `template_path` as long as it uses the same variable names.
-- Using `gabriel.whatever` for fully custom prompts while keeping automated retries, rate-limit handling, and persistent logging.
-- Supplying a custom `response_fn` if you want to call a different API; GABRIEL will feed prompts/attachments through your callable and continue with the same parsing + saving pipeline.
+1. **Appending extra instructions** – Pass natural-language clarifications through `additional_instructions` (as in the classification tutorial example) to mandate mutually exclusive labels, share rubrics, or supply few-shot demonstrations.
+2. **Supplying your own template** – Provide a Jinja file via `template_path` that uses the same variables as our default prompts; you can keep all retries/checkpointing while tailoring the instructions or formatting.
+3. **Going fully custom** – Use `gabriel.whatever` when you need bespoke prompts, attachments, or `response_fn` logic. You still benefit from automated retries, rate-limit handling, persistent logging, and options like `web_search=True`.
 
 ## Saving, logging, and resuming
 
-Each run expands `save_dir` (tilde and environment variables supported), writes your structured output (`file_name` CSV/Parquet), and saves raw model payloads under `responses/` together with metadata so you can audit later. Leave `reset_files=False` (default) to resume partially completed runs; delete the folder or pass `reset_files=True` to start fresh. `gabriel.view` reads these outputs to provide a lightweight UI for spot checks.
+Each run expands `save_dir` (tilde and environment variables supported), writes your structured output (`file_name` CSV/Parquet), and saves raw model payloads under `responses/` together with metadata so you can audit later. Leave `reset_files=False` (default) to resume partially completed runs; delete the folder or pass `reset_files=True` to start fresh. `gabriel.view` reads these outputs to provide a lightweight UI for spot checks, and helpers like `gabriel.utils.mapmaker.MapMaker` can consume the same files for downstream visualization.
 
 ## Development and testing
 
@@ -229,4 +224,4 @@ Tests rely on the built-in dummy responses, so no API key is necessary. Linting 
 
 If you use GABRIEL in your research, please cite:
 
-> The Generalized Attribute Based Ratings Information Extraction Library (GABRIEL). Hemanth Asirvatham and Elliott Mokski (2023). <https://github.com/elliottmokski/GABRIEL-distribution>
+> The Generalized Attribute Based Ratings Information Extraction Library (GABRIEL). Hemanth Asirvatham and Elliott Mokski (2025). <https://github.com/hemanth-asirvatham/GABRIEL-prerelease>
