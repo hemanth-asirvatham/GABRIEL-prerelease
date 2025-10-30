@@ -22,14 +22,28 @@ Use the specific value that matches the attribute definition best (e.g. the prim
 If multiple values apply, choose the single most applicable value - don't list them all.
 Do not round (e.g. not "1860" but "1863", not "100" but "112"). Even if approximating a specific datapoint, don't round or use ranges - provide the best possible exact value.
 Consistent formatting is critical; stick to the attribute definition and these rules.
-If the task is not possible, return "unknown" for that attribute.
+If asked to extract text direct from content, be complete and verbatim.
+If any task is not possible, return "unknown" for that attribute.
 
 Output JSON only, in following format:
 {
-    "<insert attribute name here>": "<insert corresponding extracted value or "unknown" here>",
-    "<attribute name>": "<extracted value or unknown>",
+    "<insert first entity name here>":
+    {
+        "<insert attribute name here>": "<insert corresponding extracted value or "unknown" here>",
+        "<attribute name>": "<extracted value or unknown>",
+        ...
+    },
+    "<second entity name>":
+    {
+        "<attribute name>": "<extracted value or unknown>",
+        ...
+    },
     ...
 }
+
+Usually whole content is just one unified entity, so fill only first entity section with all attributes for whole content (no other entity sections).
+But if clearly multiple separate relevant entities within content (e.g. catalog with multiple product listings): each product gets its own entity section; all attributes separately extracted for each product.
+Name each entity with a concise and informative identifying title.
 
 Attributes you are extracting info on are: {{ attributes.keys() | shuffled }}
 Assess EVERY attribute; use "unknown" if needed but no drops. Use these attribute names verbatim, with absolutely no modification.
