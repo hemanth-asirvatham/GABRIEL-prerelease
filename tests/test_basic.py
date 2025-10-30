@@ -10,7 +10,7 @@ import openai
 import pytest
 
 from gabriel.core.prompt_template import PromptTemplate
-from gabriel.utils import openai_utils, safest_json
+from gabriel.utils import DummyResponseSpec, openai_utils, safest_json
 from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig, _collect_predictions
@@ -837,6 +837,38 @@ def test_extraction_dummy(tmp_path):
     df = pd.DataFrame({"txt": ["a"]})
     res = asyncio.run(task.run(df, column_name="txt"))
     assert "year" in res.columns
+    assert "entity_name" in res.columns
+    assert res["entity_name"].isna().all()
+
+
+def test_extraction_multiple_entities(tmp_path):
+    cfg = ExtractConfig(
+        attributes={"year": "", "price": ""},
+        save_dir=str(tmp_path),
+        use_dummy=True,
+    )
+    task = Extract(cfg)
+    df = pd.DataFrame({"txt": ["listing"]})
+    payload = json.dumps(
+        {
+            "Alpha": {"year": "1990", "price": "10"},
+            "Beta": {"year": "2000", "price": "20"},
+        }
+    )
+    specs = {"*": DummyResponseSpec(responses=[payload])}
+    res = asyncio.run(
+        task.run(
+            df,
+            column_name="txt",
+            dummy_responses=specs,
+            reset_files=True,
+        )
+    )
+    assert "entity_name" in res.columns
+    assert res.shape[0] == 2
+    assert sorted(res["entity_name"].dropna()) == ["Alpha", "Beta"]
+    assert set(res["year"].dropna()) == {"1990", "2000"}
+    assert set(res["price"].dropna()) == {"10", "20"}
 
 
 def test_classification_multirun(tmp_path):

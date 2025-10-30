@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, DefaultDict
+from typing import Any, Dict, List, Optional, DefaultDict, Tuple
 
 import pandas as pd
 
@@ -30,7 +30,7 @@ class ExtractConfig:
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None
-    modality: str = "text"
+    modality: str = "entity"
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
@@ -60,15 +60,69 @@ class Extract:
             reference_filename="extraction_prompt.jinja2",
         )
 
-    async def _parse(self, raw: Any, attrs: List[str]) -> Dict[str, str]:
+    async def _parse(
+        self, raw: Any, attrs: List[str]
+    ) -> List[Tuple[Optional[str], Dict[str, str]]]:
         obj = await safest_json(raw)
-        out: Dict[str, str] = {}
+        attr_names = list(attrs)
+
+        def _default_attr_map() -> Dict[str, str]:
+            return {attr: "unknown" for attr in attr_names}
+
+        def _clean_name(name: Any) -> Optional[str]:
+            if isinstance(name, str):
+                cleaned = name.strip()
+                return cleaned or None
+            if name is None:
+                return None
+            text = str(name).strip()
+            return text or None
+
+        def _build_entry(
+            entity_name: Optional[str], payload: Optional[Dict[str, Any]]
+        ) -> Tuple[Optional[str], Dict[str, str]]:
+            values = _default_attr_map()
+            if isinstance(payload, dict):
+                for attr in attr_names:
+                    val = payload.get(attr)
+                    values[attr] = str(val) if val is not None else "unknown"
+            return (_clean_name(entity_name), values)
+
+        entries: List[Tuple[Optional[str], Dict[str, str]]] = []
+
         if isinstance(obj, dict):
-            for attr in attrs:
-                val = obj.get(attr)
-                out[attr] = str(val) if val is not None else "unknown"
-            return out
-        return {attr: "unknown" for attr in attrs}
+            attr_keys = set(attr_names)
+            nested_candidates = [
+                (key, val)
+                for key, val in obj.items()
+                if isinstance(val, dict)
+                and (not attr_keys or key not in attr_keys)
+            ]
+            if nested_candidates:
+                for name, payload in nested_candidates:
+                    entries.append(_build_entry(name, payload))
+                if entries:
+                    return entries
+            entries.append(_build_entry(None, obj))
+            return entries
+
+        if isinstance(obj, list):
+            for item in obj:
+                if not isinstance(item, dict):
+                    continue
+                attr_payload: Optional[Dict[str, Any]] = None
+                if isinstance(item.get("attributes"), dict):
+                    attr_payload = item.get("attributes")  # type: ignore[assignment]
+                else:
+                    attr_payload = item
+                name = item.get("entity_name") or item.get("entity") or item.get("name")
+                entries.append(_build_entry(name, attr_payload))
+            if entries:
+                return entries
+
+        return [
+            _build_entry(None, None),
+        ]
 
     async def run(
         self,
@@ -100,6 +154,16 @@ class Extract:
             base_ids.append(sha8)
 
         df_proc["_gid"] = row_ids
+
+        if not base_ids:
+            base_name = os.path.splitext(self.cfg.file_name)[0]
+            out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
+            result = df_proc.drop(columns=["_gid"])
+            result["entity_name"] = pd.NA
+            for attr in self.cfg.attributes.keys():
+                result[attr] = pd.NA
+            result.to_csv(out_path, index=False)
+            return result
 
         attr_items = list(self.cfg.attributes.items())
         attr_batches: List[Dict[str, str]] = [
@@ -217,8 +281,8 @@ class Extract:
         full_records: List[Dict[str, Any]] = []
         base_attrs = list(self.cfg.attributes.keys())
         for run_idx, df_resp in enumerate(df_resps, start=1):
-            id_to_vals: Dict[str, Dict[str, str]] = {
-                ident: {attr: "unknown" for attr in base_attrs} for ident in base_ids
+            id_to_entity_vals: Dict[str, Dict[Optional[str], Dict[str, str]]] = {
+                ident: {} for ident in base_ids
             }
             for ident_batch, raw in zip(df_resp.Identifier, df_resp.Response):
                 if "_batch" not in ident_batch:
@@ -226,21 +290,34 @@ class Extract:
                 base_ident, batch_part = ident_batch.rsplit("_batch", 1)
                 batch_idx = int(batch_part)
                 attrs = list(attr_batches[batch_idx].keys())
-                parsed = await self._parse(raw, attrs)
-                for attr in attrs:
-                    id_to_vals[base_ident][attr] = parsed.get(attr, "unknown")
+                parsed_entities = await self._parse(raw, attrs)
+                entity_store = id_to_entity_vals.setdefault(base_ident, {})
+                for entity_name, entity_attrs in parsed_entities:
+                    key = entity_name if entity_name is not None else None
+                    if key not in entity_store:
+                        entity_store[key] = {attr: "unknown" for attr in base_attrs}
+                    for attr in attrs:
+                        entity_store[key][attr] = entity_attrs.get(attr, "unknown")
             for ident in base_ids:
-                parsed = id_to_vals.get(ident, {attr: "unknown" for attr in base_attrs})
-                rec = {"id": ident, "text": id_to_val[ident], "run": run_idx}
-                rec.update({attr: parsed.get(attr) for attr in base_attrs})
-                full_records.append(rec)
+                entity_map = id_to_entity_vals.get(ident) or {
+                    None: {attr: "unknown" for attr in base_attrs}
+                }
+                for entity_name, attr_values in entity_map.items():
+                    rec: Dict[str, Any] = {
+                        "id": ident,
+                        "entity_name": entity_name,
+                        "text": id_to_val[ident],
+                        "run": run_idx,
+                    }
+                    rec.update({attr: attr_values.get(attr, "unknown") for attr in base_attrs})
+                    full_records.append(rec)
 
-        full_df = pd.DataFrame(full_records).set_index(["id", "run"])
+        full_df = pd.DataFrame(full_records).set_index(["id", "entity_name", "run"])
         if self.cfg.n_runs > 1:
             disagg_path = os.path.join(
                 self.cfg.save_dir, f"{base_name}_full_disaggregated.csv"
             )
-            full_df.to_csv(disagg_path, index_label=["id", "run"])
+            full_df.to_csv(disagg_path, index_label=["id", "entity_name", "run"])
 
         def _pick_first(s: pd.Series) -> str:
             for val in s.dropna():
@@ -248,13 +325,42 @@ class Extract:
                     return str(val)
             return "unknown"
 
-        agg_df = pd.DataFrame({attr: full_df[attr].groupby("id").apply(_pick_first) for attr in base_attrs})
+        entity_index = full_df.index.droplevel("run").unique()
+        if base_attrs:
+            agg_series = {
+                attr: full_df[attr]
+                .groupby(level=["id", "entity_name"], sort=False)
+                .apply(_pick_first)
+                for attr in base_attrs
+            }
+            agg_df = pd.DataFrame(agg_series)
+        else:
+            agg_df = pd.DataFrame(index=entity_index)
+        agg_df = agg_df.reindex(entity_index)
 
         unknown_counts = {attr: (agg_df[attr] == "unknown").sum() for attr in base_attrs}
 
         out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
-        result = df_proc.merge(agg_df, left_on="_gid", right_index=True, how="left")
-        result = result.drop(columns=["_gid"])
+        agg_reset = agg_df.reset_index()
+        result = df_proc.merge(agg_reset, left_on="_gid", right_on="id", how="left")
+        drop_cols = [col for col in ("_gid", "id") if col in result.columns]
+        if drop_cols:
+            result = result.drop(columns=drop_cols)
+
+        original_cols = [col for col in df_proc.columns if col != "_gid"]
+        final_order: List[str] = []
+        for col in original_cols:
+            if col in result.columns:
+                final_order.append(col)
+        if "entity_name" in result.columns and "entity_name" not in final_order:
+            final_order.append("entity_name")
+        for attr in base_attrs:
+            if attr in result.columns:
+                final_order.append(attr)
+        remaining = [col for col in result.columns if col not in final_order]
+        if remaining:
+            final_order.extend(remaining)
+        result = result[final_order]
 
         result.to_csv(out_path, index=False)
 
