@@ -134,6 +134,7 @@ class Extract:
         **kwargs: Any,
     ) -> pd.DataFrame:
         df_proc = df.reset_index(drop=True).copy()
+        input_columns = list(df_proc.columns)
         values = df_proc[column_name].tolist()
         texts = [str(v) for v in values]
 
@@ -366,6 +367,8 @@ class Extract:
 
         result = result.replace("unknown", pd.NA)
 
+        duplicate_rows = len(result) - len(df_proc)
+
         if types:
             coerced = result.copy()
             fail_logs: Dict[str, int] = {}
@@ -395,5 +398,14 @@ class Extract:
             known = total - unknown_counts[attr]
             print(f"{attr:<55s}: {known:5d} extracted, {unknown_counts[attr]:5d} unknown")
         print("============================\n")
+
+        if duplicate_rows > 0:
+            subset_hint = ", ".join(f"'{col}'" for col in input_columns)
+            print(
+                "[Extract] Multiple entity names were returned for at least one input.\n"
+                f"          {duplicate_rows} additional row(s) were created so the cleaned file now has {len(result)} rows versus {len(df_proc)} inputs.\n"
+                "          If you only need one row per original input, deduplicate on your source columns\n"
+                f"          (e.g. `result = result.drop_duplicates(subset=[{subset_hint}], keep='first')`).\n"
+            )
 
         return result
