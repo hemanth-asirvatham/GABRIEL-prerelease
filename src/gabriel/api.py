@@ -123,7 +123,7 @@ async def extract(
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "extraction.csv",
-    modality: str = "text",
+    modality: str = "entity",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     types: Optional[dict[str, any]] = None,

@@ -1,4 +1,7 @@
 {% import "snippets.jinja2" as snip %}
+{% if modality is not defined or not modality %}
+{% set modality = "entity" %}
+{% endif %}
 {{ snip.single_entry(modality, text) }}
 
 Your task: for each attribute below, extract the specific information requested (e.g. year of invention, price, death year, product launch date, etc.).
