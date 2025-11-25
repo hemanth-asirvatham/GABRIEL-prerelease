@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
 
@@ -139,7 +139,7 @@ class Bucket:
         df_proc = df.reset_index(drop=True).copy()
         raw_entries = df_proc[column_name].dropna().tolist()
 
-        seen: set[str] = set()
+        seen: Set[str] = set()
         terms: List[str] = []
         term_map: Dict[str, str] = {}
         for entry in raw_entries:

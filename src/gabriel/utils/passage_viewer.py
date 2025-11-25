@@ -254,7 +254,7 @@ def _normalize_attribute_requests(
         iterable = [attributes]
 
     requests: List[_AttributeRequest] = []
-    seen: set[Tuple[str, bool]] = set()
+    seen: Set[Tuple[str, bool]] = set()
     for entry in iterable:
         dynamic = False
         label_hint: Optional[str] = None

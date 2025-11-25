@@ -7,7 +7,7 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -291,7 +291,7 @@ class Deidentifier:
             mappings_col.append(mapping)
             text = str(row[column_name])
             deid_text = text
-            pairs: List[tuple[str, str]] = []
+            pairs: List[Tuple[str, str]] = []
             for entry in mapping.values():
                 if isinstance(entry, dict):
                     casted = entry.get("casted form", "")

@@ -4,7 +4,7 @@ import ast
 import json
 import os
 import re
-from typing import Any, Optional, Union, List
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -218,7 +218,7 @@ async def clean_json_df(
     identifiers: List[str] = []
     # ``mapping`` maps each identifier to its originating column and ``id_col``
     # value so responses can be merged back using a stable key.
-    mapping: dict[str, tuple[str, Any]] = {}
+    mapping: Dict[str, Tuple[str, Any]] = {}
 
     for col in columns:
         cleaned_col = f"{col}_cleaned"

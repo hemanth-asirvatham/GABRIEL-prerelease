@@ -112,6 +112,14 @@ from gabriel.utils.parsing import safe_json
 _clients_async: Dict[Optional[str], openai.AsyncOpenAI] = {}
 
 
+def _progress_bar(*args: Any, verbose: bool = True, **kwargs: Any):
+    """Construct a tqdm progress bar that degrades gracefully."""
+
+    disable = kwargs.pop("disable", False) or not verbose
+    kwargs.setdefault("dynamic_ncols", True)
+    return tqdm(*args, disable=disable, **kwargs)
+
+
 def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
     """Return a cached ``AsyncOpenAI`` client for ``base_url``.
 
@@ -1884,11 +1892,11 @@ async def get_all_embeddings(
         queue.put_nowait((item[1], item[0], max_retries))
 
     processed = 0
-    pbar = tqdm(
+    pbar = _progress_bar(
         total=len(items),
-        disable=not verbose,
         desc="Getting embeddings",
         leave=True,
+        verbose=verbose,
     )
     cooldown_until = 0.0
     active_workers = 0
@@ -3438,7 +3446,12 @@ async def get_all_responses(
         queue.put_nowait((item[0], item[1], max_retries))
     results: List[Dict[str, Any]] = []
     processed = 0
-    pbar = tqdm(total=len(todo_pairs), desc="Processing prompts", leave=True)
+    pbar = _progress_bar(
+        total=len(todo_pairs),
+        desc="Processing prompts",
+        leave=True,
+        verbose=verbose,
+    )
     cooldown_until = 0.0
     stop_event = asyncio.Event()
     timeout_cancellations: Set[str] = set()

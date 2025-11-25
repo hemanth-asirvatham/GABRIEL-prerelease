@@ -74,6 +74,15 @@ pip install gabriel
 git clone https://github.com/hemanth-asirvatham/GABRIEL-prerelease.git
 cd GABRIEL-prerelease
 pip install -e .
+
+# install extra tooling for local development and tests
+pip install -e .[dev]
+pip install -r requirements-dev.txt
+```
+You can optionally sanity-check the install with a quick version print:
+
+```bash
+gabriel --version  # optional check
 ```
 
 Before running real jobs, point the helpers to your GPT endpoint:

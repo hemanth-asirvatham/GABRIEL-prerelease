@@ -7,7 +7,7 @@ import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 
@@ -72,7 +72,7 @@ class Seed:
         """Generate ``num_entities`` unique seed entities."""
 
         normalized_existing = self._prepare_initial_existing(existing_entities)
-        seen: dict[str, str] = {}
+        seen: Dict[str, str] = {}
         for ent in normalized_existing:
             norm = self._normalize_entity(ent)
             if norm and norm not in seen:
@@ -187,7 +187,7 @@ class Seed:
         if not entries:
             return []
         unique: List[str] = []
-        seen: set[str] = set()
+        seen: Set[str] = set()
         for entry in entries:
             text = str(entry).strip()
             if not text:
