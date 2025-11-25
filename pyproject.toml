@@ -32,12 +32,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Libraries",
 ]
-urls = {
-    "Homepage" = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease",
-    "Repository" = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease",
-    "Documentation" = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease/blob/work/README.md",
-    "Issues" = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease/issues",
-}
 dependencies = [
     "openai>=1.0.0",
     "pandas>=1.0.0",
@@ -61,6 +55,12 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.4.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease"
+Repository = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease"
+Documentation = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease/blob/work/README.md"
+Issues = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease/issues"
 
 [project.scripts]
 gabriel = "gabriel.cli.__main__:main"
