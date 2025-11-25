@@ -4,7 +4,7 @@ import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
 
@@ -71,7 +71,7 @@ class Filter:
         raw_entities = [str(x) for x in df_proc[column_name].dropna()]
 
         # unique while preserving order
-        seen: set[str] = set()
+        seen: Set[str] = set()
         entities: List[str] = []
         for ent in raw_entities:
             if ent not in seen:
@@ -120,7 +120,7 @@ class Filter:
             zip(resp_df.get("Identifier", []), resp_df.get("Response", []))
         )
 
-        meets_by_run: List[set[str]] = [set() for _ in range(self.cfg.n_runs)]
+        meets_by_run: List[Set[str]] = [set() for _ in range(self.cfg.n_runs)]
         for ident, raw in resp_map.items():
             parts = ident.split("_")
             if len(parts) < 3:

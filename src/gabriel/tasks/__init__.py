@@ -1,6 +1,7 @@
 """Task implementations for GABRIEL."""
 
 from importlib import import_module
+from typing import List
 
 _lazy_imports = {
     "Rate": ".rate",
@@ -58,5 +59,5 @@ def __getattr__(name: str):
     raise AttributeError(name)
 
 
-def __dir__() -> list[str]:
+def __dir__() -> List[str]:
     return __all__

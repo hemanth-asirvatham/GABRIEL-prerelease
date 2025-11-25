@@ -49,7 +49,7 @@ import hashlib
 import math
 import copy
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 import json
 
 import numpy as np
@@ -577,7 +577,7 @@ class Rank:
         self, item_ids: List[str], texts_by_id: Dict[str, str], mpr: int
     ) -> List[Tuple[Tuple[str, str], Tuple[str, str]]]:
         """Return a set of random, unique pairs for the given items."""
-        pairs_set: set[Tuple[str, str]] = set()
+        pairs_set: Set[Tuple[str, str]] = set()
         for a in item_ids:
             others = [x for x in item_ids if x != a]
             if not others:
@@ -596,7 +596,7 @@ class Rank:
         mpr: int,
     ) -> List[Tuple[Tuple[str, str], Tuple[str, str]]]:
         """Pair each item with its nearest neighbours in rating space."""
-        pairs_set: set[Tuple[str, str]] = set()
+        pairs_set: Set[Tuple[str, str]] = set()
         sorted_ids = sorted(item_ids, key=lambda i: current_ratings[i])
         n = len(sorted_ids)
         for i, a in enumerate(sorted_ids):
@@ -657,7 +657,7 @@ class Rank:
         high_se_ids = sorted(item_ids, key=lambda i: se_agg.get(i, 1.0), reverse=True)[
             :num_high_se
         ]
-        candidate_pairs_set: set[Tuple[str, str]] = set()
+        candidate_pairs_set: Set[Tuple[str, str]] = set()
         for i_id in item_ids:
             pos = idx_of[i_id]
             lower = max(0, pos - candidate_neighbors)
@@ -712,7 +712,7 @@ class Rank:
         scored_pairs.sort(key=lambda x: x[0], reverse=True)
         needed: Dict[str, int] = {i: mpr for i in item_ids}
         pairs_selected: List[Tuple[str, str]] = []
-        pairs_seen: set[Tuple[str, str]] = set()
+        pairs_seen: Set[Tuple[str, str]] = set()
         for score, a, b in scored_pairs:
             if needed[a] > 0 and needed[b] > 0:
                 tup = (a, b) if a < b else (b, a)
@@ -1656,7 +1656,7 @@ class Rank:
                 _write_checkpoint()
 
         # Determine if any new items were added and need to catch up on existing rounds
-        seen_ids: set[str] = set()
+        seen_ids: Set[str] = set()
         for pair_list in history_pairs.values():
             for a, b in pair_list:
                 seen_ids.add(a)

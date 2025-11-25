@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import pandas as pd
 
@@ -48,7 +48,7 @@ def load(
     folder_path: str,
     extensions: Optional[Iterable[str]] = None,
     *,
-    tag_dict: Optional[dict[str, Any]] = None,
+    tag_dict: Optional[Dict[str, Any]] = None,
     save_name: str = "gabriel_aggregated_content.csv",
     save_dir: Optional[str] = None,
     reset_files: bool = False,
@@ -105,7 +105,7 @@ def load(
     is_textual = _is_textual_modality(modality)
 
     path_key = "path"
-    rows: list[dict[str, Any]] = []
+    rows: List[Dict[str, Any]] = []
     max_layers = 0
 
     if os.path.isfile(folder_path):
@@ -182,11 +182,11 @@ def _build_row(
     file_path: str,
     name: str,
     layers: Iterable[str],
-    tag_dict: Optional[dict[str, Any]],
+    tag_dict: Optional[Dict[str, Any]],
     is_textual: bool,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     tag = _match_tag(name, tag_dict)
-    row: dict[str, Any] = {
+    row: Dict[str, Any] = {
         "name": name,
         "path": file_path,
         "tag": tag,
@@ -199,7 +199,7 @@ def _build_row(
     return row
 
 
-def _match_tag(name: str, tag_dict: Optional[dict[str, Any]]) -> Optional[Any]:
+def _match_tag(name: str, tag_dict: Optional[Dict[str, Any]]) -> Optional[Any]:
     if not tag_dict:
         return None
     lower_name = name.lower()
@@ -211,7 +211,7 @@ def _match_tag(name: str, tag_dict: Optional[dict[str, Any]]) -> Optional[Any]:
 
 def _resolve_modality(
     folder_path: str,
-    extset: Optional[set[str]],
+    extset: Optional[Set[str]],
     save_name: str,
     requested_modality: Optional[str],
 ) -> str:
@@ -230,7 +230,7 @@ def _resolve_modality(
 
 def _detect_modality(
     folder_path: str,
-    extset: Optional[set[str]],
+    extset: Optional[Set[str]],
     save_name: str,
 ) -> str:
     candidate = _find_candidate_file(folder_path, extset, save_name)
@@ -246,7 +246,7 @@ def _detect_modality(
 
 def _find_candidate_file(
     folder_path: str,
-    extset: Optional[set[str]],
+    extset: Optional[Set[str]],
     save_name: str,
 ) -> Optional[str]:
     if os.path.isfile(folder_path):
@@ -273,7 +273,7 @@ def _is_textual_modality(modality: str) -> bool:
 def _should_include_file(
     short_ext: str,
     modality: str,
-    extset: Optional[set[str]],
+    extset: Optional[Set[str]],
 ) -> bool:
     if extset and short_ext not in extset:
         return False
