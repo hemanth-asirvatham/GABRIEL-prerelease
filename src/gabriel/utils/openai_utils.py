@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import functools
+import importlib.util
 import inspect
 import json
 import os
@@ -45,6 +46,8 @@ import random
 import re
 import tempfile
 import time
+import subprocess
+import sys
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict, deque
 from collections.abc import Iterable
@@ -63,6 +66,15 @@ import tiktoken
 from dataclasses import dataclass, fields
 
 logger = get_logger(__name__)
+
+# Track whether the verbose usage sheet has been shown to avoid repeating the
+# static "info sheet" content on subsequent runs.
+_USAGE_SHEET_PRINTED = False
+_DEPENDENCIES_VERIFIED = False
+
+# Cap the number of prompts we fully scan when estimating words/tokens.  Large
+# datasets are sampled to keep start-up time predictable.
+_ESTIMATION_SAMPLE_SIZE = 5000
 
 # Try to import requests/httpx for rate‑limit introspection
 try:
@@ -340,6 +352,8 @@ def _estimate_cost(
     max_output_tokens: Optional[int],
     model: str,
     use_batch: bool,
+    *,
+    sample_size: int = _ESTIMATION_SAMPLE_SIZE,
 ) -> Optional[Dict[str, float]]:
     """Estimate input/output tokens and cost for a set of prompts.
 
@@ -349,8 +363,18 @@ def _estimate_cost(
     pricing = _lookup_model_pricing(model)
     if pricing is None:
         return None
-    # Estimate tokens: input tokens are sum of tokens per prompt times number of responses
-    input_tokens = sum(_approx_tokens(p) for p in prompts) * max(1, n)
+    # Estimate tokens: sample large datasets to avoid long start-up times.
+    total_prompts = len(prompts)
+    if total_prompts == 0:
+        return None
+    if sample_size and total_prompts > sample_size:
+        # Deterministic sampling keeps estimates stable across runs.
+        rng = random.Random(total_prompts)
+        sampled = rng.sample(prompts, sample_size)
+        avg_tokens = sum(_approx_tokens(p) for p in sampled) / float(sample_size)
+        input_tokens = int(avg_tokens * total_prompts * max(1, n))
+    else:
+        input_tokens = sum(_approx_tokens(p) for p in prompts) * max(1, n)
     # Estimate output tokens: when no cutoff is provided we assume a reasonable default
     # number of output tokens per prompt.  This prevents the cost estimate from
     # ballooning for long inputs, which previously assumed the output could be as long
@@ -372,6 +396,105 @@ def _estimate_cost(
         "output_cost": cost_out,
         "total_cost": cost_in + cost_out,
     }
+
+
+def _estimate_dataset_stats(
+    prompts: List[str],
+    *,
+    sample_size: int = _ESTIMATION_SAMPLE_SIZE,
+) -> Dict[str, Any]:
+    """Return rough totals for words and tokens without scanning massive datasets.
+
+    The helper samples up to ``sample_size`` prompts and scales the totals to the
+    full dataset.  This keeps initial reporting fast even for hundreds of
+    thousands of prompts.
+    """
+
+    total_prompts = len(prompts)
+    if total_prompts == 0:
+        return {"word_count": 0, "token_count": 0, "sampled": False, "sample_size": 0}
+    if sample_size and total_prompts > sample_size:
+        rng = random.Random(total_prompts)
+        sample = rng.sample(prompts, sample_size)
+        avg_words = sum(len(str(p).split()) for p in sample) / float(sample_size)
+        avg_tokens = sum(_approx_tokens(p) for p in sample) / float(sample_size)
+        return {
+            "word_count": int(avg_words * total_prompts),
+            "token_count": int(avg_tokens * total_prompts),
+            "sampled": True,
+            "sample_size": sample_size,
+        }
+    return {
+        "word_count": sum(len(str(p).split()) for p in prompts),
+        "token_count": sum(_approx_tokens(p) for p in prompts),
+        "sampled": False,
+        "sample_size": total_prompts,
+    }
+
+
+def _ensure_runtime_dependencies(packages: Optional[List[str]] = None, *, verbose: bool = True) -> None:
+    """Install missing runtime dependencies in a best-effort manner.
+
+    The function is intentionally lightweight: it checks for a small set of
+    packages and silently returns when everything is already present.  When a
+    package is missing, ``pip`` is invoked to install only the missing items so
+    the helper works in local, Colab, Databricks, and CI environments without
+    user intervention.
+    """
+
+    global _DEPENDENCIES_VERIFIED
+    if _DEPENDENCIES_VERIFIED:
+        return
+    pkgs = packages or ["wheel", "tiktoken", "aiolimiter", "httpx", "requests"]
+    missing = [pkg for pkg in pkgs if importlib.util.find_spec(pkg) is None]
+    if not missing:
+        _DEPENDENCIES_VERIFIED = True
+        return
+    if verbose:
+        print(
+            "Installing missing dependencies for GABRIEL (once per session): "
+            + ", ".join(sorted(missing))
+        )
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", *missing],
+            check=True,
+        )
+        _DEPENDENCIES_VERIFIED = True
+    except Exception as exc:
+        logger.warning("Automatic dependency installation failed: %s", exc)
+
+
+def _print_run_banner(
+    *,
+    prompts: List[str],
+    model: str,
+    n: int,
+    use_batch: bool,
+    estimated_cost: Optional[Dict[str, float]],
+    stats: Dict[str, Any],
+    verbose: bool = True,
+) -> None:
+    """Print an immediate run overview so users see progress right away."""
+
+    if not verbose:
+        return
+    print("\n===== Run kickoff =====")
+    print(f"Total prompts provided: {len(prompts):,}")
+    print(
+        f"Approximate input words: {stats.get('word_count', 0):,}" +
+        (" (sampled)" if stats.get("sampled") else "")
+    )
+    print(f"Model: {model}; responses per prompt: {max(1, n)}; mode: {'batch' if use_batch else 'streaming'}")
+    if estimated_cost:
+        print(
+            f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${estimated_cost['total_cost']:.4f} "
+            f"(input: ${estimated_cost['input_cost']:.4f}, output: ${estimated_cost['output_cost']:.4f})"
+        )
+    else:
+        print("Estimated cost unavailable for this model.")
+    print("Preparing checkpoints and rate limits...")
+
 
 
 def _require_api_key() -> str:
@@ -503,6 +626,9 @@ def _print_usage_overview(
     base_url: Optional[str] = None,
     web_search_warning: Optional[str] = None,
     web_search_parallel_note: Optional[str] = None,
+    show_static_sections: bool = True,
+    stats: Optional[Dict[str, Any]] = None,
+    sample_size: int = _ESTIMATION_SAMPLE_SIZE,
 ) -> None:
     """Print a summary of usage limits, cost estimate and tier information.
 
@@ -519,8 +645,10 @@ def _print_usage_overview(
         print(web_search_warning)
     if web_search_parallel_note:
         print(web_search_parallel_note)
+    stats = stats or _estimate_dataset_stats(prompts, sample_size=sample_size)
     print(f"Number of prompts: {len(prompts)}")
-    print(f"Total input words: {sum(len(str(p).split()) for p in prompts):,}")
+    suffix = " (sampled)" if stats.get("sampled") else ""
+    print(f"Total input words: {stats.get('word_count', 0):,}{suffix}")
     # Fetch fresh headers if not supplied.  Pass the model and base_url so the
     # helper knows which endpoint to probe when performing the dummy call.
     rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(model, base_url=base_url)
@@ -586,17 +714,18 @@ def _print_usage_overview(
             "Words per minute: unknown – approximate number of words you can process per minute."
         )
     # Let users know about monthly usage caps in addition to per‑minute limits.
-    print(
-        "\nNote: your organization also has a monthly usage cap based on your tier. See the usage tiers below for details."
-    )
-    # Display usage tiers succinctly
-    print("\nUsage tiers:")
-    for tier in TIER_INFO:
+    if show_static_sections:
         print(
-            f"  • {tier['tier']}: qualifies by {tier['qualification']}; monthly quota {tier['monthly_quota']}"
+            "\nNote: your organization also has a monthly usage cap based on your tier. See the usage tiers below for details."
         )
+        # Display usage tiers succinctly
+        print("\nUsage tiers:")
+        for tier in TIER_INFO:
+            print(
+                f"  • {tier['tier']}: qualifies by {tier['qualification']}; monthly quota {tier['monthly_quota']}"
+            )
     pricing = _lookup_model_pricing(model)
-    est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch)
+    est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
         print(
             f"\nPricing for model '{model}': input ${pricing['input']}/1M, output ${pricing['output']}/1M"
@@ -613,7 +742,10 @@ def _print_usage_overview(
         print(f"\nPricing for model '{model}' is unavailable; cannot estimate cost.")
     # Compute concurrency based on the retrieved rate limits and token/request budgets.
     try:
-        avg_input_tokens = sum(_approx_tokens(p) for p in prompts) / max(1, len(prompts))
+        token_total = stats.get("token_count") if stats is not None else None
+        avg_input_tokens = (token_total or sum(_approx_tokens(p) for p in prompts)) / max(
+            1, len(prompts)
+        )
         gating_output = max_output_tokens if max_output_tokens is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
         tokens_per_call = (avg_input_tokens + gating_output) * max(1, n)
         # Extract numeric values from the rate limit headers.  If a value is missing or
@@ -2327,6 +2459,7 @@ async def get_all_responses(
     global filters before each request, enabling DataFrame-driven location hints
     without hand-crafting separate dictionaries.
 """
+    global _USAGE_SHEET_PRINTED
     print("Initializing model calls and loading data...")
     if api_key is not None:
         os.environ["OPENAI_API_KEY"] = api_key
@@ -2345,6 +2478,25 @@ async def get_all_responses(
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
+    _ensure_runtime_dependencies(verbose=verbose)
+    dataset_stats = _estimate_dataset_stats(prompts)
+    cost_estimate = _estimate_cost(
+        prompts,
+        n,
+        max_output_tokens,
+        model,
+        use_batch,
+        sample_size=_ESTIMATION_SAMPLE_SIZE,
+    )
+    _print_run_banner(
+        prompts=prompts,
+        model=model,
+        n=n,
+        use_batch=use_batch,
+        estimated_cost=cost_estimate,
+        stats=dataset_stats,
+        verbose=verbose,
+    )
     response_param_names: Set[str] = set()
     response_accepts_var_kw = False
     response_accepts_return_raw = False
@@ -2532,6 +2684,11 @@ async def get_all_responses(
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
     save_path = os.path.expandvars(os.path.expanduser(save_path))
+    save_dir = Path(save_path).expanduser().resolve().parent
+    try:
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.debug("Could not create directory %s", save_dir)
     if reset_files:
         for p in (save_path, save_path + ".batch_state.json"):
             try:
@@ -2539,8 +2696,9 @@ async def get_all_responses(
                     os.remove(p)
             except Exception:
                 pass
+    csv_header_written = os.path.exists(save_path) and not reset_files and os.path.getsize(save_path) > 0
     if os.path.exists(save_path) and not reset_files:
-        print("Reading from existing files...")
+        print(f"Reading from existing files at {save_path}...")
         df = pd.read_csv(save_path)
         df = df.drop_duplicates(subset=["Identifier"], keep="last")
         df["Response"] = df["Response"].apply(_de)
@@ -2566,6 +2724,7 @@ async def get_all_responses(
             done = set(df.loc[df["Successful"] == True, "Identifier"])
         else:
             done = set(df["Identifier"])
+        print(f"Loaded {len(df):,} rows; {len(done):,} already marked complete.")
     else:
         cols = [
             "Identifier",
@@ -2582,6 +2741,7 @@ async def get_all_responses(
             cols.insert(7, "Reasoning Summary")
         df = pd.DataFrame(columns=cols)
         done = set()
+    written_identifiers: Set[Any] = set(df["Identifier"]) if not df.empty else set()
     # Helper to calculate and report final run cost
     def _report_cost() -> None:
         nonlocal df
@@ -2613,6 +2773,21 @@ async def get_all_responses(
     if not todo_pairs:
         _report_cost()
         return df
+    if len(todo_pairs) >= 10_000:
+        effective_save_every = save_every_x_responses
+        if len(todo_pairs) >= 50_000:
+            effective_save_every = max(save_every_x_responses, 2000)
+        elif len(todo_pairs) >= 20_000:
+            effective_save_every = max(save_every_x_responses, 1000)
+        elif len(todo_pairs) >= 10_000:
+            effective_save_every = max(save_every_x_responses, 500)
+        if effective_save_every != save_every_x_responses:
+            if verbose:
+                print(
+                    f"Large run detected ({len(todo_pairs):,} rows); autoscaling checkpoint frequency "
+                    f"to every {effective_save_every} responses (was {save_every_x_responses})."
+                )
+            save_every_x_responses = effective_save_every
     status.num_tasks_started = len(todo_pairs)
     status.num_tasks_in_progress = len(todo_pairs)
     if prompt_audio and any(prompt_audio.get(str(i)) for _, i in todo_pairs):
@@ -2634,6 +2809,7 @@ async def get_all_responses(
     if print_example_prompt and todo_pairs:
         # Build prompt list for cost estimate
         prompt_list = [p for p, _ in todo_pairs]
+        todo_stats = _estimate_dataset_stats(prompt_list, sample_size=_ESTIMATION_SAMPLE_SIZE)
         if not using_custom_response_fn:
             _print_usage_overview(
                 prompts=prompt_list,
@@ -2647,7 +2823,11 @@ async def get_all_responses(
                 base_url=base_url,
                 web_search_warning=web_search_warning_text,
                 web_search_parallel_note=web_search_parallel_note,
+                show_static_sections=not _USAGE_SHEET_PRINTED,
+                stats=todo_stats,
+                sample_size=_ESTIMATION_SAMPLE_SIZE,
             )
+            _USAGE_SHEET_PRINTED = True
             if web_search_warning_text:
                 web_search_warning_displayed = True
             if web_search_parallel_note:
@@ -2693,9 +2873,14 @@ async def get_all_responses(
             # Estimate the average number of tokens per call using tiktoken
             # for more accurate gating.  We include the expected output length
             # to ensure that long prompts reduce available parallelism.
+            sample_for_tokens = (
+                random.sample(todo_pairs, min(len(todo_pairs), _ESTIMATION_SAMPLE_SIZE))
+                if len(todo_pairs) > _ESTIMATION_SAMPLE_SIZE
+                else todo_pairs
+            )
             avg_input_tokens = (
-                sum(len(tokenizer.encode(p)) for p, _ in todo_pairs)
-                / max(1, len(todo_pairs))
+                sum(len(tokenizer.encode(p)) for p, _ in sample_for_tokens)
+                / max(1, len(sample_for_tokens))
             )
             gating_output = initial_estimated_output_tokens
             tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
@@ -2781,32 +2966,29 @@ async def get_all_responses(
 
         # Helper to append batch rows
         def _append_results(rows: List[Dict[str, Any]]) -> None:
-            nonlocal df
+            nonlocal df, csv_header_written, written_identifiers
             if not rows:
                 return
             batch_df = pd.DataFrame(rows)
-            batch_df["Response"] = batch_df["Response"].apply(_ser)
-            batch_df["Error Log"] = batch_df["Error Log"].apply(_ser)
-            if os.path.exists(save_path):
-                existing = pd.read_csv(save_path)
-                existing = existing[~existing["Identifier"].isin(batch_df["Identifier"])]
-                frames = [existing, batch_df]
-                frames = [f for f in frames if not f.dropna(how="all").empty]
-                combined = (
-                    pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=batch_df.columns)
-                )
-            else:
-                combined = batch_df
-            combined.to_csv(
+            batch_df = batch_df[~batch_df["Identifier"].isin(written_identifiers)]
+            if batch_df.empty:
+                return
+            to_save = batch_df.copy()
+            to_save["Response"] = to_save["Response"].apply(_ser)
+            to_save["Error Log"] = to_save["Error Log"].apply(_ser)
+            to_save.to_csv(
                 save_path,
-                mode="w",
-                header=True,
+                mode="a" if csv_header_written else "w",
+                header=not csv_header_written,
                 index=False,
                 quoting=csv.QUOTE_MINIMAL,
             )
-            combined["Response"] = combined["Response"].apply(_de)
-            combined["Error Log"] = combined["Error Log"].apply(_de)
-            df = combined
+            csv_header_written = True
+            if df.empty:
+                df = batch_df.reset_index(drop=True)
+            else:
+                df = pd.concat([df, batch_df], ignore_index=True)
+            written_identifiers.update(batch_df["Identifier"])
 
         client = _get_client(base_url)
         # Load existing state
@@ -3323,31 +3505,27 @@ async def get_all_responses(
     emit_parallelization_status("Initial parallelization settings", force=True)
 
     async def flush() -> None:
-        nonlocal results, df, processed
+        nonlocal results, df, processed, csv_header_written, written_identifiers
         if results:
             batch_df = pd.DataFrame(results)
-            batch_df["Response"] = batch_df["Response"].apply(_ser)
-            batch_df["Error Log"] = batch_df["Error Log"].apply(_ser)
-            if os.path.exists(save_path):
-                existing = pd.read_csv(save_path)
-                existing = existing[~existing["Identifier"].isin(batch_df["Identifier"])]
-                frames = [existing, batch_df]
-                frames = [f for f in frames if not f.dropna(how="all").empty]
-                combined = (
-                    pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=batch_df.columns)
+            batch_df = batch_df[~batch_df["Identifier"].isin(written_identifiers)]
+            if not batch_df.empty:
+                to_save = batch_df.copy()
+                to_save["Response"] = to_save["Response"].apply(_ser)
+                to_save["Error Log"] = to_save["Error Log"].apply(_ser)
+                to_save.to_csv(
+                    save_path,
+                    mode="a" if csv_header_written else "w",
+                    header=not csv_header_written,
+                    index=False,
+                    quoting=csv.QUOTE_MINIMAL,
                 )
-            else:
-                combined = batch_df
-            combined.to_csv(
-                save_path,
-                mode="w",
-                header=True,
-                index=False,
-                quoting=csv.QUOTE_MINIMAL,
-            )
-            combined["Response"] = combined["Response"].apply(_de)
-            combined["Error Log"] = combined["Error Log"].apply(_de)
-            df = combined
+                csv_header_written = True
+                if df.empty:
+                    df = batch_df.reset_index(drop=True)
+                else:
+                    df = pd.concat([df, batch_df], ignore_index=True)
+                written_identifiers.update(batch_df["Identifier"])
             results = []
         if logger.isEnabledFor(logging.INFO) and processed:
             logger.info(
