@@ -84,6 +84,7 @@ async def rate(
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    search_context_size: str = "medium",
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
@@ -102,6 +103,7 @@ async def rate(
         modality=modality,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        search_context_size=search_context_size,
         **cfg_kwargs,
     )
     return await Rate(cfg, template_path=template_path).run(
@@ -222,6 +224,7 @@ async def classify(
     modality: str = "text",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    search_context_size: str = "medium",
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
@@ -242,6 +245,7 @@ async def classify(
         modality=modality,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        search_context_size=search_context_size,
         **cfg_kwargs,
     )
     return await Classify(cfg, template_path=template_path).run(

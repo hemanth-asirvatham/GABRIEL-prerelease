@@ -43,6 +43,7 @@ class RateConfig:
     n_attributes_per_run: int = 8
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    search_context_size: str = "medium"
 
     def __post_init__(self) -> None:
         if self.additional_instructions is not None:
@@ -195,6 +196,7 @@ class Rate:
                 pass
 
         kwargs.setdefault("web_search", self.cfg.modality == "web")
+        kwargs.setdefault("search_context_size", self.cfg.search_context_size)
 
         if not isinstance(self.cfg.n_runs, int) or self.cfg.n_runs < 1:
             raise ValueError("n_runs must be an integer >= 1")
