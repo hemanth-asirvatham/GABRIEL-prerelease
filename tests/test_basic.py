@@ -321,6 +321,21 @@ def test_get_all_responses_dummy(tmp_path):
     assert df["Successful"].all()
 
 
+def test_get_all_responses_quiet_minimizes_output(tmp_path, capsys):
+    asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["a"],
+            identifiers=["1"],
+            save_path=str(tmp_path / "quiet.csv"),
+            use_dummy=True,
+            quiet=True,
+            status_report_interval=0.01,
+        )
+    )
+    captured = capsys.readouterr().out
+    assert "Initializing model calls" not in captured
+
+
 def test_get_all_responses_images_dummy(tmp_path):
     df = asyncio.run(
         openai_utils.get_all_responses(
@@ -1269,4 +1284,3 @@ def test_paraphrase_api(tmp_path):
         )
     )
     assert "txt_revised_1" in df_multi.columns and "txt_revised_2" in df_multi.columns
-

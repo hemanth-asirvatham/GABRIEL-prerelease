@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
+import warnings
 from typing import Dict, Optional, Set
 
 from jinja2 import Environment, PackageLoader, meta
@@ -82,7 +83,16 @@ class PromptTemplate:
                     parts.append(f"missing variables: {sorted(missing)}")
                 if extra:
                     parts.append(f"unexpected variables: {sorted(extra)}")
-                raise ValueError("Custom template variable mismatch (" + "; ".join(parts) + ")")
+                msg = "Custom template variable mismatch (" + "; ".join(parts) + ")"
+                required = {v for v in vars_ref if v in {"text", "attributes"}}
+                missing_required = required - vars_custom
+                if missing_required:
+                    raise ValueError(msg)
+                warnings.warn(
+                    msg + "; proceeding because required variables are present.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         return cls(text)
 
     @classmethod
