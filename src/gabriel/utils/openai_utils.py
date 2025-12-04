@@ -2373,6 +2373,7 @@ async def get_all_responses(
     max_batch_file_bytes: int = 100 * 1024 * 1024,
     save_every_x_responses: int = 100,
     verbose: bool = True,
+    quiet: bool = False,
     global_cooldown: int = 15,
     rate_limit_window: float = 30.0,
     token_sample_size: int = 20,
@@ -2468,7 +2469,9 @@ async def get_all_responses(
     without hand-crafting separate dictionaries.
 """
     global _USAGE_SHEET_PRINTED
-    print("Initializing model calls and loading data...")
+    message_verbose = bool(verbose and not quiet)
+    if message_verbose:
+        print("Initializing model calls and loading data...")
     if api_key is not None:
         os.environ["OPENAI_API_KEY"] = api_key
     response_callable = response_fn or get_response
@@ -2486,7 +2489,7 @@ async def get_all_responses(
         _require_api_key()
     set_log_level(logging_level)
     logger = get_logger(__name__)
-    _ensure_runtime_dependencies(verbose=verbose)
+    _ensure_runtime_dependencies(verbose=message_verbose)
     dataset_stats = _estimate_dataset_stats(prompts)
     cost_estimate = _estimate_cost(
         prompts,
@@ -2503,7 +2506,7 @@ async def get_all_responses(
         use_batch=use_batch,
         estimated_cost=cost_estimate,
         stats=dataset_stats,
-        verbose=verbose,
+        verbose=message_verbose,
     )
     response_param_names: Set[str] = set()
     response_accepts_var_kw = False
@@ -2589,6 +2592,8 @@ async def get_all_responses(
         else:
             if status_report_interval <= 0:
                 status_report_interval = None
+    if quiet:
+        status_report_interval = None
     base_url = base_url or os.getenv("OPENAI_BASE_URL")
     # ``use_web_search`` was the original parameter name; ``web_search`` is the
     # preferred modern spelling.  If both are supplied we favour ``web_search``
@@ -2706,7 +2711,8 @@ async def get_all_responses(
                 pass
     csv_header_written = os.path.exists(save_path) and not reset_files and os.path.getsize(save_path) > 0
     if os.path.exists(save_path) and not reset_files:
-        print(f"Reading from existing files at {save_path}...")
+        if message_verbose:
+            print(f"Reading from existing files at {save_path}...")
         df = pd.read_csv(save_path)
         df = df.drop_duplicates(subset=["Identifier"], keep="last")
         df["Response"] = df["Response"].apply(_de)
@@ -2732,7 +2738,8 @@ async def get_all_responses(
             done = set(df.loc[df["Successful"] == True, "Identifier"])
         else:
             done = set(df["Identifier"])
-        print(f"Loaded {len(df):,} rows; {len(done):,} already marked complete.")
+        if message_verbose:
+            print(f"Loaded {len(df):,} rows; {len(done):,} already marked complete.")
     else:
         cols = [
             "Identifier",
@@ -2774,7 +2781,8 @@ async def get_all_responses(
         msg = (
             f"Actual total cost: ${total_cost:.4f}; average per row: ${avg_row:.4f}; average per 1000 rows: ${avg_1000:.4f}"
         )
-        print(msg)
+        if message_verbose:
+            print(msg)
         logger.info(msg)
     # Filter prompts/identifiers based on what is already completed
     todo_pairs = [(p, i) for p, i in zip(prompts, identifiers) if i not in done]
@@ -2790,7 +2798,7 @@ async def get_all_responses(
         elif len(todo_pairs) >= 10_000:
             effective_save_every = max(save_every_x_responses, 500)
         if effective_save_every != save_every_x_responses:
-            if verbose:
+            if message_verbose:
                 print(
                     f"Large run detected ({len(todo_pairs):,} rows); autoscaling checkpoint frequency "
                     f"to every {effective_save_every} responses (was {save_every_x_responses})."
@@ -2813,8 +2821,9 @@ async def get_all_responses(
         logger.warning(
             f"You are attempting to process {len(todo_pairs):,} prompts in one go. For better performance and reliability, we recommend splitting jobs into 50k‑row chunks or fewer."
         )
+    show_example_prompt = bool(print_example_prompt and not quiet)
     # Print usage summary and example prompt
-    if print_example_prompt and todo_pairs:
+    if show_example_prompt and todo_pairs:
         # Build prompt list for cost estimate
         prompt_list = [p for p, _ in todo_pairs]
         todo_stats = _estimate_dataset_stats(prompt_list, sample_size=_ESTIMATION_SAMPLE_SIZE)
@@ -2826,7 +2835,7 @@ async def get_all_responses(
                 model=model,
                 use_batch=use_batch,
                 n_parallels=requested_n_parallels,
-                verbose=verbose,
+                verbose=message_verbose,
                 rate_headers=rate_headers,
                 base_url=base_url,
                 web_search_warning=web_search_warning_text,
@@ -2840,7 +2849,7 @@ async def get_all_responses(
                 web_search_warning_displayed = True
             if web_search_parallel_note:
                 web_search_note_displayed = True
-        elif verbose:
+        elif message_verbose:
             print(
                 "\n===== Job summary ====="
                 f"\nNumber of prompts: {len(prompt_list)}"
@@ -2857,10 +2866,10 @@ async def get_all_responses(
             )
         example_prompt, _ = todo_pairs[0]
         logger.warning(f"Example prompt: {example_prompt}")
-    if verbose and web_search_warning_text and not web_search_warning_displayed:
+    if message_verbose and web_search_warning_text and not web_search_warning_displayed:
         print(web_search_warning_text)
         web_search_warning_displayed = True
-    if verbose and web_search_parallel_note and not web_search_note_displayed:
+    if message_verbose and web_search_parallel_note and not web_search_note_displayed:
         print(web_search_parallel_note)
         web_search_note_displayed = True
     # Dynamically adjust the maximum number of parallel workers based on rate
@@ -3505,6 +3514,8 @@ async def get_all_responses(
 
         if not force and status_report_interval is None and not verbose:
             return
+        if quiet and not force:
+            return
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         msg = (
             f"[parallelization] {timestamp} | {reason}: "
@@ -3512,7 +3523,8 @@ async def get_all_responses(
             f"queue={queue.qsize()}, processed={processed}/{status.num_tasks_started}, "
             f"rate_limit_errors={status.num_rate_limit_errors}"
         )
-        print(msg)
+        if message_verbose:
+            print(msg)
         logger.info(msg)
 
     emit_parallelization_status("Initial parallelization settings", force=True)

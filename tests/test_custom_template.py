@@ -22,17 +22,25 @@ def test_custom_template_matches_variables(tmp_path):
 
 
 def test_custom_template_variable_mismatch(tmp_path):
-    """Mismatched variables should raise a descriptive error."""
+    """Missing required variables should raise a descriptive error."""
 
-    ref = resources.files("gabriel.prompts").joinpath("ratings_prompt.jinja2").read_text(
-        encoding="utf-8"
-    )
-    # Replace a known variable with an unexpected one
-    wrong = ref.replace("{{ attributes | shuffled_dict }}", "{{ wrong }}")
     wrong_path = tmp_path / "wrong.jinja2"
-    wrong_path.write_text(wrong, encoding="utf-8")
+    wrong_path.write_text("{{ text }}", encoding="utf-8")
 
     with pytest.raises(ValueError) as excinfo:
         PromptTemplate.from_file(str(wrong_path), reference_filename="ratings_prompt.jinja2")
     msg = str(excinfo.value)
     assert "missing variables" in msg or "unexpected variables" in msg
+
+
+def test_custom_template_allows_minimum_required(tmp_path):
+    """Templates with only required fields should be accepted with a warning."""
+
+    custom_path = tmp_path / "loose.jinja2"
+    custom_path.write_text("{{ text }} || {{ attributes }}", encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="Custom template variable mismatch"):
+        tmpl = PromptTemplate.from_file(str(custom_path), reference_filename="ratings_prompt.jinja2")
+    rendered = tmpl.render(text="hello", attributes={"a": "1"})
+    assert "hello" in rendered
+    assert "a" in rendered
