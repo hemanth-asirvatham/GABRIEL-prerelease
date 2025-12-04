@@ -158,7 +158,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2500
 # When a user does not explicitly set ``max_output_tokens``, we assume that each response
 # will contain roughly this many tokens.  This value is used solely for estimating cost
 # and determining how many parallel requests can safely run under the token budget.
-ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 2500
+ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 750
 
 # ---------------------------------------------------------------------------
 # Helper dataclasses and token utilities
