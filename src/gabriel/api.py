@@ -162,7 +162,7 @@ async def seed(
     *,
     save_dir: str,
     file_name: str = "seed_entities.csv",
-    model: str = "o3-mini",
+    model: str = "gpt-5.1",
     n_parallels: int = 400,
     num_entities: int = 1000,
     entities_per_generation: int = 50,
