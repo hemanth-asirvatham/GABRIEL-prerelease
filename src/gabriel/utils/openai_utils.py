@@ -48,6 +48,8 @@ import tempfile
 import time
 import subprocess
 import sys
+import html
+import textwrap
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict, deque
 from collections.abc import Iterable
@@ -120,6 +122,56 @@ def _progress_bar(*args: Any, verbose: bool = True, **kwargs: Any):
     return tqdm(*args, disable=disable, **kwargs)
 
 
+def _in_notebook() -> bool:
+    """Return True when running inside a Jupyter/colab notebook."""
+
+    try:
+        from IPython import get_ipython  # type: ignore
+
+        shell = get_ipython()
+        if shell is None:
+            return False
+        return shell.__class__.__name__ == "ZMQInteractiveShell"
+    except Exception:
+        return False
+
+
+def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> None:
+    """Show a concise example prompt with a collapsible view in notebooks."""
+
+    if not verbose or not example_prompt:
+        return
+    show_full = os.getenv("GABRIEL_SHOW_FULL_EXAMPLE_PROMPT", "").strip().lower() in {"1", "true", "yes"}
+    collapsed = False
+    if _in_notebook():
+        try:
+            from IPython.display import HTML, display  # type: ignore
+
+            html_content = html.escape(example_prompt)
+            display(
+                HTML(
+                    "<details>"
+                    "<summary>Example prompt (click to expand)</summary>"
+                    f"<pre style=\"white-space: pre-wrap; word-break: break-word;\">{html_content}</pre>"
+                    "</details>"
+                )
+            )
+            collapsed = True
+        except Exception:
+            collapsed = False
+    if collapsed or show_full:
+        print("Example prompt: (collapsed above for easier reading)")
+        if show_full and not collapsed:
+            print(textwrap.indent(example_prompt, "  "))
+    else:
+        preview_limit = 500
+        preview = example_prompt if len(example_prompt) <= preview_limit else example_prompt[:preview_limit] + "…"
+        print("Example prompt:")
+        print(textwrap.indent(preview, "  "))
+        if len(example_prompt) > preview_limit:
+            print("  (truncated; set GABRIEL_SHOW_FULL_EXAMPLE_PROMPT=1 to print the full prompt)")
+
+
 def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
     """Return a cached ``AsyncOpenAI`` client for ``base_url``.
 
@@ -159,6 +211,12 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2500
 # will contain roughly this many tokens.  This value is used solely for estimating cost
 # and determining how many parallel requests can safely run under the token budget.
 ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 250
+
+# Conservative headroom when translating observed rate limits into concurrency and limiter budgets.
+# Using less than the reported limit provides a buffer for short spikes and accounting inaccuracies.
+RATE_LIMIT_HEADROOM = 0.9
+# Buffer applied to the estimated tokens per call to avoid optimistic throughput estimates.
+TOKEN_ESTIMATE_BUFFER = 1.15
 
 # ---------------------------------------------------------------------------
 # Helper dataclasses and token utilities
@@ -226,6 +284,12 @@ def _extract_retry_after_seconds(error: Exception) -> Optional[float]:
         if parsed > 0:
             return parsed
     return None
+
+
+def _is_quota_error_message(message: str) -> bool:
+    """Return True when the error text indicates an exhausted quota."""
+
+    return bool(message) and "quota" in message.lower()
 
 
 def _get_tokenizer(model_name: str) -> tiktoken.Encoding:
@@ -488,12 +552,11 @@ def _print_run_banner(
     if not verbose:
         return
     print("\n===== Run kickoff =====")
-    print(f"Total prompts provided: {len(prompts):,}")
     print(
-        f"Approximate input words: {stats.get('word_count', 0):,}" +
-        (" (sampled)" if stats.get("sampled") else "")
+        f"Prompts: {len(prompts):,} | Approx. words: {stats.get('word_count', 0):,}"
+        f"{' (sampled)' if stats.get('sampled') else ''}"
     )
-    print(f"Model: {model}; responses per prompt: {max(1, n)}; mode: {'batch' if use_batch else 'streaming'}")
+    print(f"Model: {model} | Mode: {'batch' if use_batch else 'streaming'}")
     if estimated_cost:
         print(
             f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${estimated_cost['total_cost']:.4f} "
@@ -654,9 +717,9 @@ def _print_usage_overview(
     if web_search_parallel_note:
         print(web_search_parallel_note)
     stats = stats or _estimate_dataset_stats(prompts, sample_size=sample_size)
-    print(f"Number of prompts: {len(prompts)}")
+    print(f"Prompts: {len(prompts)}")
     suffix = " (sampled)" if stats.get("sampled") else ""
-    print(f"Total input words: {stats.get('word_count', 0):,}{suffix}")
+    print(f"Approx. input words: {stats.get('word_count', 0):,}{suffix}")
     # Fetch fresh headers if not supplied.  Pass the model and base_url so the
     # helper knows which endpoint to probe when performing the dummy call.
     rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(model, base_url=base_url)
@@ -701,26 +764,24 @@ def _print_usage_overview(
     # capacities are shown; remaining quotas and reset timers are omitted
     # to reduce clutter.  Unknown values are labelled as "unknown".
     if lim_r_val is not None:
-        print(
-            f"Requests per minute: {fmt(lim_r_val)} – maximum API calls you can make each minute."
-        )
+        print(f"Requests per minute: {fmt(lim_r_val)}")
     else:
-        print("Requests per minute: unknown – maximum API calls you can make each minute.")
+        print("Requests per minute: unknown (API did not share a request limit)")
     if lim_t_val is not None:
-        print(
-            f"Tokens per minute: {fmt(lim_t_val)} – maximum input + output tokens allowed per minute."
-        )
+        print(f"Tokens per minute: {fmt(lim_t_val)}")
         words_per_min = int(lim_t_val) // 2
-        print(
-            f"Words per minute: {words_per_min:,} – approximate number of words you can process per minute (2 tokens ≈ 1 word)."
-        )
+        print(f"Approx. words per minute: {words_per_min:,}")
     else:
-        print(
-            "Tokens per minute: unknown – maximum input + output tokens allowed per minute."
+        print("Tokens per minute: unknown (API did not share a token limit)")
+        print("Approx. words per minute: unknown")
+    if lim_r_val is None or lim_t_val is None:
+        warning_msg = (
+            "⚠️ API did not return complete rate-limit headers. Running with conservative defaults. "
+            "If you are on a free/low-balance plan, add funds to avoid quota blocks: "
+            "https://platform.openai.com/settings/organization/billing/"
         )
-        print(
-            "Words per minute: unknown – approximate number of words you can process per minute."
-        )
+        print(warning_msg)
+        logger.warning(warning_msg)
     # Let users know about monthly usage caps in addition to per‑minute limits.
     if show_static_sections:
         print(
@@ -2865,7 +2926,9 @@ async def get_all_responses(
                 "Skipping OpenAI usage overview because a custom response_fn was supplied."
             )
         example_prompt, _ = todo_pairs[0]
-        logger.warning(f"Example prompt: {example_prompt}")
+        _display_example_prompt(example_prompt, verbose=message_verbose)
+        if not message_verbose:
+            logger.info("Example prompt omitted from logs because verbose output is disabled.")
     if message_verbose and web_search_warning_text and not web_search_warning_displayed:
         print(web_search_warning_text)
         web_search_warning_displayed = True
@@ -2901,6 +2964,7 @@ async def get_all_responses(
             )
             gating_output = initial_estimated_output_tokens
             tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
+            tokens_per_call *= TOKEN_ESTIMATE_BUFFER
 
             def _pf(val: Optional[str]) -> Optional[float]:
                 try:
@@ -2927,21 +2991,28 @@ async def get_all_responses(
                 rem_t = _pf(rate_headers.get("remaining_tokens")) or _pf(
                     rate_headers.get("remaining_tokens_usage_based")
                 )
+            def _with_headroom(val: Optional[float]) -> Optional[int]:
+                if val is None:
+                    return None
+                return int(max(1, math.floor(val * RATE_LIMIT_HEADROOM)))
+
             initial_req_budget = rem_r if rem_r is not None else lim_r
             initial_tok_budget = rem_t if rem_t is not None else lim_t
+            req_budget_for_cap = _with_headroom(initial_req_budget)
+            tok_budget_for_cap = _with_headroom(initial_tok_budget)
             concurrency_candidates = [requested_n_parallels]
-            if initial_req_budget is not None:
-                concurrency_candidates.append(int(max(1, initial_req_budget)))
-            if initial_tok_budget is not None:
+            if req_budget_for_cap is not None:
+                concurrency_candidates.append(req_budget_for_cap)
+            if tok_budget_for_cap is not None:
                 concurrency_candidates.append(
-                    int(max(1, initial_tok_budget // tokens_per_call))
+                    int(max(1, tok_budget_for_cap // tokens_per_call))
                 )
             concurrency_cap = max(1, min(concurrency_candidates))
             ceiling_candidates = [requested_n_parallels]
-            ceiling_req_budget = lim_r if lim_r is not None else initial_req_budget
-            ceiling_tok_budget = lim_t if lim_t is not None else initial_tok_budget
+            ceiling_req_budget = _with_headroom(lim_r if lim_r is not None else initial_req_budget)
+            ceiling_tok_budget = _with_headroom(lim_t if lim_t is not None else initial_tok_budget)
             if ceiling_req_budget is not None:
-                ceiling_candidates.append(int(max(1, ceiling_req_budget)))
+                ceiling_candidates.append(ceiling_req_budget)
             if ceiling_tok_budget is not None:
                 ceiling_candidates.append(
                     int(max(1, ceiling_tok_budget // tokens_per_call))
@@ -2953,16 +3024,16 @@ async def get_all_responses(
                 logger.info(
                     f"[parallel reduction] Limiting parallel workers from {requested_n_parallels} to {concurrency_cap} based on your current rate limits. Consider upgrading your plan for faster processing."
                 )
-            if lim_r is not None:
-                allowed_req_pm = int(max(1, lim_r))
-            elif initial_req_budget is not None:
-                allowed_req_pm = int(max(1, initial_req_budget))
+            if ceiling_req_budget is not None:
+                allowed_req_pm = ceiling_req_budget
+            elif req_budget_for_cap is not None:
+                allowed_req_pm = req_budget_for_cap
             else:
                 allowed_req_pm = max(1, max_parallel_ceiling)
-            if lim_t is not None:
-                allowed_tok_pm = int(max(1, lim_t))
-            elif initial_tok_budget is not None:
-                allowed_tok_pm = int(max(1, initial_tok_budget))
+            if ceiling_tok_budget is not None:
+                allowed_tok_pm = ceiling_tok_budget
+            elif tok_budget_for_cap is not None:
+                allowed_tok_pm = tok_budget_for_cap
             else:
                 allowed_tok_pm = int(max(1, max_parallel_ceiling * tokens_per_call))
             estimated_tokens_per_call = tokens_per_call
@@ -3475,8 +3546,8 @@ async def get_all_responses(
     estimated_output_tokens = initial_estimated_output_tokens
     limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
-    limiter_wait_ratio_threshold = 0.25
-    limiter_wait_duration_threshold = 0.5
+    limiter_wait_ratio_threshold = 0.2
+    limiter_wait_duration_threshold = 0.35
 
     def _aggregate_usage(raw_items: List[Any]) -> Tuple[int, int, int]:
         total_in = total_out = total_reason = 0
@@ -3625,15 +3696,15 @@ async def get_all_responses(
         while rate_limit_error_times and rate_limit_error_times[0] < window_start:
             rate_limit_error_times.popleft()
         recent_errors = len(rate_limit_error_times)
-        error_window_threshold = max(25, int(math.ceil(concurrency_cap * 0.25)))
-        consecutive_threshold = max(10, int(math.ceil(concurrency_cap * 0.2)))
+        error_window_threshold = max(10, int(math.ceil(concurrency_cap * 0.15)))
+        consecutive_threshold = max(5, int(math.ceil(concurrency_cap * 0.1)))
         should_scale_down = False
         if recent_errors >= error_window_threshold:
             should_scale_down = True
         elif rate_limit_errors_since_adjust >= consecutive_threshold:
             should_scale_down = True
         if should_scale_down and (now - last_concurrency_scale_down) >= rate_limit_window:
-            decrement = max(1, int(math.ceil(max(concurrency_cap * 0.15, 1))))
+            decrement = max(1, int(math.ceil(max(concurrency_cap * 0.25, 2))))
             new_cap = max(1, concurrency_cap - decrement)
             if new_cap != concurrency_cap:
                 old_cap = concurrency_cap
@@ -3651,10 +3722,11 @@ async def get_all_responses(
             rate_limit_error_times.clear()
             last_concurrency_scale_down = now
             return
-        if rate_limit_errors_since_adjust == 0 and concurrency_cap < max_parallel_ceiling:
-            success_threshold = max(20, int(math.ceil(concurrency_cap * 0.8)))
+        quiet_since_last_error = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
+        if rate_limit_errors_since_adjust == 0 and concurrency_cap < max_parallel_ceiling and quiet_since_last_error:
+            success_threshold = max(30, int(math.ceil(concurrency_cap * 1.2)))
             if successes_since_adjust >= success_threshold:
-                increment = max(1, int(math.ceil(max(concurrency_cap * 0.25, 1))))
+                increment = max(1, int(math.ceil(max(concurrency_cap * 0.1, 1))))
                 new_cap = min(max_parallel_ceiling, concurrency_cap + increment)
                 if new_cap != concurrency_cap:
                     old_cap = concurrency_cap
@@ -3849,6 +3921,13 @@ async def get_all_responses(
                     new_cap = min(max_parallel_ceiling, req_limited, token_limited)
                     if new_cap < 1:
                         new_cap = 1
+                    safe_to_increase = (time.time() - status.time_of_last_rate_limit_error) >= rate_limit_window
+                    if new_cap > concurrency_cap:
+                        max_increase = max(1, int(math.ceil(concurrency_cap * 0.1)))
+                        if not safe_to_increase:
+                            new_cap = concurrency_cap
+                        else:
+                            new_cap = min(new_cap, concurrency_cap + max_increase)
                     limiter_pressure = False
                     if (
                         limiter_wait_ratio >= limiter_wait_ratio_threshold
@@ -4003,11 +4082,58 @@ async def get_all_responses(
                 status.num_rate_limit_errors += 1
                 status.time_of_last_rate_limit_error = time.time()
                 cooldown_until = status.time_of_last_rate_limit_error + global_cooldown
+                error_text = str(e)
                 logger.warning(f"Rate limit error for {ident}: {e}")
-                error_logs[ident].append(str(e))
+                error_logs[ident].append(error_text)
                 rate_limit_error_times.append(time.time())
                 rate_limit_errors_since_adjust += 1
                 successes_since_adjust = 0
+                if _is_quota_error_message(error_text):
+                    fatal_msg = (
+                        "Quota exceeded (billing or credit balance likely exhausted). "
+                        "Add funds at https://platform.openai.com/settings/organization/billing/. "
+                        "Stopping remaining requests."
+                    )
+                    logger.error(fatal_msg)
+                    error_logs[ident].append(fatal_msg)
+                    row = {
+                        "Identifier": ident,
+                        "Response": None,
+                        "Time Taken": None,
+                        "Input Tokens": input_tokens,
+                        "Reasoning Tokens": None,
+                        "Output Tokens": None,
+                        "Reasoning Effort": get_response_kwargs.get(
+                            "reasoning_effort", reasoning_effort
+                        ),
+                        "Successful": False,
+                        "Error Log": error_logs.get(ident, []),
+                    }
+                    if response_ids:
+                        row["Response IDs"] = response_ids
+                    if reasoning_summary is not None:
+                        row["Reasoning Summary"] = None
+                    results.append(row)
+                    processed += 1
+                    status.num_tasks_failed += 1
+                    status.num_tasks_in_progress -= 1
+                    pbar.update(1)
+                    drained = 0
+                    while not queue.empty():
+                        try:
+                            queue.get_nowait()
+                            queue.task_done()
+                            drained += 1
+                        except asyncio.QueueEmpty:
+                            break
+                    if drained:
+                        status.num_tasks_failed += drained
+                        status.num_tasks_in_progress -= drained
+                        processed += drained
+                        pbar.update(drained)
+                    stop_event.set()
+                    await flush()
+                    raise RuntimeError(fatal_msg)
                 maybe_adjust_concurrency()
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
