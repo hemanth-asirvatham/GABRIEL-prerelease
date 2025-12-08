@@ -48,6 +48,7 @@ import tempfile
 import time
 import subprocess
 import sys
+import html
 import textwrap
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict, deque
@@ -140,16 +141,50 @@ def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> Non
 
     if not verbose or not example_prompt:
         return
+    show_full = os.getenv("GABRIEL_SHOW_FULL_EXAMPLE_PROMPT", "").strip().lower() in {"1", "true", "yes"}
+    force_plain = os.getenv("GABRIEL_EXAMPLE_PROMPT_PLAIN", "").strip().lower() in {"1", "true", "yes"}
+    collapsed = False
     saved_path: Optional[Path] = None
     try:
         saved_path = Path(tempfile.gettempdir()) / "gabriel_example_prompt.txt"
         saved_path.write_text(example_prompt)
     except Exception:
         saved_path = None
-    print("Example prompt (full text):")
-    print(textwrap.indent(example_prompt, "  "))
+    if _in_notebook():
+        try:
+            from IPython.display import HTML, display  # type: ignore
+
+            if not force_plain:
+                html_content = html.escape(example_prompt)
+                block_id = f"gabriel-example-prompt-{abs(hash(example_prompt)) % 10**8}"
+                display(
+                    HTML(
+                        "<details>"
+                        "<summary>Example prompt (click to expand)</summary>"
+                        "<div style=\"margin-top: 0.5em;\">"
+                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
+                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy to clipboard</button>"
+                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{html_content}</pre>"
+                        "</div>"
+                        "</details>"
+                    )
+                )
+                collapsed = True
+        except Exception:
+            collapsed = False
+    if collapsed or show_full:
+        print("Example prompt: (collapsed above for easier reading)")
+        if show_full and not collapsed:
+            print(textwrap.indent(example_prompt, "  "))
+    else:
+        preview_limit = 500
+        preview = example_prompt if len(example_prompt) <= preview_limit else example_prompt[:preview_limit] + "…"
+        print("Example prompt:")
+        print(textwrap.indent(preview, "  "))
+        if len(example_prompt) > preview_limit:
+            print("  (truncated; set GABRIEL_SHOW_FULL_EXAMPLE_PROMPT=1 to print the full prompt)")
     if saved_path:
-        print(f"(Saved full example prompt to {saved_path} for easy copy/paste.)")
+        print(f"(Example prompt saved to {saved_path} for easy copy/paste if the rich view is unavailable.)")
 
 
 def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
@@ -779,6 +814,26 @@ def _print_usage_overview(
         print("\nUsage tiers:")
         for line in tier_lines:
             print(f"  {line}")
+        if _in_notebook():
+            try:
+                from IPython.display import HTML, display  # type: ignore
+
+                tier_text = html.escape("\n".join(tier_lines))
+                block_id = "gabriel-tier-info"
+                display(
+                    HTML(
+                        "<details>"
+                        "<summary>Usage tiers (click to expand / copy)</summary>"
+                        "<div style=\"margin-top: 0.35em;\">"
+                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
+                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy tiers</button>"
+                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{tier_text}</pre>"
+                        "</div>"
+                        "</details>"
+                    )
+                )
+            except Exception:
+                pass
     pricing = _lookup_model_pricing(model)
     est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
@@ -3547,15 +3602,11 @@ async def get_all_responses(
     estimated_output_tokens = initial_estimated_output_tokens
     limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
-    limiter_wait_ratio_threshold = 0.35
-    limiter_wait_duration_threshold = 0.6
-    token_adjust_cooldown = max(25.0, rate_limit_window)
-    token_adjust_eval_interval = max(5.0, rate_limit_window * 0.25)
+    limiter_wait_ratio_threshold = 0.2
+    limiter_wait_duration_threshold = 0.35
+    token_adjust_cooldown = max(15.0, rate_limit_window * 0.5)
     last_token_adjust = 0.0
-    last_token_adjust_eval = 0.0
-    last_token_adjust_log = 0.0
-    token_adjust_log_cooldown = 20.0
-    token_adjust_min_delta = max(1, int(math.ceil(max_parallel_ceiling * 0.05)))
+    token_adjust_min_delta = max(1, int(math.ceil(max_parallel_ceiling * 0.02)))
 
     def _aggregate_usage(raw_items: List[Any]) -> Tuple[int, int, int]:
         total_in = total_out = total_reason = 0
@@ -3704,15 +3755,15 @@ async def get_all_responses(
         while rate_limit_error_times and rate_limit_error_times[0] < window_start:
             rate_limit_error_times.popleft()
         recent_errors = len(rate_limit_error_times)
-        error_window_threshold = max(6, int(math.ceil(concurrency_cap * 0.10)))
-        consecutive_threshold = max(3, int(math.ceil(concurrency_cap * 0.08)))
+        error_window_threshold = max(10, int(math.ceil(concurrency_cap * 0.15)))
+        consecutive_threshold = max(5, int(math.ceil(concurrency_cap * 0.1)))
         should_scale_down = False
         if recent_errors >= error_window_threshold:
             should_scale_down = True
         elif rate_limit_errors_since_adjust >= consecutive_threshold:
             should_scale_down = True
         if should_scale_down and (now - last_concurrency_scale_down) >= rate_limit_window:
-            decrement = max(1, int(math.ceil(max(concurrency_cap * 0.35, 2))))
+            decrement = max(1, int(math.ceil(max(concurrency_cap * 0.25, 2))))
             new_cap = max(1, concurrency_cap - decrement)
             if new_cap != concurrency_cap:
                 old_cap = concurrency_cap
@@ -3920,97 +3971,100 @@ async def get_all_responses(
                 if len(usage_samples) > token_sample_size:
                     usage_samples.pop(0)
                 if manage_rate_limits and len(usage_samples) >= token_sample_size:
-                    now = time.time()
-                    if (now - last_token_adjust_eval) >= token_adjust_eval_interval:
-                        last_token_adjust_eval = now
-                        avg_in = statistics.mean(u[0] for u in usage_samples)
-                        avg_out = statistics.mean(u[1] for u in usage_samples)
-                        avg_reason = statistics.mean(u[2] for u in usage_samples)
-                        observed_output = avg_out + avg_reason
-                        if observed_output > 0:
-                            estimated_output_tokens = max(
-                                estimated_output_tokens, observed_output * OUTPUT_TOKEN_HEADROOM
-                            )
-                        tokens_per_call_est = (
-                            avg_in + max(estimated_output_tokens, observed_output)
-                        ) * max(1, n)
-                        token_limited = int(
-                            max(1, allowed_tok_pm // max(1, tokens_per_call_est))
+                    avg_in = statistics.mean(u[0] for u in usage_samples)
+                    avg_out = statistics.mean(u[1] for u in usage_samples)
+                    avg_reason = statistics.mean(u[2] for u in usage_samples)
+                    observed_output = avg_out + avg_reason
+                    if observed_output > 0:
+                        estimated_output_tokens = max(
+                            estimated_output_tokens, observed_output * OUTPUT_TOKEN_HEADROOM
                         )
-                        req_limited = int(max(1, allowed_req_pm))
-                        new_cap = min(max_parallel_ceiling, req_limited, token_limited)
-                        if new_cap < 1:
-                            new_cap = 1
-                        safe_to_increase = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
-                        if new_cap > concurrency_cap and safe_to_increase:
-                            max_increase = max(2, int(math.ceil(concurrency_cap * 0.15)))
+                    tokens_per_call_est = (
+                        avg_in + max(estimated_output_tokens, observed_output)
+                    ) * max(1, n)
+                    token_limited = int(
+                        max(1, allowed_tok_pm // max(1, tokens_per_call_est))
+                    )
+                    req_limited = int(max(1, allowed_req_pm))
+                    new_cap = min(max_parallel_ceiling, req_limited, token_limited)
+                    if new_cap < 1:
+                        new_cap = 1
+                    now = time.time()
+                    safe_to_increase = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
+                    if new_cap > concurrency_cap:
+                        max_increase = max(1, int(math.ceil(concurrency_cap * 0.1)))
+                        if not safe_to_increase:
+                            new_cap = concurrency_cap
+                        else:
                             new_cap = min(new_cap, concurrency_cap + max_increase)
-                        limiter_pressure = False
-                        if (
-                            limiter_wait_ratio >= limiter_wait_ratio_threshold
-                            or limiter_wait_time >= limiter_wait_duration_threshold
-                        ):
-                            limiter_pressure = True
-                        else:
-                            sample_count = len(limiter_wait_durations)
-                            min_samples = max(8, min(token_sample_size, 24))
-                            if sample_count >= min_samples:
-                                try:
-                                    avg_ratio = statistics.mean(limiter_wait_ratios)
-                                    avg_wait = statistics.mean(limiter_wait_durations)
-                                except statistics.StatisticsError:
-                                    avg_ratio = 0.0
-                                    avg_wait = 0.0
-                                high_ratio_events = sum(
-                                    1
-                                    for r in limiter_wait_ratios
-                                    if r >= limiter_wait_ratio_threshold
-                                )
-                                high_wait_events = sum(
-                                    1
-                                    for d in limiter_wait_durations
-                                    if d >= limiter_wait_duration_threshold
-                                )
-                                limiter_pressure = (
-                                    avg_ratio >= limiter_wait_ratio_threshold
-                                    or avg_wait >= limiter_wait_duration_threshold
-                                    or high_ratio_events >= max(4, math.ceil(sample_count * 0.45))
-                                    or high_wait_events >= max(4, math.ceil(sample_count * 0.45))
-                                )
-                        change = abs(new_cap - concurrency_cap)
-                        recently_adjusted = (now - last_token_adjust) < token_adjust_cooldown
-                        if new_cap > concurrency_cap and change < token_adjust_min_delta and not limiter_pressure:
-                            # allow small upward nudges even during cooldown, but only when healthy
-                            new_cap = concurrency_cap if recently_adjusted else min(concurrency_cap + 1, max_parallel_ceiling)
-                        if new_cap < concurrency_cap:
-                            # soften downward moves for limiter-driven path
-                            max_drop = max(1, int(math.ceil(concurrency_cap * 0.20)))
-                            new_cap = max(new_cap, concurrency_cap - max_drop)
-                            if not limiter_pressure or (recently_adjusted and change < token_adjust_min_delta):
-                                new_cap = concurrency_cap
-                        if new_cap != concurrency_cap:
-                            old_cap = concurrency_cap
-                            concurrency_cap = new_cap
-                            last_token_adjust = now
-                            should_log = (now - last_token_adjust_log) >= token_adjust_log_cooldown or change >= token_adjust_min_delta
-                            limiter_pct = limiter_wait_ratio * 100
-                            reason_detail = (
-                                "based on sustained limiter waits (no new errors detected)"
-                                if limiter_pressure
-                                else "after re-evaluating observed token usage"
+                    limiter_pressure = False
+                    if (
+                        limiter_wait_ratio >= limiter_wait_ratio_threshold
+                        or limiter_wait_time >= limiter_wait_duration_threshold
+                    ):
+                        limiter_pressure = True
+                    else:
+                        sample_count = len(limiter_wait_durations)
+                        min_samples = max(5, min(token_sample_size, 20))
+                        if sample_count >= min_samples:
+                            try:
+                                avg_ratio = statistics.mean(limiter_wait_ratios)
+                                avg_wait = statistics.mean(limiter_wait_durations)
+                            except statistics.StatisticsError:
+                                avg_ratio = 0.0
+                                avg_wait = 0.0
+                            high_ratio_events = sum(
+                                1
+                                for r in limiter_wait_ratios
+                                if r >= limiter_wait_ratio_threshold
                             )
+                            high_wait_events = sum(
+                                1
+                                for d in limiter_wait_durations
+                                if d >= limiter_wait_duration_threshold
+                            )
+                            limiter_pressure = (
+                                avg_ratio >= limiter_wait_ratio_threshold
+                                or avg_wait >= limiter_wait_duration_threshold
+                                or high_ratio_events >= max(3, math.ceil(sample_count * 0.35))
+                                or high_wait_events >= max(3, math.ceil(sample_count * 0.35))
+                            )
+                    change = abs(new_cap - concurrency_cap)
+                    recently_adjusted = (now - last_token_adjust) < token_adjust_cooldown
+                    if new_cap > concurrency_cap and (recently_adjusted or change < token_adjust_min_delta):
+                        new_cap = concurrency_cap
+                    if new_cap < concurrency_cap and not limiter_pressure:
+                        if recently_adjusted or change < token_adjust_min_delta:
+                            new_cap = concurrency_cap
+                    if new_cap < concurrency_cap and not limiter_pressure:
+                        logger.debug(
+                            "[token-based adaptation] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
+                            new_cap,
+                            concurrency_cap,
+                            limiter_wait_time,
+                            limiter_wait_ratio * 100,
+                        )
+                    elif new_cap != concurrency_cap:
+                        old_cap = concurrency_cap
+                        concurrency_cap = new_cap
+                        last_token_adjust = now
+                        if new_cap < old_cap:
+                            detail = "after sustained limiter waits" if limiter_pressure else "based on observed token usage"
                             reason = (
-                                f"[token-based adaptation] Adjusting parallel workers from {old_cap} to {new_cap} "
-                                f"{reason_detail}. Recent limiter wait ≈ {limiter_wait_time:.2f}s (~{limiter_pct:.0f}% of call)."
+                                f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} {detail}"
+                                f" (recent limiter wait ≈ {limiter_wait_time:.2f}s, {limiter_wait_ratio * 100:.0f}% of call)."
                             )
-                            if should_log:
-                                logger.info(reason)
-                                emit_parallelization_status(reason, force=True)
-                                last_token_adjust_log = now
-                            else:
-                                logger.debug(reason)
                         else:
-                            concurrency_cap = new_cap
+                            reason = (
+                                f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} based on observed token usage."
+                            )
+                        if change < token_adjust_min_delta:
+                            logger.debug(reason)
+                        else:
+                            logger.info(reason)
+                        emit_parallelization_status(reason, force=True)
+                    else:
+                        concurrency_cap = new_cap
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
                         logger.warning(

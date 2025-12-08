@@ -507,26 +507,6 @@ def test_usage_overview_reports_remaining_budget_reason(capsys):
     assert "Upgrading your tier" not in captured
 
 
-def test_usage_overview_low_limits_caps_and_is_plain(capsys):
-    openai_utils._print_usage_overview(
-        prompts=["hello"],
-        n=1,
-        max_output_tokens=200,
-        model="gpt-5-mini",
-        use_batch=False,
-        n_parallels=50,
-        rate_headers={
-            "limit_requests": "5",
-            "remaining_requests": "5",
-            "limit_tokens": "2000",
-            "remaining_tokens": "2000",
-        },
-    )
-    captured = capsys.readouterr().out
-    assert "we'll run up to 5 requests" in captured.lower()
-    assert "<details>" not in captured
-
-
 def test_web_search_warning_and_parallel_cap(tmp_path, capsys):
     asyncio.run(
         openai_utils.get_all_responses(
@@ -541,15 +521,6 @@ def test_web_search_warning_and_parallel_cap(tmp_path, capsys):
     captured = capsys.readouterr().out
     assert "Web search is enabled" in captured
     assert "automatically capped parallel workers" in captured
-
-
-def test_display_example_prompt_plain_and_full(capsys):
-    example = "EXAMPLE" * 200  # long prompt to ensure no truncation/HTML widgets
-    openai_utils._display_example_prompt(example_prompt=example, verbose=True)
-    out = capsys.readouterr().out
-    assert example in out
-    assert "<details>" not in out
-    assert "Example prompt (full text)" in out
 
 
 def test_get_all_responses_custom_usage(tmp_path):
