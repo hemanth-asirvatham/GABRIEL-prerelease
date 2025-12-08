@@ -48,7 +48,6 @@ import tempfile
 import time
 import subprocess
 import sys
-import html
 import textwrap
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict, deque
@@ -136,60 +135,19 @@ def _in_notebook() -> bool:
         return False
 
 
-def _supports_rich_output() -> bool:
-    """Prefer plain text when rich HTML rendering is likely to misbehave."""
-
-    # VS Code and some terminals advertise an IPython shell but do not support
-    # HTML details/clipboard widgets reliably, so default to plain text there.
-    if os.getenv("VSCODE_PID"):
-        return False
-    return _in_notebook()
-
-
 def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> None:
     """Show a concise example prompt with a collapsible view in notebooks."""
 
     if not verbose or not example_prompt:
         return
-    show_full = os.getenv("GABRIEL_SHOW_FULL_EXAMPLE_PROMPT", "").strip().lower() in {"1", "true", "yes"}
-    force_plain = os.getenv("GABRIEL_EXAMPLE_PROMPT_PLAIN", "").strip().lower() in {"1", "true", "yes"}
-    collapsed = False
     saved_path: Optional[Path] = None
     try:
         saved_path = Path(tempfile.gettempdir()) / "gabriel_example_prompt.txt"
         saved_path.write_text(example_prompt)
     except Exception:
         saved_path = None
-    if _supports_rich_output():
-        try:
-            from IPython.display import HTML, display  # type: ignore
-
-            if not force_plain:
-                html_content = html.escape(example_prompt)
-                block_id = f"gabriel-example-prompt-{abs(hash(example_prompt)) % 10**8}"
-                display(
-                    HTML(
-                        "<details>"
-                        "<summary>Example prompt (click to expand)</summary>"
-                        "<div style=\"margin-top: 0.5em;\">"
-                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
-                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy to clipboard</button>"
-                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{html_content}</pre>"
-                        "</div>"
-                        "</details>"
-                    )
-                )
-                collapsed = True
-        except Exception:
-            collapsed = False
-    preview_limit = 800
-    print("Example prompt (plain preview below; full text saved for copy/paste):")
-    if collapsed and not show_full:
-        print("  (Expanded rich view shown above; preview trimmed for terminals.)")
-    preview = example_prompt if len(example_prompt) <= preview_limit else example_prompt[:preview_limit] + "…"
-    print(textwrap.indent(preview, "  "))
-    if len(example_prompt) > preview_limit and not show_full:
-        print("  (truncated; set GABRIEL_SHOW_FULL_EXAMPLE_PROMPT=1 to print the full prompt)")
+    print("Example prompt (full text):")
+    print(textwrap.indent(example_prompt, "  "))
     if saved_path:
         print(f"(Saved full example prompt to {saved_path} for easy copy/paste.)")
 
@@ -821,26 +779,6 @@ def _print_usage_overview(
         print("\nUsage tiers:")
         for line in tier_lines:
             print(f"  {line}")
-        tier_text = "\n".join(tier_lines)
-        if _supports_rich_output():
-            try:
-                from IPython.display import HTML, display  # type: ignore
-
-                block_id = "gabriel-tier-info"
-                display(
-                    HTML(
-                        "<details>"
-                        "<summary>Usage tiers (click to expand / copy)</summary>"
-                        "<div style=\"margin-top: 0.35em;\">"
-                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
-                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy tiers</button>"
-                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{html.escape(tier_text)}</pre>"
-                        "</div>"
-                        "</details>"
-                    )
-                )
-            except Exception:
-                pass
     pricing = _lookup_model_pricing(model)
     est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
