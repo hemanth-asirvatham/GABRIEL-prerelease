@@ -127,17 +127,8 @@ def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> Non
     if not verbose or not example_prompt:
         return
 
-    saved_path: Optional[Path] = None
-    try:
-        saved_path = Path(tempfile.gettempdir()) / "gabriel_example_prompt.txt"
-        saved_path.write_text(example_prompt)
-    except Exception:
-        saved_path = None
-
     print("\nExample prompt (full text):")
     print(textwrap.indent(example_prompt.strip("\n"), "  "))
-    if saved_path:
-        print(f"(Saved to {saved_path} for easy copy/paste.)")
 
 
 def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
@@ -443,6 +434,41 @@ def _estimate_cost(
     }
 
 
+def _estimate_tokens_per_call(
+    avg_input_tokens: float, expected_output_tokens: Optional[int], n: int
+) -> float:
+    """Return a conservative token estimate per call for planning throughput."""
+
+    gating_output = (
+        expected_output_tokens if expected_output_tokens is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+    )
+    gating_output *= OUTPUT_TOKEN_HEADROOM
+    tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
+    return tokens_per_call * TOKEN_ESTIMATE_BUFFER
+
+
+def _estimate_prompts_per_minute(
+    allowed_req_pm: Optional[float],
+    allowed_tok_pm: Optional[float],
+    tokens_per_call: Optional[float],
+) -> Tuple[Optional[float], Dict[str, float]]:
+    """Estimate achievable prompts/min given budgets and per-call token needs."""
+
+    details: Dict[str, float] = {}
+    if tokens_per_call is None or tokens_per_call <= 0:
+        return None, details
+    if allowed_req_pm is not None and allowed_req_pm > 0:
+        details["request_bound"] = float(allowed_req_pm)
+    if allowed_tok_pm is not None and allowed_tok_pm > 0:
+        details["token_bound"] = float(allowed_tok_pm) / float(tokens_per_call)
+    candidates = [v for v in details.values() if v is not None]
+    if not candidates:
+        return None, details
+    throughput = min(candidates)
+    details["throughput"] = throughput
+    return throughput, details
+
+
 def _estimate_dataset_stats(
     prompts: List[str],
     *,
@@ -532,8 +558,8 @@ def _print_run_banner(
     print(f"Model: {model} | Mode: {'batch' if use_batch else 'streaming'}")
     if estimated_cost:
         print(
-            f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${estimated_cost['total_cost']:.4f} "
-            f"(input: ${estimated_cost['input_cost']:.4f}, output: ${estimated_cost['output_cost']:.4f})"
+            f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${estimated_cost['total_cost']:.2f} "
+            f"(input: ${estimated_cost['input_cost']:.2f}, output: ${estimated_cost['output_cost']:.2f})"
         )
     else:
         print("Estimated cost unavailable for this model.")
@@ -773,6 +799,9 @@ def _print_usage_overview(
         print("\nUsage tiers:")
         for line in tier_lines:
             print(f"  {line}")
+        print(
+            "Moving up tiers unlocks much higher per-minute request and token limits, which directly translates to much faster runs."
+        )
     pricing = _lookup_model_pricing(model)
     est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
@@ -785,7 +814,7 @@ def _print_usage_overview(
             f"Estimated token usage: input {est['input_tokens']:,}, output {est['output_tokens']:,}"
         )
         print(
-            f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${est['total_cost']:.4f}"
+            f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${est['total_cost']:.2f}"
         )
     else:
         print(f"\nPricing for model '{model}' is unavailable; cannot estimate cost.")
@@ -795,8 +824,9 @@ def _print_usage_overview(
         avg_input_tokens = (token_total or sum(_approx_tokens(p) for p in prompts)) / max(
             1, len(prompts)
         )
-        gating_output = max_output_tokens if max_output_tokens is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
-        tokens_per_call = (avg_input_tokens + gating_output) * max(1, n)
+        tokens_per_call = _estimate_tokens_per_call(
+            avg_input_tokens, max_output_tokens, n
+        )
         # Extract numeric values from the rate limit headers.  If a value is missing or
         # zero, treat it as unknown (None).  We deliberately avoid falling back to
         # configured caps here because the user has requested that we rely solely
@@ -863,9 +893,14 @@ def _print_usage_overview(
             concurrency_cap = max(1, n_parallels)
         else:
             concurrency_cap = max(1, min(n_parallels, concurrency_possible))
+        throughput, throughput_details = _estimate_prompts_per_minute(
+            allowed_req, allowed_tok, tokens_per_call
+        )
     except Exception:
         concurrency_possible = None
         concurrency_cap = max(1, n_parallels)
+        throughput = None
+        throughput_details = {}
     # Inform the user about dynamic concurrency.  If the calculated cap is lower
     # than the ceiling, explain that upgrading the tier would allow more
     # parallel requests.  If the cap equals the ceiling but additional capacity
@@ -924,6 +959,20 @@ def _print_usage_overview(
             print(
                 f"\nWe can run up to {concurrency_cap} requests at the same time with your current settings."
             )
+    if throughput is not None:
+        req_bound = throughput_details.get("request_bound")
+        tok_bound = throughput_details.get("token_bound")
+        req_txt = f"{req_bound:.0f}/min" if req_bound is not None else "unknown"
+        tok_txt = f"{tok_bound:.0f}/min" if tok_bound is not None else "unknown"
+        print(
+            f"\nEstimated prompts per minute (includes {int(PLANNING_RATE_LIMIT_BUFFER * 100)}% soft buffer): "
+            f"~{throughput:.0f} (request-bound at ~{req_txt}, token-bound at ~{tok_txt}, "
+            f"planning on ~{int(round(tokens_per_call)):,} tokens per call)."
+        )
+    else:
+        print(
+            "\nEstimated prompts per minute: unknown (insufficient rate-limit data to derive a safe value)."
+        )
     print(
         "\nAdd funds or manage your billing here: https://platform.openai.com/settings/organization/billing/"
     )
@@ -2866,7 +2915,7 @@ async def get_all_responses(
             avg_row = 0.0
             avg_1000 = 0.0
         msg = (
-            f"Actual total cost: ${total_cost:.4f}; average per row: ${avg_row:.4f}; average per 1000 rows: ${avg_1000:.4f}"
+            f"Actual total cost: ${total_cost:.2f}; average per row: ${avg_row:.2f}; average per 1000 rows: ${avg_1000:.2f}"
         )
         if message_verbose:
             print(msg)
@@ -2885,11 +2934,12 @@ async def get_all_responses(
         elif len(todo_pairs) >= 10_000:
             effective_save_every = max(save_every_x_responses, 500)
         if effective_save_every != save_every_x_responses:
-            if message_verbose:
-                print(
-                    f"Large run detected ({len(todo_pairs):,} rows); autoscaling checkpoint frequency "
-                    f"to every {effective_save_every} responses (was {save_every_x_responses})."
-                )
+            logger.debug(
+                "Large run detected (%d rows); autoscaling checkpoint frequency to every %d responses (was %d).",
+                len(todo_pairs),
+                effective_save_every,
+                save_every_x_responses,
+            )
             save_every_x_responses = effective_save_every
     status.num_tasks_started = len(todo_pairs)
     status.num_tasks_in_progress = len(todo_pairs)
@@ -3087,6 +3137,45 @@ async def get_all_responses(
         # handled by the batch API submission.
         allowed_req_pm = 1
         allowed_tok_pm = 1
+    throughput_plan, throughput_details_plan = _estimate_prompts_per_minute(
+        allowed_req_pm if manage_rate_limits else None,
+        allowed_tok_pm if manage_rate_limits else None,
+        estimated_tokens_per_call,
+    )
+    if message_verbose and not use_batch:
+        print("\n===== Parallelization plan =====")
+        print(
+            f"Requested workers: {user_requested_n_parallels} | Rate-limit-aware cap: {concurrency_cap} "
+            f"(soft ceiling {max_parallel_ceiling})"
+        )
+        if manage_rate_limits:
+            req_budget_text = (
+                f"{int(allowed_req_pm):,}/min" if allowed_req_pm is not None else "unknown"
+            )
+            tok_budget_text = (
+                f"{int(allowed_tok_pm):,}/min" if allowed_tok_pm is not None else "unknown"
+            )
+            print(
+                f"Minute budgets after soft buffer ({int(PLANNING_RATE_LIMIT_BUFFER * 100)}%): "
+                f"requests≈{req_budget_text}, tokens≈{tok_budget_text}"
+            )
+        print(
+            f"Planning on ~{int(round(estimated_tokens_per_call)):,} tokens per call "
+            f"(includes throughput headroom and expected output length)."
+        )
+        if throughput_plan is not None:
+            req_bound = throughput_details_plan.get("request_bound")
+            tok_bound = throughput_details_plan.get("token_bound")
+            req_txt = f"{req_bound:.0f}/min" if req_bound is not None else "unknown"
+            tok_txt = f"{tok_bound:.0f}/min" if tok_bound is not None else "unknown"
+            print(
+                f"Planned prompts per minute (with {int(PLANNING_RATE_LIMIT_BUFFER * 100)}% safety margin): "
+                f"~{throughput_plan:.0f} (request-bound {req_txt}, token-bound {tok_txt})."
+            )
+        else:
+            print(
+                "Planned prompts per minute: unknown (rate-limit headers unavailable; running with conservative defaults)."
+            )
 
     # Batch submission path
     if use_batch:
@@ -3593,6 +3682,9 @@ async def get_all_responses(
     wait_adjust_cooldown_down = max(45.0, rate_limit_window * 1.25)
     wait_adjust_min_delta = max(1, int(math.ceil(max_parallel_ceiling * 0.04)))
     last_wait_adjust = 0.0
+    timeout_notes: Deque[str] = deque(maxlen=3)
+    timeout_errors_since_last_status = 0
+    current_tokens_per_call = float(estimated_tokens_per_call)
 
     def _aggregate_usage(raw_items: List[Any]) -> Tuple[int, int, int]:
         total_in = total_out = total_reason = 0
@@ -3633,11 +3725,27 @@ async def get_all_responses(
         if quiet and not force:
             return
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        reason_clean = reason.rstrip(" .:;")
+        throughput, _ = _estimate_prompts_per_minute(
+            allowed_req_pm if manage_rate_limits else None,
+            allowed_tok_pm if manage_rate_limits else None,
+            current_tokens_per_call,
+        )
+        ppm_text = f", est_ppm≈{throughput:.1f}" if throughput is not None else ""
+        timeout_text = ""
+        if status.num_timeout_errors:
+            last_note = timeout_notes[-1] if timeout_notes else "timeout observed"
+            timeout_text = (
+                f", timeouts={status.num_timeout_errors}"
+                f"{f' (last: {last_note})' if last_note else ''}"
+            )
+        if timeout_errors_since_last_status and status_report_interval is not None:
+            timeout_text += f", new_timeouts={timeout_errors_since_last_status}"
         msg = (
-            f"[parallelization] {timestamp} | {reason}: "
+            f"[parallelization] {timestamp} | {reason_clean}: "
             f"cap={concurrency_cap}, active={active_workers}, inflight={len(inflight)}, "
             f"queue={queue.qsize()}, processed={processed}/{status.num_tasks_started}, "
-            f"rate_limit_errors={status.num_rate_limit_errors}"
+            f"rate_limit_errors={status.num_rate_limit_errors}{timeout_text}{ppm_text}"
         )
         if message_verbose:
             print(msg)
@@ -3794,7 +3902,7 @@ async def get_all_responses(
                 rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
-        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling, last_wait_adjust
+        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling, last_wait_adjust, current_tokens_per_call, timeout_errors_since_last_status
         while True:
             if stop_event.is_set():
                 break
@@ -3968,6 +4076,7 @@ async def get_all_responses(
                     tokens_per_call_est = (
                         avg_in + max(estimated_output_tokens, observed_output)
                     ) * max(1, n)
+                    current_tokens_per_call = max(1.0, tokens_per_call_est)
                     token_limited = int(
                         max(1, allowed_tok_pm // max(1, tokens_per_call_est))
                     )
@@ -4108,7 +4217,16 @@ async def get_all_responses(
                         error_logs[ident].append(detail)
                 else:
                     error_message = f"API call timed out after {elapsed:.2f} s"
-                logger.warning(f"Timeout error for {ident}: {error_message}")
+                timeout_errors_since_last_status += 1
+                timeout_note = f"{ident} timed out after {elapsed:.2f}s"
+                timeout_notes.append(timeout_note)
+                if status.num_timeout_errors == 1:
+                    logger.warning(
+                        "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
+                        timeout_note,
+                    )
+                else:
+                    logger.debug("Timeout error for %s: %s", ident, error_message)
                 error_logs[ident].append(error_message)
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
@@ -4334,11 +4452,13 @@ async def get_all_responses(
         if status_report_interval is None:
             return
         try:
+            nonlocal timeout_errors_since_last_status
             while not stop_event.is_set():
                 await asyncio.sleep(status_report_interval)
                 if stop_event.is_set() or processed >= status.num_tasks_started:
                     break
                 emit_parallelization_status("Periodic status update", force=True)
+                timeout_errors_since_last_status = 0
         except asyncio.CancelledError:
             pass
 
