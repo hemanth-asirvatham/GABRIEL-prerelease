@@ -179,12 +179,13 @@ UNBOUNDED_OUTPUT_TO_INPUT_RATIO = 2.5
 # Using less than the reported limit provides a buffer for short spikes and accounting inaccuracies.
 RATE_LIMIT_HEADROOM = 0.85
 # Additional planning buffer applied when translating reported rate limits into budgets.
-PLANNING_RATE_LIMIT_BUFFER = 0.8
+PLANNING_RATE_LIMIT_BUFFER = 0.85
 # Buffer applied to the estimated tokens per call to avoid optimistic throughput estimates.
 TOKEN_ESTIMATE_BUFFER = 1.35
 # Cushion applied to the expected output tokens when planning budgets so we never assume perfectly
 # short responses for lower-tier accounts.
 OUTPUT_TOKEN_HEADROOM = 1.2
+TIMEOUT_BURST_ALERT_THRESHOLD = 50
 
 # ---------------------------------------------------------------------------
 # Helper dataclasses and token utilities
@@ -278,27 +279,11 @@ TIER_INFO = [
         "qualification": "User must be in an allowed geography",
         "monthly_quota": "$100 / month",
     },
-    {"tier": "Tier 1", "qualification": "$5 paid", "monthly_quota": "$100 / month"},
-    {
-        "tier": "Tier 2",
-        "qualification": "$50 paid and 7+ days since first payment",
-        "monthly_quota": "$500 / month",
-    },
-    {
-        "tier": "Tier 3",
-        "qualification": "$100 paid and 7+ days since first payment",
-        "monthly_quota": "$1 000 / month",
-    },
-    {
-        "tier": "Tier 4",
-        "qualification": "$250 paid and 14+ days since first payment",
-        "monthly_quota": "$5 000 / month",
-    },
-    {
-        "tier": "Tier 5",
-        "qualification": "$1 000 paid and 30+ days since first payment",
-        "monthly_quota": "$200 000 / month",
-    },
+    {"tier": "Tier 1", "qualification": "$5 paid", "monthly_quota": None},
+    {"tier": "Tier 2", "qualification": "$50 paid and 7+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 3", "qualification": "$100 paid and 7+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 4", "qualification": "$250 paid and 14+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 5", "qualification": "$1 000 paid and 30+ days since first payment", "monthly_quota": None},
 ]
 
 # Truncated pricing table (USD per million tokens) for a few common models
@@ -355,9 +340,9 @@ def _print_tier_explainer(verbose: bool = True) -> None:
     )
     print("Here are the current tiers and how to qualify:")
     for tier in TIER_INFO:
-        print(
-            f"  • {tier['tier']}: qualify by {tier['qualification']}; monthly quota {tier['monthly_quota']}"
-        )
+        monthly = tier.get("monthly_quota")
+        monthly_text = f"; monthly quota {monthly}" if monthly else ""
+        print(f"  • {tier['tier']}: qualify by {tier['qualification']}{monthly_text}")
     print("If you are encountering rate limits or truncated outputs, consider:")
     print(
         "  – Checking your current spend and ensuring you have met the payment criteria for a higher tier."
@@ -513,6 +498,7 @@ def _format_throughput_plan(
     allowed_req_pm: Optional[float],
     allowed_tok_pm: Optional[float],
     include_upgrade_hint: bool = True,
+    tokens_per_call: Optional[float] = None,
 ) -> List[str]:
     """Build human-friendly throughput summary lines."""
 
@@ -531,10 +517,17 @@ def _format_throughput_plan(
         if limiter
         else ""
     )
+    tokens_line = ""
+    if tokens_per_call is not None and tokens_per_call > 0:
+        est_tokens = max(1, int(round(tokens_per_call)))
+        est_words = max(1, int(round(est_tokens / 2)))
+        tokens_line = f"Estimated tokens per call: ~{est_tokens:,} (~{est_words:,} words)"
     lines = [
-        f"Expected prompts per minute: {planned_ppm}",
-        f"Expected total minutes to process all prompts: ~{estimated_minutes} for {remaining_prompts:,} prompts",
+        f"Expected prompts per minute: ~{planned_ppm}",
+        f"Expected total mins to process all prompts: ~{estimated_minutes} mins for {remaining_prompts:,} prompts",
     ]
+    if tokens_line:
+        lines.append(tokens_line)
     if limiter_text:
         lines.append(limiter_text)
     if include_upgrade_hint:
@@ -860,21 +853,12 @@ def _print_usage_overview(
         )
         print(warning_msg)
         logger.warning(warning_msg)
-    # Let users know about monthly usage caps in addition to per‑minute limits.
     if show_static_sections:
-        print(
-            "\nNote: your organization also has a monthly usage cap based on your tier. See the usage tiers below for details."
-        )
-        tier_lines = [
-            f"• {tier['tier']}: qualifies by {tier['qualification']}; monthly quota {tier['monthly_quota']}"
-            for tier in TIER_INFO
-        ]
-        print("\nUsage tiers:")
-        for line in tier_lines:
-            print(f"  {line}")
-        print(
-            "Moving up tiers unlocks much higher per-minute request and token limits, which directly translates to much faster runs."
-        )
+        print("\nUsage tiers (qualifications):")
+        for tier in TIER_INFO:
+            monthly = tier.get("monthly_quota")
+            monthly_text = f"; monthly quota {monthly}" if monthly else ""
+            print(f"  • {tier['tier']}: qualify by {tier['qualification']}{monthly_text}")
     pricing = _lookup_model_pricing(model)
     est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
@@ -1033,14 +1017,6 @@ def _print_usage_overview(
             print(
                 f"\nWe can run up to {concurrency_cap} requests at the same time with your current settings."
             )
-    for line in _format_throughput_plan(
-        planned_ppm=planned_ppm,
-        throughput_details=throughput_details,
-        remaining_prompts=len(prompts),
-        allowed_req_pm=allowed_req,
-        allowed_tok_pm=allowed_tok,
-    ):
-        print(f"\n{line}")
     print("\nAdd funds or manage your billing here: https://platform.openai.com/settings/organization/billing/")
     if max_output_tokens is None:
         print(
@@ -2580,6 +2556,7 @@ async def get_all_responses(
     rate_limit_window: float = 30.0,
     token_sample_size: int = 20,
     status_report_interval: Optional[float] = 120.0,
+    planning_rate_limit_buffer: float = PLANNING_RATE_LIMIT_BUFFER,
     logging_level: Union[str, int] = "warning",
     **get_response_kwargs: Any,
 ) -> pd.DataFrame:
@@ -2687,6 +2664,7 @@ async def get_all_responses(
         pass
     using_custom_response_fn = response_fn is not None and underlying_callable is not get_response
     manage_rate_limits = not using_custom_response_fn
+    planning_buffer = float(min(max(planning_rate_limit_buffer, 0.1), 1.0))
     if not use_dummy and not using_custom_response_fn:
         _require_api_key()
     set_log_level(logging_level)
@@ -3160,8 +3138,8 @@ async def get_all_responses(
             initial_tok_budget = _select_budget(lim_t, rem_t)
             ceiling_req = _select_ceiling(lim_r, rem_r)
             ceiling_tok = _select_ceiling(lim_t, rem_t)
-            req_budget_for_cap = _with_headroom(initial_req_budget, buffer=PLANNING_RATE_LIMIT_BUFFER)
-            tok_budget_for_cap = _with_headroom(initial_tok_budget, buffer=PLANNING_RATE_LIMIT_BUFFER)
+            req_budget_for_cap = _with_headroom(initial_req_budget, buffer=planning_buffer)
+            tok_budget_for_cap = _with_headroom(initial_tok_budget, buffer=planning_buffer)
             concurrency_candidates = [requested_n_parallels]
             if req_budget_for_cap is not None:
                 concurrency_candidates.append(req_budget_for_cap)
@@ -3171,8 +3149,8 @@ async def get_all_responses(
                 )
             concurrency_cap = max(1, min(concurrency_candidates))
             ceiling_candidates = [requested_n_parallels]
-            ceiling_req_budget = _with_headroom(ceiling_req, buffer=PLANNING_RATE_LIMIT_BUFFER)
-            ceiling_tok_budget = _with_headroom(ceiling_tok, buffer=PLANNING_RATE_LIMIT_BUFFER)
+            ceiling_req_budget = _with_headroom(ceiling_req, buffer=planning_buffer)
+            ceiling_tok_budget = _with_headroom(ceiling_tok, buffer=planning_buffer)
             if ceiling_req_budget is not None:
                 ceiling_candidates.append(ceiling_req_budget)
             if ceiling_tok_budget is not None:
@@ -3229,7 +3207,8 @@ async def get_all_responses(
             remaining_prompts=len(todo_pairs),
             allowed_req_pm=allowed_req_pm if manage_rate_limits else None,
             allowed_tok_pm=allowed_tok_pm if manage_rate_limits else None,
-            include_upgrade_hint=False,
+            include_upgrade_hint=True,
+            tokens_per_call=estimated_tokens_per_call,
         ):
             print(line)
 
@@ -3833,23 +3812,24 @@ async def get_all_responses(
             allowed_tok_pm if manage_rate_limits else None,
             current_tokens_per_call,
         )
-        limiter_note = ""
-        if planned_ppm is not None:
-            limiter, limiter_value = _resolve_limiting_factor(
-                throughput_details,
-                allowed_req_pm=allowed_req_pm if manage_rate_limits else None,
-                allowed_tok_pm=allowed_tok_pm if manage_rate_limits else None,
-            )
-            if limiter:
-                limiter_note = f"{limiter}{f' ~{int(limiter_value):,}/min' if limiter_value is not None else ''}"
         timeout_text = ""
-        if status.num_timeout_errors:
+        total_completed = processed
+        if status.num_timeout_errors or total_completed:
             last_note = timeout_notes[-1] if timeout_notes else "timeout observed"
-            timeout_text = f"timeouts={status.num_timeout_errors}"
+            denom = max(total_completed, 1)
+            timeout_text = f"timeouts={status.num_timeout_errors}/{denom}"
             if status_report_interval is not None and timeout_errors_since_last_status:
                 timeout_text += f" (+{timeout_errors_since_last_status} since last)"
             if last_note:
                 timeout_text += f" [last: {last_note}]"
+            if timeout_errors_since_last_status >= TIMEOUT_BURST_ALERT_THRESHOLD:
+                burst_msg = (
+                    f"[timeouts] {timeout_errors_since_last_status} timeouts since last update; "
+                    "consider raising max_timeout or lowering concurrency if this persists."
+                )
+                logger.warning(burst_msg)
+                if message_verbose:
+                    print(burst_msg)
         cost_text = ""
         cost_snapshot = _cost_progress_snapshot()
         if cost_snapshot is not None:
@@ -3864,9 +3844,7 @@ async def get_all_responses(
             msg += f", {cost_text}"
         msg += f", rate_limit_errors={status.num_rate_limit_errors}"
         if planned_ppm is not None:
-            ppm_piece = f"ppm≈{planned_ppm}"
-            if limiter_note:
-                ppm_piece += f" ({limiter_note})"
+            ppm_piece = f"throughput≈{planned_ppm} prompts/min"
             msg += f", {ppm_piece}"
         if timeout_text:
             msg += f", {timeout_text}"
