@@ -142,21 +142,34 @@ def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> Non
     if not verbose or not example_prompt:
         return
     show_full = os.getenv("GABRIEL_SHOW_FULL_EXAMPLE_PROMPT", "").strip().lower() in {"1", "true", "yes"}
+    force_plain = os.getenv("GABRIEL_EXAMPLE_PROMPT_PLAIN", "").strip().lower() in {"1", "true", "yes"}
     collapsed = False
+    saved_path: Optional[Path] = None
+    try:
+        saved_path = Path(tempfile.gettempdir()) / "gabriel_example_prompt.txt"
+        saved_path.write_text(example_prompt)
+    except Exception:
+        saved_path = None
     if _in_notebook():
         try:
             from IPython.display import HTML, display  # type: ignore
 
-            html_content = html.escape(example_prompt)
-            display(
-                HTML(
-                    "<details>"
-                    "<summary>Example prompt (click to expand)</summary>"
-                    f"<pre style=\"white-space: pre-wrap; word-break: break-word;\">{html_content}</pre>"
-                    "</details>"
+            if not force_plain:
+                html_content = html.escape(example_prompt)
+                block_id = f"gabriel-example-prompt-{abs(hash(example_prompt)) % 10**8}"
+                display(
+                    HTML(
+                        "<details>"
+                        "<summary>Example prompt (click to expand)</summary>"
+                        "<div style=\"margin-top: 0.5em;\">"
+                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
+                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy to clipboard</button>"
+                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{html_content}</pre>"
+                        "</div>"
+                        "</details>"
+                    )
                 )
-            )
-            collapsed = True
+                collapsed = True
         except Exception:
             collapsed = False
     if collapsed or show_full:
@@ -170,6 +183,8 @@ def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> Non
         print(textwrap.indent(preview, "  "))
         if len(example_prompt) > preview_limit:
             print("  (truncated; set GABRIEL_SHOW_FULL_EXAMPLE_PROMPT=1 to print the full prompt)")
+    if saved_path:
+        print(f"(Example prompt saved to {saved_path} for easy copy/paste if the rich view is unavailable.)")
 
 
 def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
@@ -214,9 +229,14 @@ ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 250
 
 # Conservative headroom when translating observed rate limits into concurrency and limiter budgets.
 # Using less than the reported limit provides a buffer for short spikes and accounting inaccuracies.
-RATE_LIMIT_HEADROOM = 0.9
+RATE_LIMIT_HEADROOM = 0.85
+# Additional planning buffer applied when translating reported rate limits into budgets.
+PLANNING_RATE_LIMIT_BUFFER = 0.8
 # Buffer applied to the estimated tokens per call to avoid optimistic throughput estimates.
-TOKEN_ESTIMATE_BUFFER = 1.15
+TOKEN_ESTIMATE_BUFFER = 1.35
+# Cushion applied to the expected output tokens when planning budgets so we never assume perfectly
+# short responses for lower-tier accounts.
+OUTPUT_TOKEN_HEADROOM = 1.2
 
 # ---------------------------------------------------------------------------
 # Helper dataclasses and token utilities
@@ -787,12 +807,33 @@ def _print_usage_overview(
         print(
             "\nNote: your organization also has a monthly usage cap based on your tier. See the usage tiers below for details."
         )
-        # Display usage tiers succinctly
+        tier_lines = [
+            f"• {tier['tier']}: qualifies by {tier['qualification']}; monthly quota {tier['monthly_quota']}"
+            for tier in TIER_INFO
+        ]
         print("\nUsage tiers:")
-        for tier in TIER_INFO:
-            print(
-                f"  • {tier['tier']}: qualifies by {tier['qualification']}; monthly quota {tier['monthly_quota']}"
-            )
+        for line in tier_lines:
+            print(f"  {line}")
+        if _in_notebook():
+            try:
+                from IPython.display import HTML, display  # type: ignore
+
+                tier_text = html.escape("\n".join(tier_lines))
+                block_id = "gabriel-tier-info"
+                display(
+                    HTML(
+                        "<details>"
+                        "<summary>Usage tiers (click to expand / copy)</summary>"
+                        "<div style=\"margin-top: 0.35em;\">"
+                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
+                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy tiers</button>"
+                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{tier_text}</pre>"
+                        "</div>"
+                        "</details>"
+                    )
+                )
+            except Exception:
+                pass
     pricing = _lookup_model_pricing(model)
     est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
@@ -2962,7 +3003,7 @@ async def get_all_responses(
                 sum(len(tokenizer.encode(p)) for p, _ in sample_for_tokens)
                 / max(1, len(sample_for_tokens))
             )
-            gating_output = initial_estimated_output_tokens
+            gating_output = initial_estimated_output_tokens * OUTPUT_TOKEN_HEADROOM
             tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
             tokens_per_call *= TOKEN_ESTIMATE_BUFFER
 
@@ -2991,15 +3032,29 @@ async def get_all_responses(
                 rem_t = _pf(rate_headers.get("remaining_tokens")) or _pf(
                     rate_headers.get("remaining_tokens_usage_based")
                 )
-            def _with_headroom(val: Optional[float]) -> Optional[int]:
+            def _with_headroom(val: Optional[float], *, buffer: float = RATE_LIMIT_HEADROOM) -> Optional[int]:
                 if val is None:
                     return None
-                return int(max(1, math.floor(val * RATE_LIMIT_HEADROOM)))
+                return int(max(1, math.floor(val * buffer)))
 
-            initial_req_budget = rem_r if rem_r is not None else lim_r
-            initial_tok_budget = rem_t if rem_t is not None else lim_t
-            req_budget_for_cap = _with_headroom(initial_req_budget)
-            tok_budget_for_cap = _with_headroom(initial_tok_budget)
+            def _select_budget(limit_val: Optional[float], remaining_val: Optional[float]) -> Optional[float]:
+                candidates = [v for v in (remaining_val, limit_val) if v is not None and v > 0]
+                if not candidates:
+                    return None
+                return min(candidates)
+
+            def _select_ceiling(limit_val: Optional[float], remaining_val: Optional[float]) -> Optional[float]:
+                candidates = [v for v in (limit_val, remaining_val) if v is not None and v > 0]
+                if not candidates:
+                    return None
+                return max(candidates)
+
+            initial_req_budget = _select_budget(lim_r, rem_r)
+            initial_tok_budget = _select_budget(lim_t, rem_t)
+            ceiling_req = _select_ceiling(lim_r, rem_r)
+            ceiling_tok = _select_ceiling(lim_t, rem_t)
+            req_budget_for_cap = _with_headroom(initial_req_budget, buffer=PLANNING_RATE_LIMIT_BUFFER)
+            tok_budget_for_cap = _with_headroom(initial_tok_budget, buffer=PLANNING_RATE_LIMIT_BUFFER)
             concurrency_candidates = [requested_n_parallels]
             if req_budget_for_cap is not None:
                 concurrency_candidates.append(req_budget_for_cap)
@@ -3009,8 +3064,8 @@ async def get_all_responses(
                 )
             concurrency_cap = max(1, min(concurrency_candidates))
             ceiling_candidates = [requested_n_parallels]
-            ceiling_req_budget = _with_headroom(lim_r if lim_r is not None else initial_req_budget)
-            ceiling_tok_budget = _with_headroom(lim_t if lim_t is not None else initial_tok_budget)
+            ceiling_req_budget = _with_headroom(ceiling_req, buffer=PLANNING_RATE_LIMIT_BUFFER)
+            ceiling_tok_budget = _with_headroom(ceiling_tok, buffer=PLANNING_RATE_LIMIT_BUFFER)
             if ceiling_req_budget is not None:
                 ceiling_candidates.append(ceiling_req_budget)
             if ceiling_tok_budget is not None:
@@ -3542,12 +3597,16 @@ async def get_all_responses(
     rate_limit_window = max(1.0, float(rate_limit_window))
     rate_limit_error_times: Deque[float] = deque()
     last_concurrency_scale_down = 0.0
+    last_concurrency_scale_up = 0.0
     usage_samples: List[Tuple[int, int, int]] = []
     estimated_output_tokens = initial_estimated_output_tokens
     limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratio_threshold = 0.2
     limiter_wait_duration_threshold = 0.35
+    token_adjust_cooldown = max(15.0, rate_limit_window * 0.5)
+    last_token_adjust = 0.0
+    token_adjust_min_delta = max(1, int(math.ceil(max_parallel_ceiling * 0.02)))
 
     def _aggregate_usage(raw_items: List[Any]) -> Tuple[int, int, int]:
         total_in = total_out = total_reason = 0
@@ -3688,7 +3747,7 @@ async def get_all_responses(
         return None
 
     def maybe_adjust_concurrency() -> None:
-        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust, max_parallel_ceiling, last_concurrency_scale_down
+        nonlocal concurrency_cap, rate_limit_errors_since_adjust, successes_since_adjust, max_parallel_ceiling, last_concurrency_scale_down, last_concurrency_scale_up
         if not manage_rate_limits:
             return
         now = time.time()
@@ -3723,10 +3782,16 @@ async def get_all_responses(
             last_concurrency_scale_down = now
             return
         quiet_since_last_error = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
-        if rate_limit_errors_since_adjust == 0 and concurrency_cap < max_parallel_ceiling and quiet_since_last_error:
-            success_threshold = max(30, int(math.ceil(concurrency_cap * 1.2)))
+        if (
+            rate_limit_errors_since_adjust == 0
+            and concurrency_cap < max_parallel_ceiling
+            and quiet_since_last_error
+            and (now - last_concurrency_scale_down) >= rate_limit_window
+            and (now - last_concurrency_scale_up) >= rate_limit_window
+        ):
+            success_threshold = max(40, int(math.ceil(concurrency_cap * 1.5)))
             if successes_since_adjust >= success_threshold:
-                increment = max(1, int(math.ceil(max(concurrency_cap * 0.1, 1))))
+                increment = max(1, int(math.ceil(max(concurrency_cap * 0.08, 1))))
                 new_cap = min(max_parallel_ceiling, concurrency_cap + increment)
                 if new_cap != concurrency_cap:
                     old_cap = concurrency_cap
@@ -3736,13 +3801,14 @@ async def get_all_responses(
                     )
                     logger.info(reason)
                     emit_parallelization_status(reason, force=True)
+                    last_concurrency_scale_up = now
                 else:
                     concurrency_cap = new_cap
                 successes_since_adjust = 0
                 rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
-        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling
+        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling, last_token_adjust
         while True:
             if stop_event.is_set():
                 break
@@ -3910,7 +3976,9 @@ async def get_all_responses(
                     avg_reason = statistics.mean(u[2] for u in usage_samples)
                     observed_output = avg_out + avg_reason
                     if observed_output > 0:
-                        estimated_output_tokens = observed_output
+                        estimated_output_tokens = max(
+                            estimated_output_tokens, observed_output * OUTPUT_TOKEN_HEADROOM
+                        )
                     tokens_per_call_est = (
                         avg_in + max(estimated_output_tokens, observed_output)
                     ) * max(1, n)
@@ -3921,7 +3989,8 @@ async def get_all_responses(
                     new_cap = min(max_parallel_ceiling, req_limited, token_limited)
                     if new_cap < 1:
                         new_cap = 1
-                    safe_to_increase = (time.time() - status.time_of_last_rate_limit_error) >= rate_limit_window
+                    now = time.time()
+                    safe_to_increase = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
                     if new_cap > concurrency_cap:
                         max_increase = max(1, int(math.ceil(concurrency_cap * 0.1)))
                         if not safe_to_increase:
@@ -3960,6 +4029,13 @@ async def get_all_responses(
                                 or high_ratio_events >= max(3, math.ceil(sample_count * 0.35))
                                 or high_wait_events >= max(3, math.ceil(sample_count * 0.35))
                             )
+                    change = abs(new_cap - concurrency_cap)
+                    recently_adjusted = (now - last_token_adjust) < token_adjust_cooldown
+                    if new_cap > concurrency_cap and (recently_adjusted or change < token_adjust_min_delta):
+                        new_cap = concurrency_cap
+                    if new_cap < concurrency_cap and not limiter_pressure:
+                        if recently_adjusted or change < token_adjust_min_delta:
+                            new_cap = concurrency_cap
                     if new_cap < concurrency_cap and not limiter_pressure:
                         logger.debug(
                             "[token-based adaptation] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
@@ -3971,6 +4047,7 @@ async def get_all_responses(
                     elif new_cap != concurrency_cap:
                         old_cap = concurrency_cap
                         concurrency_cap = new_cap
+                        last_token_adjust = now
                         if new_cap < old_cap:
                             detail = "after sustained limiter waits" if limiter_pressure else "based on observed token usage"
                             reason = (
@@ -3981,7 +4058,10 @@ async def get_all_responses(
                             reason = (
                                 f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} based on observed token usage."
                             )
-                        logger.info(reason)
+                        if change < token_adjust_min_delta:
+                            logger.debug(reason)
+                        else:
+                            logger.info(reason)
                         emit_parallelization_status(reason, force=True)
                     else:
                         concurrency_cap = new_cap
