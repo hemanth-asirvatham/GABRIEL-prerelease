@@ -48,7 +48,6 @@ import tempfile
 import time
 import subprocess
 import sys
-import html
 import textwrap
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict, deque
@@ -122,69 +121,23 @@ def _progress_bar(*args: Any, verbose: bool = True, **kwargs: Any):
     return tqdm(*args, disable=disable, **kwargs)
 
 
-def _in_notebook() -> bool:
-    """Return True when running inside a Jupyter/colab notebook."""
-
-    try:
-        from IPython import get_ipython  # type: ignore
-
-        shell = get_ipython()
-        if shell is None:
-            return False
-        return shell.__class__.__name__ == "ZMQInteractiveShell"
-    except Exception:
-        return False
-
-
 def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> None:
-    """Show a concise example prompt with a collapsible view in notebooks."""
+    """Print the full example prompt in plain text for easy copying."""
 
     if not verbose or not example_prompt:
         return
-    show_full = os.getenv("GABRIEL_SHOW_FULL_EXAMPLE_PROMPT", "").strip().lower() in {"1", "true", "yes"}
-    force_plain = os.getenv("GABRIEL_EXAMPLE_PROMPT_PLAIN", "").strip().lower() in {"1", "true", "yes"}
-    collapsed = False
+
     saved_path: Optional[Path] = None
     try:
         saved_path = Path(tempfile.gettempdir()) / "gabriel_example_prompt.txt"
         saved_path.write_text(example_prompt)
     except Exception:
         saved_path = None
-    if _in_notebook():
-        try:
-            from IPython.display import HTML, display  # type: ignore
 
-            if not force_plain:
-                html_content = html.escape(example_prompt)
-                block_id = f"gabriel-example-prompt-{abs(hash(example_prompt)) % 10**8}"
-                display(
-                    HTML(
-                        "<details>"
-                        "<summary>Example prompt (click to expand)</summary>"
-                        "<div style=\"margin-top: 0.5em;\">"
-                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
-                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy to clipboard</button>"
-                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{html_content}</pre>"
-                        "</div>"
-                        "</details>"
-                    )
-                )
-                collapsed = True
-        except Exception:
-            collapsed = False
-    if collapsed or show_full:
-        print("Example prompt: (collapsed above for easier reading)")
-        if show_full and not collapsed:
-            print(textwrap.indent(example_prompt, "  "))
-    else:
-        preview_limit = 500
-        preview = example_prompt if len(example_prompt) <= preview_limit else example_prompt[:preview_limit] + "…"
-        print("Example prompt:")
-        print(textwrap.indent(preview, "  "))
-        if len(example_prompt) > preview_limit:
-            print("  (truncated; set GABRIEL_SHOW_FULL_EXAMPLE_PROMPT=1 to print the full prompt)")
+    print("\nExample prompt (full text):")
+    print(textwrap.indent(example_prompt.strip("\n"), "  "))
     if saved_path:
-        print(f"(Example prompt saved to {saved_path} for easy copy/paste if the rich view is unavailable.)")
+        print(f"(Saved to {saved_path} for easy copy/paste.)")
 
 
 def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
@@ -720,6 +673,8 @@ def _print_usage_overview(
     show_static_sections: bool = True,
     stats: Optional[Dict[str, Any]] = None,
     sample_size: int = _ESTIMATION_SAMPLE_SIZE,
+    heading: Optional[str] = "OpenAI API usage summary",
+    show_prompt_stats: bool = True,
 ) -> None:
     """Print a summary of usage limits, cost estimate and tier information.
 
@@ -727,19 +682,23 @@ def _print_usage_overview(
     ``_get_rate_limit_headers`` multiple times per job.  When ``rate_headers``
     is ``None``, the helper will fetch the headers itself.  Optional web-search
     warnings can be provided to display additional caveats alongside the
-    usage overview.
+    usage overview. ``heading`` controls the section title (set to ``None`` to
+    skip the header) and ``show_prompt_stats`` suppresses the redundant prompt
+    counts when the run banner already printed them.
     """
     if not verbose:
         return
-    print("\n===== OpenAI API usage summary =====")
+    if heading:
+        print(f"\n===== {heading} =====")
     if web_search_warning:
         print(web_search_warning)
     if web_search_parallel_note:
         print(web_search_parallel_note)
     stats = stats or _estimate_dataset_stats(prompts, sample_size=sample_size)
-    print(f"Prompts: {len(prompts)}")
-    suffix = " (sampled)" if stats.get("sampled") else ""
-    print(f"Approx. input words: {stats.get('word_count', 0):,}{suffix}")
+    if show_prompt_stats:
+        print(f"Prompts: {len(prompts)}")
+        suffix = " (sampled)" if stats.get("sampled") else ""
+        print(f"Approx. input words: {stats.get('word_count', 0):,}{suffix}")
     # Fetch fresh headers if not supplied.  Pass the model and base_url so the
     # helper knows which endpoint to probe when performing the dummy call.
     rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(model, base_url=base_url)
@@ -814,26 +773,6 @@ def _print_usage_overview(
         print("\nUsage tiers:")
         for line in tier_lines:
             print(f"  {line}")
-        if _in_notebook():
-            try:
-                from IPython.display import HTML, display  # type: ignore
-
-                tier_text = html.escape("\n".join(tier_lines))
-                block_id = "gabriel-tier-info"
-                display(
-                    HTML(
-                        "<details>"
-                        "<summary>Usage tiers (click to expand / copy)</summary>"
-                        "<div style=\"margin-top: 0.35em;\">"
-                        "<button style=\"margin-bottom: 0.35em; padding: 4px 8px; font-size: 12px;\" "
-                        f"onclick=\"navigator.clipboard && navigator.clipboard.writeText(document.getElementById('{block_id}').innerText);\">Copy tiers</button>"
-                        f"<pre id=\"{block_id}\" style=\"white-space: pre-wrap; word-break: break-word; user-select: text;\">{tier_text}</pre>"
-                        "</div>"
-                        "</details>"
-                    )
-                )
-            except Exception:
-                pass
     pricing = _lookup_model_pricing(model)
     est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
     if pricing and est:
@@ -1018,6 +957,52 @@ def _decide_default_max_output_tokens(
 
     del rate_headers, base_url  # Unused; retained for backward compatibility.
     return user_specified
+
+
+def _rate_limit_decrement(concurrency_cap: int) -> int:
+    """Return a downward step that curbs rate-limit thrash aggressively."""
+
+    return max(2, int(math.ceil(max(concurrency_cap * 0.4, 3))))
+
+
+def _smooth_wait_based_cap(
+    current_cap: int,
+    candidate_cap: int,
+    *,
+    now: float,
+    last_adjust: float,
+    limiter_pressure: bool,
+    min_delta: int,
+    cooldown_up: float,
+    cooldown_down: float,
+    max_step_up_ratio: float = 0.18,
+    max_step_down_ratio: float = 0.08,
+) -> Tuple[int, float, bool]:
+    """Dampen wait-based cap changes and space them out.
+
+    Returns a tuple of (new_cap, updated_last_adjust, changed?).
+    """
+
+    if candidate_cap < 1:
+        candidate_cap = 1
+    delta = candidate_cap - current_cap
+    if abs(delta) < min_delta:
+        return current_cap, last_adjust, False
+    if delta < 0 and not limiter_pressure:
+        return current_cap, last_adjust, False
+
+    cooldown = cooldown_up if delta > 0 else cooldown_down
+    if (now - last_adjust) < cooldown:
+        return current_cap, last_adjust, False
+
+    step_ratio = max_step_up_ratio if delta > 0 else max_step_down_ratio
+    step = max(1, int(math.ceil(current_cap * step_ratio)))
+    bounded_delta = max(-step, min(step, delta))
+    new_cap = max(1, current_cap + bounded_delta)
+
+    if new_cap == current_cap:
+        return current_cap, last_adjust, False
+    return new_cap, now, True
 
 
 def _normalise_web_search_filters(
@@ -2924,58 +2909,58 @@ async def get_all_responses(
             f"You are attempting to process {len(todo_pairs):,} prompts in one go. For better performance and reliability, we recommend splitting jobs into 50k‑row chunks or fewer."
         )
     show_example_prompt = bool(print_example_prompt and not quiet)
-    # Print usage summary and example prompt
-    if show_example_prompt and todo_pairs:
-        # Build prompt list for cost estimate
-        prompt_list = [p for p, _ in todo_pairs]
-        todo_stats = _estimate_dataset_stats(prompt_list, sample_size=_ESTIMATION_SAMPLE_SIZE)
-        if not using_custom_response_fn:
-            _print_usage_overview(
-                prompts=prompt_list,
-                n=n,
-                max_output_tokens=cutoff,
-                model=model,
-                use_batch=use_batch,
-                n_parallels=requested_n_parallels,
-                verbose=message_verbose,
-                rate_headers=rate_headers,
-                base_url=base_url,
-                web_search_warning=web_search_warning_text,
-                web_search_parallel_note=web_search_parallel_note,
-                show_static_sections=not _USAGE_SHEET_PRINTED,
-                stats=todo_stats,
-                sample_size=_ESTIMATION_SAMPLE_SIZE,
-            )
-            _USAGE_SHEET_PRINTED = True
-            if web_search_warning_text:
-                web_search_warning_displayed = True
-            if web_search_parallel_note:
-                web_search_note_displayed = True
-        elif message_verbose:
-            print(
-                "\n===== Job summary ====="
-                f"\nNumber of prompts: {len(prompt_list)}"
-                f"\nParallel workers (requested): {requested_n_parallels}"
-            )
-            if web_search_warning_text:
-                print(web_search_warning_text)
-                web_search_warning_displayed = True
-            if web_search_parallel_note:
-                print(web_search_parallel_note)
-                web_search_note_displayed = True
-            logger.info(
-                "Skipping OpenAI usage overview because a custom response_fn was supplied."
-            )
-        example_prompt, _ = todo_pairs[0]
-        _display_example_prompt(example_prompt, verbose=message_verbose)
-        if not message_verbose:
-            logger.info("Example prompt omitted from logs because verbose output is disabled.")
+    prompt_list = [p for p, _ in todo_pairs]
+    todo_stats = _estimate_dataset_stats(prompt_list, sample_size=_ESTIMATION_SAMPLE_SIZE)
+    if todo_pairs and not using_custom_response_fn and message_verbose:
+        _print_usage_overview(
+            prompts=prompt_list,
+            n=n,
+            max_output_tokens=cutoff,
+            model=model,
+            use_batch=use_batch,
+            n_parallels=requested_n_parallels,
+            verbose=message_verbose,
+            rate_headers=rate_headers,
+            base_url=base_url,
+            web_search_warning=web_search_warning_text,
+            web_search_parallel_note=web_search_parallel_note,
+            show_static_sections=not _USAGE_SHEET_PRINTED,
+            stats=todo_stats,
+            sample_size=_ESTIMATION_SAMPLE_SIZE,
+            heading="Run limits and cost overview",
+            show_prompt_stats=False,
+        )
+        _USAGE_SHEET_PRINTED = True
+        if web_search_warning_text:
+            web_search_warning_displayed = True
+        if web_search_parallel_note:
+            web_search_note_displayed = True
+    elif message_verbose and todo_pairs:
+        print(
+            "\n===== Job summary ====="
+            f"\nNumber of prompts: {len(prompt_list)}"
+            f"\nParallel workers (requested): {requested_n_parallels}"
+        )
+        if web_search_warning_text:
+            print(web_search_warning_text)
+            web_search_warning_displayed = True
+        if web_search_parallel_note:
+            print(web_search_parallel_note)
+            web_search_note_displayed = True
+        logger.info(
+            "Skipping OpenAI usage overview because a custom response_fn was supplied."
+        )
     if message_verbose and web_search_warning_text and not web_search_warning_displayed:
         print(web_search_warning_text)
         web_search_warning_displayed = True
     if message_verbose and web_search_parallel_note and not web_search_note_displayed:
         print(web_search_parallel_note)
         web_search_note_displayed = True
+    if show_example_prompt and todo_pairs:
+        example_prompt, _ = todo_pairs[0]
+        _display_example_prompt(example_prompt, verbose=message_verbose)
+        if not message_verbose:
+            logger.info("Example prompt omitted from logs because verbose output is disabled.")
     # Dynamically adjust the maximum number of parallel workers based on rate
     # limits.  We base the concurrency on your API’s per‑minute request and
     # token budgets and the average prompt length.  This calculation only
@@ -3602,11 +3587,12 @@ async def get_all_responses(
     estimated_output_tokens = initial_estimated_output_tokens
     limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
-    limiter_wait_ratio_threshold = 0.2
-    limiter_wait_duration_threshold = 0.35
-    token_adjust_cooldown = max(15.0, rate_limit_window * 0.5)
-    last_token_adjust = 0.0
-    token_adjust_min_delta = max(1, int(math.ceil(max_parallel_ceiling * 0.02)))
+    limiter_wait_ratio_threshold = 0.3
+    limiter_wait_duration_threshold = 0.6
+    wait_adjust_cooldown_up = max(20.0, rate_limit_window * 0.7)
+    wait_adjust_cooldown_down = max(45.0, rate_limit_window * 1.25)
+    wait_adjust_min_delta = max(1, int(math.ceil(max_parallel_ceiling * 0.04)))
+    last_wait_adjust = 0.0
 
     def _aggregate_usage(raw_items: List[Any]) -> Tuple[int, int, int]:
         total_in = total_out = total_reason = 0
@@ -3755,22 +3741,22 @@ async def get_all_responses(
         while rate_limit_error_times and rate_limit_error_times[0] < window_start:
             rate_limit_error_times.popleft()
         recent_errors = len(rate_limit_error_times)
-        error_window_threshold = max(10, int(math.ceil(concurrency_cap * 0.15)))
-        consecutive_threshold = max(5, int(math.ceil(concurrency_cap * 0.1)))
+        error_window_threshold = max(6, int(math.ceil(concurrency_cap * 0.08)))
+        consecutive_threshold = max(3, int(math.ceil(concurrency_cap * 0.05)))
         should_scale_down = False
         if recent_errors >= error_window_threshold:
             should_scale_down = True
         elif rate_limit_errors_since_adjust >= consecutive_threshold:
             should_scale_down = True
-        if should_scale_down and (now - last_concurrency_scale_down) >= rate_limit_window:
-            decrement = max(1, int(math.ceil(max(concurrency_cap * 0.25, 2))))
+        if should_scale_down and (now - last_concurrency_scale_down) >= max(1.0, rate_limit_window * 0.75):
+            decrement = _rate_limit_decrement(concurrency_cap)
             new_cap = max(1, concurrency_cap - decrement)
             if new_cap != concurrency_cap:
                 old_cap = concurrency_cap
                 concurrency_cap = new_cap
                 reason = (
-                    f"[scale down] Reducing parallel workers from {old_cap} to {new_cap} "
-                    f"after {recent_errors} rate limit errors in the last {int(round(rate_limit_window))}s."
+                    f"[rate-limit recovery] Cutting workers from {old_cap} to {new_cap} "
+                    f"after {recent_errors} rate-limit errors in the last {int(round(rate_limit_window))}s."
                 )
                 logger.warning(reason)
                 emit_parallelization_status(reason, force=True)
@@ -3789,15 +3775,15 @@ async def get_all_responses(
             and (now - last_concurrency_scale_down) >= rate_limit_window
             and (now - last_concurrency_scale_up) >= rate_limit_window
         ):
-            success_threshold = max(40, int(math.ceil(concurrency_cap * 1.5)))
+            success_threshold = max(30, int(math.ceil(concurrency_cap * 1.25)))
             if successes_since_adjust >= success_threshold:
-                increment = max(1, int(math.ceil(max(concurrency_cap * 0.08, 1))))
+                increment = max(1, int(math.ceil(max(concurrency_cap * 0.12, 1))))
                 new_cap = min(max_parallel_ceiling, concurrency_cap + increment)
                 if new_cap != concurrency_cap:
                     old_cap = concurrency_cap
                     concurrency_cap = new_cap
                     reason = (
-                        f"[scale up] Increasing parallel workers from {old_cap} to {new_cap} after sustained success."
+                        f"[rate-limit recovery] Increasing workers from {old_cap} to {new_cap} after sustained success."
                     )
                     logger.info(reason)
                     emit_parallelization_status(reason, force=True)
@@ -3808,7 +3794,7 @@ async def get_all_responses(
                 rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
-        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling, last_token_adjust
+        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling, last_wait_adjust
         while True:
             if stop_event.is_set():
                 break
@@ -3992,7 +3978,7 @@ async def get_all_responses(
                     now = time.time()
                     safe_to_increase = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
                     if new_cap > concurrency_cap:
-                        max_increase = max(1, int(math.ceil(concurrency_cap * 0.1)))
+                        max_increase = max(1, int(math.ceil(concurrency_cap * 0.12)))
                         if not safe_to_increase:
                             new_cap = concurrency_cap
                         else:
@@ -4029,40 +4015,41 @@ async def get_all_responses(
                                 or high_ratio_events >= max(3, math.ceil(sample_count * 0.35))
                                 or high_wait_events >= max(3, math.ceil(sample_count * 0.35))
                             )
-                    change = abs(new_cap - concurrency_cap)
-                    recently_adjusted = (now - last_token_adjust) < token_adjust_cooldown
-                    if new_cap > concurrency_cap and (recently_adjusted or change < token_adjust_min_delta):
-                        new_cap = concurrency_cap
-                    if new_cap < concurrency_cap and not limiter_pressure:
-                        if recently_adjusted or change < token_adjust_min_delta:
-                            new_cap = concurrency_cap
                     if new_cap < concurrency_cap and not limiter_pressure:
                         logger.debug(
-                            "[token-based adaptation] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
+                            "[throughput tuning] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
                             new_cap,
                             concurrency_cap,
                             limiter_wait_time,
                             limiter_wait_ratio * 100,
                         )
-                    elif new_cap != concurrency_cap:
+                        new_cap = concurrency_cap
+                    smoothed_cap, last_wait_adjust, changed = _smooth_wait_based_cap(
+                        concurrency_cap,
+                        new_cap,
+                        now=now,
+                        last_adjust=last_wait_adjust,
+                        limiter_pressure=limiter_pressure,
+                        min_delta=wait_adjust_min_delta,
+                        cooldown_up=wait_adjust_cooldown_up,
+                        cooldown_down=wait_adjust_cooldown_down,
+                    )
+                    if changed:
                         old_cap = concurrency_cap
-                        concurrency_cap = new_cap
-                        last_token_adjust = now
-                        if new_cap < old_cap:
-                            detail = "after sustained limiter waits" if limiter_pressure else "based on observed token usage"
-                            reason = (
-                                f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} {detail}"
-                                f" (recent limiter wait ≈ {limiter_wait_time:.2f}s, {limiter_wait_ratio * 100:.0f}% of call)."
-                            )
-                        else:
-                            reason = (
-                                f"[token-based adaptation] Updating parallel workers from {old_cap} to {new_cap} based on observed token usage."
-                            )
-                        if change < token_adjust_min_delta:
-                            logger.debug(reason)
-                        else:
+                        concurrency_cap = smoothed_cap
+                        direction = "Raising" if concurrency_cap > old_cap else "Lowering"
+                        reason = (
+                            f"[throughput tuning] {direction} worker cap from {old_cap} to {concurrency_cap} "
+                            f"based on limiter waits (recent wait ≈ {limiter_wait_time:.2f}s, {limiter_wait_ratio * 100:.0f}% of call)."
+                        )
+                        significant = abs(concurrency_cap - old_cap) >= max(
+                            wait_adjust_min_delta, int(math.ceil(old_cap * 0.1))
+                        )
+                        if significant:
                             logger.info(reason)
-                        emit_parallelization_status(reason, force=True)
+                            emit_parallelization_status(reason, force=True)
+                        else:
+                            logger.debug(reason)
                     else:
                         concurrency_cap = new_cap
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
