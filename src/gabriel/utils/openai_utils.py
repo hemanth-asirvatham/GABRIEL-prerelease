@@ -3767,8 +3767,7 @@ async def get_all_responses(
             formatted = (
                 f"{message} (subsequent occurrences of this error will be silenced in logs)"
             )
-            if message_verbose and not logger.isEnabledFor(level):
-                print(formatted)
+            print(formatted)
             logger.log(level, formatted)
         else:
             logger.debug(message)
@@ -4238,6 +4237,7 @@ async def get_all_responses(
                     )
                 limiter_wait_durations.append(limiter_wait_time)
                 limiter_wait_ratios.append(limiter_wait_ratio)
+                new_cap = concurrency_cap
                 total_input, total_output, total_reasoning = _aggregate_usage(raw)
                 for item in _coerce_to_list(raw):
                     rid = _safe_get(item, "id")
@@ -4266,114 +4266,121 @@ async def get_all_responses(
                 usage_samples.append((total_input, total_output, total_reasoning))
                 if len(usage_samples) > token_sample_size:
                     usage_samples.pop(0)
-                new_cap = concurrency_cap
-                if manage_rate_limits and len(usage_samples) >= token_sample_size:
-                    avg_in = statistics.mean(u[0] for u in usage_samples)
-                    avg_out = statistics.mean(u[1] for u in usage_samples)
-                    avg_reason = statistics.mean(u[2] for u in usage_samples)
-                    observed_output = avg_out + avg_reason
-                    if observed_output > 0:
-                        estimated_output_tokens = max(
-                            estimated_output_tokens, observed_output * OUTPUT_TOKEN_HEADROOM
+                try:
+                    if manage_rate_limits and len(usage_samples) >= token_sample_size:
+                        avg_in = statistics.mean(u[0] for u in usage_samples)
+                        avg_out = statistics.mean(u[1] for u in usage_samples)
+                        avg_reason = statistics.mean(u[2] for u in usage_samples)
+                        observed_output = avg_out + avg_reason
+                        if observed_output > 0:
+                            estimated_output_tokens = max(
+                                estimated_output_tokens, observed_output * OUTPUT_TOKEN_HEADROOM
+                            )
+                        tokens_per_call_est = (
+                            avg_in + max(estimated_output_tokens, observed_output)
+                        ) * max(1, n)
+                        current_tokens_per_call = max(1.0, tokens_per_call_est)
+                        planned_ppm_live, _ = _planned_ppm_and_details(
+                            allowed_req_pm if manage_rate_limits else None,
+                            allowed_tok_pm if manage_rate_limits else None,
+                            current_tokens_per_call,
                         )
-                    tokens_per_call_est = (
-                        avg_in + max(estimated_output_tokens, observed_output)
-                    ) * max(1, n)
-                    current_tokens_per_call = max(1.0, tokens_per_call_est)
-                    planned_ppm_live, _ = _planned_ppm_and_details(
-                        allowed_req_pm if manage_rate_limits else None,
-                        allowed_tok_pm if manage_rate_limits else None,
-                        current_tokens_per_call,
-                    )
-                    if planned_ppm_live is not None:
-                        throughput_ceiling_ppm = planned_ppm_live
-                    ceiling_cap = _effective_parallel_ceiling()
-                    concurrency_cap = min(concurrency_cap, ceiling_cap)
-                    token_limited = int(
-                        max(1, allowed_tok_pm // max(1, tokens_per_call_est))
-                    )
-                    req_limited = int(max(1, allowed_req_pm))
-                    new_cap = min(ceiling_cap, req_limited, token_limited)
-                    if new_cap < 1:
-                        new_cap = 1
-                    now = time.time()
-                    safe_to_increase = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
-                    if new_cap > concurrency_cap:
-                        max_increase = max(1, int(math.ceil(concurrency_cap * 0.12)))
-                        if not safe_to_increase:
+                        if planned_ppm_live is not None:
+                            throughput_ceiling_ppm = planned_ppm_live
+                        ceiling_cap = _effective_parallel_ceiling()
+                        concurrency_cap = min(concurrency_cap, ceiling_cap)
+                        token_limited = int(
+                            max(1, allowed_tok_pm // max(1, tokens_per_call_est))
+                        )
+                        req_limited = int(max(1, allowed_req_pm))
+                        new_cap = min(ceiling_cap, req_limited, token_limited)
+                        if new_cap < 1:
+                            new_cap = 1
+                        now = time.time()
+                        safe_to_increase = (now - status.time_of_last_rate_limit_error) >= rate_limit_window
+                        if new_cap > concurrency_cap:
+                            max_increase = max(1, int(math.ceil(concurrency_cap * 0.12)))
+                            if not safe_to_increase:
+                                new_cap = concurrency_cap
+                            else:
+                                new_cap = min(new_cap, concurrency_cap + max_increase)
+                        limiter_pressure = False
+                        if (
+                            limiter_wait_ratio >= limiter_wait_ratio_threshold
+                            or limiter_wait_time >= limiter_wait_duration_threshold
+                        ):
+                            limiter_pressure = True
+                        else:
+                            sample_count = len(limiter_wait_durations)
+                            min_samples = max(5, min(token_sample_size, 20))
+                            if sample_count >= min_samples:
+                                try:
+                                    avg_ratio = statistics.mean(limiter_wait_ratios)
+                                    avg_wait = statistics.mean(limiter_wait_durations)
+                                except statistics.StatisticsError:
+                                    avg_ratio = 0.0
+                                    avg_wait = 0.0
+                                high_ratio_events = sum(
+                                    1
+                                    for r in limiter_wait_ratios
+                                    if r >= limiter_wait_ratio_threshold
+                                )
+                                high_wait_events = sum(
+                                    1
+                                    for d in limiter_wait_durations
+                                    if d >= limiter_wait_duration_threshold
+                                )
+                                limiter_pressure = (
+                                    avg_ratio >= limiter_wait_ratio_threshold
+                                    or avg_wait >= limiter_wait_duration_threshold
+                                    or high_ratio_events >= max(3, math.ceil(sample_count * 0.35))
+                                    or high_wait_events >= max(3, math.ceil(sample_count * 0.35))
+                                )
+                        if new_cap < concurrency_cap and not limiter_pressure:
+                            logger.debug(
+                                "[throughput tuning] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
+                                new_cap,
+                                concurrency_cap,
+                                limiter_wait_time,
+                                limiter_wait_ratio * 100,
+                            )
                             new_cap = concurrency_cap
-                        else:
-                            new_cap = min(new_cap, concurrency_cap + max_increase)
-                    limiter_pressure = False
-                    if (
-                        limiter_wait_ratio >= limiter_wait_ratio_threshold
-                        or limiter_wait_time >= limiter_wait_duration_threshold
-                    ):
-                        limiter_pressure = True
-                    else:
-                        sample_count = len(limiter_wait_durations)
-                        min_samples = max(5, min(token_sample_size, 20))
-                        if sample_count >= min_samples:
-                            try:
-                                avg_ratio = statistics.mean(limiter_wait_ratios)
-                                avg_wait = statistics.mean(limiter_wait_durations)
-                            except statistics.StatisticsError:
-                                avg_ratio = 0.0
-                                avg_wait = 0.0
-                            high_ratio_events = sum(
-                                1
-                                for r in limiter_wait_ratios
-                                if r >= limiter_wait_ratio_threshold
-                            )
-                            high_wait_events = sum(
-                                1
-                                for d in limiter_wait_durations
-                                if d >= limiter_wait_duration_threshold
-                            )
-                            limiter_pressure = (
-                                avg_ratio >= limiter_wait_ratio_threshold
-                                or avg_wait >= limiter_wait_duration_threshold
-                                or high_ratio_events >= max(3, math.ceil(sample_count * 0.35))
-                                or high_wait_events >= max(3, math.ceil(sample_count * 0.35))
-                            )
-                    if new_cap < concurrency_cap and not limiter_pressure:
-                        logger.debug(
-                            "[throughput tuning] Computed concurrency cap %d but keeping %d since limiter waits (%.2fs, %.0f%%) remain below thresholds.",
-                            new_cap,
+                        smoothed_cap, last_wait_adjust, changed = _smooth_wait_based_cap(
                             concurrency_cap,
-                            limiter_wait_time,
-                            limiter_wait_ratio * 100,
+                            new_cap,
+                            now=now,
+                            last_adjust=last_wait_adjust,
+                            limiter_pressure=limiter_pressure,
+                            min_delta=wait_adjust_min_delta,
+                            cooldown_up=wait_adjust_cooldown_up,
+                            cooldown_down=wait_adjust_cooldown_down,
                         )
-                        new_cap = concurrency_cap
-                    smoothed_cap, last_wait_adjust, changed = _smooth_wait_based_cap(
-                        concurrency_cap,
-                        new_cap,
-                        now=now,
-                        last_adjust=last_wait_adjust,
-                        limiter_pressure=limiter_pressure,
-                        min_delta=wait_adjust_min_delta,
-                        cooldown_up=wait_adjust_cooldown_up,
-                        cooldown_down=wait_adjust_cooldown_down,
+                        if smoothed_cap > concurrency_cap and (now - last_rate_limit_concurrency_change) < max(rate_limit_window, wait_adjust_cooldown_up):
+                            smoothed_cap = concurrency_cap
+                            changed = False
+                        if changed:
+                            old_cap = concurrency_cap
+                            concurrency_cap = smoothed_cap
+                            direction = "Raising" if concurrency_cap > old_cap else "Lowering"
+                            reason = (
+                                f"[throughput tuning] {direction} worker cap from {old_cap} to {concurrency_cap} "
+                                f"based on limiter waits (recent wait ≈ {limiter_wait_time:.2f}s, {limiter_wait_ratio * 100:.0f}% of call)."
+                            )
+                            significant = abs(concurrency_cap - old_cap) >= max(
+                                wait_adjust_min_delta, int(math.ceil(old_cap * 0.15)), 3
+                            )
+                            if significant:
+                                logger.info(reason)
+                                emit_parallelization_status(reason, force=True)
+                            else:
+                                logger.debug(reason)
+                except Exception as e:
+                    _emit_first_error(
+                        f"Error while updating concurrency cap dynamically: {e}",
+                        level=logging.ERROR,
+                        dedup_key=("cap-adjustment", type(e).__name__, str(e)),
                     )
-                    if smoothed_cap > concurrency_cap and (now - last_rate_limit_concurrency_change) < max(rate_limit_window, wait_adjust_cooldown_up):
-                        smoothed_cap = concurrency_cap
-                        changed = False
-                    if changed:
-                        old_cap = concurrency_cap
-                        concurrency_cap = smoothed_cap
-                        direction = "Raising" if concurrency_cap > old_cap else "Lowering"
-                        reason = (
-                            f"[throughput tuning] {direction} worker cap from {old_cap} to {concurrency_cap} "
-                            f"based on limiter waits (recent wait ≈ {limiter_wait_time:.2f}s, {limiter_wait_ratio * 100:.0f}% of call)."
-                        )
-                        significant = abs(concurrency_cap - old_cap) >= max(
-                            wait_adjust_min_delta, int(math.ceil(old_cap * 0.15)), 3
-                        )
-                        if significant:
-                            logger.info(reason)
-                            emit_parallelization_status(reason, force=True)
-                        else:
-                            logger.debug(reason)
+                    logger.debug("Throughput tuning failed; retaining existing cap.", exc_info=True)
                 concurrency_cap = new_cap
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
