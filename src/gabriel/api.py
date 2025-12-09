@@ -88,7 +88,55 @@ async def rate(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Rate`."""
+    """Score passages on named attributes and persist the results.
+
+    Parameters
+    ----------
+    df:
+        Source DataFrame containing the passages to rate.
+    column_name:
+        Column in ``df`` that holds the passages (text, image, or audio
+        references depending on ``modality``).
+    attributes:
+        Mapping of attribute names to natural-language descriptions that the
+        model should evaluate on a 0–100 scale.
+    save_dir:
+        Directory where raw responses and the aggregated ratings CSV are
+        written. Created if it does not exist.
+    additional_instructions:
+        Optional extra guidance injected into the prompt template.
+    model:
+        Model name passed through to the OpenAI Responses API.
+    n_parallels:
+        Maximum number of concurrent requests to issue.
+    n_runs:
+        Number of repeat rating passes to perform for each passage.
+    reset_files:
+        When ``True`` existing outputs in ``save_dir`` are ignored and
+        regenerated.
+    use_dummy:
+        If ``True`` use deterministic dummy responses for offline testing.
+    file_name:
+        Basename (without the automatic ``_raw_responses`` suffix) for saved
+        artifacts.
+    modality:
+        One of ``"text"``, ``"entity"``, ``"web"``, ``"image"``, or ``"audio"``
+        to control how inputs are packaged into prompts.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI metadata that tunes reasoning depth and summary capture.
+    search_context_size:
+        Size hint forwarded to web-search capable models.
+    template_path:
+        Override the default rating prompt template with a custom Jinja2 file.
+    **cfg_kwargs:
+        Additional overrides applied to :class:`gabriel.tasks.rate.RateConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Input DataFrame with one column per attribute containing the mean score
+        across runs.
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = RateConfig(
@@ -132,7 +180,53 @@ async def extract(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Extract`."""
+    """Pull structured attributes from passages into a table.
+
+    Parameters
+    ----------
+    df:
+        Source DataFrame containing the passages to parse.
+    column_name:
+        Column in ``df`` with the content to extract from.
+    attributes:
+        Mapping of field names to descriptions of what should be extracted.
+    save_dir:
+        Directory where extraction outputs will be written. Created if absent.
+    additional_instructions:
+        Optional extra guidance injected into the extraction prompt.
+    model:
+        Model used for extraction via the OpenAI Responses API.
+    n_parallels:
+        Maximum number of concurrent extraction calls.
+    n_runs:
+        Number of extraction passes to perform; results are averaged when
+        applicable.
+    reset_files:
+        When ``True`` forces regeneration of outputs in ``save_dir``.
+    use_dummy:
+        If ``True`` return deterministic dummy outputs instead of real API
+        calls.
+    file_name:
+        CSV name used when saving extraction results.
+    modality:
+        Indicates whether the content is ``"entity"`` text or another modality
+        supported by the templates.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI metadata for reasoning depth and summarisation.
+    types:
+        Optional mapping of attribute names to explicit Python types for
+        stronger downstream typing.
+    template_path:
+        Custom Jinja2 template path to override the default extraction prompt.
+    **cfg_kwargs:
+        Additional overrides forwarded to :class:`gabriel.tasks.extract.ExtractConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The original DataFrame augmented with one column per requested
+        attribute.
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = ExtractConfig(
@@ -177,7 +271,50 @@ async def seed(
     reset_files: bool = False,
     **response_kwargs: Any,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Seed`."""
+    """Generate a large list of entities for discovery or ideation.
+
+    Parameters
+    ----------
+    instructions:
+        High-level description of the domain and what constitutes a good seed
+        entity.
+    save_dir:
+        Directory where seed entities and raw responses are stored.
+    file_name:
+        Name of the CSV to write seed entities to.
+    model:
+        Model used for generation.
+    n_parallels:
+        Maximum number of concurrent generation calls.
+    num_entities:
+        Target number of entities to generate in total.
+    entities_per_generation:
+        Number of entities requested from each API call.
+    entity_batch_frac:
+        Fraction of generated entities to keep per batch before deduplication.
+    existing_entities_cap:
+        Maximum number of prior entities to consider when avoiding duplicates.
+    use_dummy:
+        If ``True`` emit deterministic dummy seeds for offline testing.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    max_timeout:
+        Optional timeout in seconds for each API call.
+    template_path:
+        Optional Jinja2 template override for the seeding prompt.
+    existing_entities:
+        List of pre-existing entities to avoid regenerating.
+    reset_files:
+        When ``True`` ignore any saved state in ``save_dir`` and regenerate.
+    **response_kwargs:
+        Additional keyword arguments forwarded to
+        :func:`gabriel.utils.openai_utils.get_all_responses`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame of seed entities with provenance metadata.
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -228,7 +365,55 @@ async def classify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Classify`."""
+    """Assign labels (optionally circle/square pairs) to passages and record predicted classes."""
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing content to classify.
+    column_name:
+        Column with the main passage text. Can be ``None`` when using paired
+        circle/square inputs.
+    labels:
+        Mapping of label names to definitions the model should follow.
+    save_dir:
+        Directory where classification artifacts are written.
+    additional_instructions:
+        Free-form instructions appended to the classification prompt.
+    model:
+        Model name used for classification.
+    differentiate:
+        When ``True`` use differentiation mode to highlight contrasts.
+    circle_column_name, square_column_name:
+        Optional paired columns for contrastive classification.
+    n_parallels:
+        Maximum number of concurrent classification calls.
+    n_runs:
+        Number of repeated classification passes.
+    min_frequency:
+        Minimum label frequency required to keep a label during aggregation.
+    reset_files:
+        When ``True`` overwrite any existing outputs in ``save_dir``.
+    use_dummy:
+        If ``True`` return deterministic dummy outputs for offline testing.
+    file_name:
+        Basename for saved classification CSVs.
+    modality:
+        Indicates the content modality for prompt rendering.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    search_context_size:
+        Context size hint forwarded to the Responses API.
+    template_path:
+        Override the default classification prompt template.
+    **cfg_kwargs:
+        Extra configuration passed to :class:`gabriel.tasks.classify.ClassifyConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame including one column per label plus ``predicted_classes``; aggregates repeated runs using ``min_frequency``.
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = ClassifyConfig(
@@ -290,7 +475,52 @@ async def ideate(
     seed_run_kwargs: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Ideate`."""
+    """Generate ideas, rate/rank them recursively, and return the top list."""
+
+    Parameters
+    ----------
+    topic:
+        Subject area or question to ideate on.
+    save_dir:
+        Directory where generated ideas and intermediate rankings are saved.
+    file_name:
+        CSV name for the consolidated ideation output.
+    model, ranking_model:
+        Models used for idea generation and ranking (if different).
+    n_ideas:
+        Target number of ideas to generate before pruning.
+    n_parallels:
+        Maximum concurrent calls for generation and ranking phases.
+    evaluation_mode:
+        Strategy used to evaluate ideas (for example ``"recursive_rank"``).
+    attributes:
+        Optional attributes to rate ideas on during evaluation.
+    rank_attribute:
+        Name of the attribute used for final ranking when multiple attributes
+        are present.
+    recursive_*:
+        Parameters controlling iterative ranking passes (fraction kept,
+        minimum remaining, cut side, etc.).
+    additional_instructions:
+        Extra guidance injected into prompts for both generation and ranking.
+    web_search:
+        Enable web search augmentation for generation.
+    use_dummy:
+        When ``True`` perform deterministic offline runs.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    reset_files:
+        Force regeneration of outputs in ``save_dir``.
+    *_config_updates, *_run_kwargs:
+        Fine-grained overrides for nested Rate/Rank/Seed tasks.
+    template_path:
+        Optional template override for the ideation prompts.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Ranked list of ideas with evaluation metadata.
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -359,7 +589,50 @@ async def deidentify(
     reset_files: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Deidentifier`."""
+    """Redact personally identifiable information with optional multi-pass replacements."""
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing passages to deidentify.
+    column_name:
+        Column in ``df`` holding the text to scrub.
+    save_dir:
+        Directory where anonymised outputs and mappings are written.
+    grouping_column:
+        Optional column grouping records that should share replacements.
+    mapping_column:
+        Optional column providing deterministic replacement tokens.
+    model:
+        Model name used to perform the deidentification.
+    n_parallels:
+        Maximum concurrent requests.
+    use_dummy:
+        When ``True`` produce deterministic dummy replacements for testing.
+    file_name:
+        CSV filename used when persisting deidentified text.
+    max_words_per_call:
+        Chunk size control for long passages.
+    additional_instructions:
+        Extra guidance appended to the prompt.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    n_passes:
+        Number of deidentification passes to run over each passage.
+    use_existing_mappings_only:
+        If ``True`` only apply existing mappings and avoid new model calls.
+    template_path:
+        Custom prompt template path.
+    reset_files:
+        When ``True`` ignore cached outputs in ``save_dir``.
+    **cfg_kwargs:
+        Additional overrides for :class:`gabriel.tasks.deidentify.DeidentifyConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing deidentified text and replacement mappings.
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = DeidentifyConfig(
@@ -421,14 +694,57 @@ async def rank(
     id_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Rank`.
+    """Score passages via pairwise comparisons with optional recursion and initial rating passes.
 
-    Notes
-    -----
-    The CSV written to ``save_dir`` always contains the z-score columns and the
-    corresponding ``"<attribute>_raw"``/``"<attribute>_se"`` columns, but the
-    DataFrame returned by this helper only exposes the attribute (z-score)
-    columns unless ``return_raw_scores`` is set to ``True``.
+    Parameters
+    ----------
+    df:
+        DataFrame containing passages to rank.
+    column_name:
+        Column holding the content to rank.
+    attributes:
+        Either a mapping of attribute names to descriptions or a list of
+        attribute names (descriptions inferred from templates).
+    save_dir:
+        Directory where ranking artifacts are saved.
+    additional_instructions:
+        Free-form prompt additions applied to each comparison.
+    model:
+        Model name used for ranking calls.
+    n_rounds, matches_per_round, power_matching, learning_rate:
+        Parameters controlling the Elo-style tournament mechanics.
+    n_parallels:
+        Maximum concurrent ranking calls.
+    use_dummy:
+        When ``True`` run deterministic offline ranking.
+    file_name:
+        Base filename for saved rankings (without extension).
+    reset_files:
+        Force regeneration of any existing outputs in ``save_dir``.
+    modality:
+        Content modality forwarded to the prompt.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    template_path:
+        Path to a custom ranking prompt template.
+    recursive_*:
+        Settings for recursive pruning (fraction kept, minimum remaining, etc.).
+    initial_rating_pass:
+        Whether to run a preliminary rating stage before comparisons.
+    rate_kwargs:
+        Additional configuration forwarded to the preliminary rating stage.
+    id_column:
+        Optional existing identifier column; otherwise hashes of ``column_name``
+        are generated.
+    **cfg_kwargs:
+        Extra parameters passed to :class:`gabriel.tasks.rank.RankConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Ranked outputs. The CSV written to ``save_dir`` always contains raw
+        scores and standard errors, but the returned DataFrame hides those
+        columns unless ``return_raw_scores`` is ``True``.
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -516,7 +832,72 @@ async def codify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Codify`."""
+    """Run the Codify task to map passages into structured categories with optional multi-round refinement.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing the passages to code.
+    column_name:
+        Column with the text to be coded.
+    save_dir:
+        Directory where coding outputs are written.
+    categories:
+        Optional mapping of category names to descriptions. If omitted the model
+        infers categories.
+    additional_instructions:
+        Extra guidance appended to the coding prompt.
+    model:
+        Model used for coding requests.
+    n_parallels:
+        Maximum number of concurrent coding calls.
+    max_words_per_call:
+        Chunk size control for each request.
+    max_categories_per_call:
+        Limit on the number of categories evaluated per call.
+    file_name:
+        Filename for saved coding responses.
+    reset_files:
+        When ``True`` regenerate outputs even if files exist.
+    debug_print:
+        Enable verbose logging of prompts and responses.
+    use_dummy:
+        Use deterministic dummy outputs for testing.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    modality:
+        Content modality hint (text, entity, etc.).
+    json_mode:
+        Request JSON-mode responses where supported.
+    max_timeout:
+        Optional per-call timeout.
+    n_rounds:
+        Number of completion passes to refine codes.
+    completion_classifier_instructions:
+        Optional classifier guidance for completion steps.
+    template_path:
+        Custom Jinja2 template for coding prompts.
+    **cfg_kwargs:
+        Additional overrides passed to :class:`gabriel.tasks.codify.CodifyConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with coded categories and any iterative refinement metadata.
+
+    Examples
+    --------
+    Code support tickets into predefined categories::
+
+        import gabriel
+
+        coded = await gabriel.codify(
+            tickets,
+            "text",
+            categories={"billing": "billing issues", "bug": "product bugs"},
+            save_dir="~/runs/codify_tickets",
+        )
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg_kwargs = dict(cfg_kwargs)
@@ -572,7 +953,67 @@ async def paraphrase(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Paraphrase`."""
+    """Run the Paraphrase task to rewrite passages with optional validation, web search, and JSON mode.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing passages to paraphrase.
+    column_name:
+        Column with text to rewrite.
+    instructions:
+        Guidance describing how the paraphrase should differ from the source.
+    save_dir:
+        Directory where paraphrase outputs are written.
+    revised_column_name:
+        Optional name for the paraphrased column; defaults to a generated one.
+    n_revisions:
+        Number of paraphrases to produce per passage.
+    file_name:
+        CSV filename for saved paraphrases.
+    model:
+        Model name used for generation.
+    json_mode:
+        Whether to request JSON responses.
+    web_search:
+        Enable web search augmentation when supported by the model.
+    n_parallels:
+        Maximum concurrent paraphrase calls.
+    use_dummy:
+        Produce deterministic dummy paraphrases.
+    reset_files:
+        When ``True`` regenerate outputs even if files already exist.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    recursive_validation:
+        When ``True`` run a secondary validation stage on generated paraphrases.
+    n_initial_candidates, n_validation_candidates:
+        Control the number of candidates in generation and validation phases.
+    use_modified_source:
+        If ``True`` allow modified source text to be used during validation.
+    template_path:
+        Custom template path to override the default paraphrase prompt.
+    **cfg_kwargs:
+        Additional configuration passed to :class:`gabriel.tasks.paraphrase.ParaphraseConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing paraphrased text and any validation scores.
+
+    Examples
+    --------
+    Rewrite responses to be shorter and simpler::
+
+        import gabriel
+
+        rewrites = await gabriel.paraphrase(
+            df_answers,
+            "response",
+            instructions="rephrase to be shorter and simpler",
+            save_dir="~/runs/paraphrase_simple",
+        )
+    """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     if "use_web_search" in cfg_kwargs and "web_search" not in cfg_kwargs:
@@ -626,7 +1067,61 @@ async def compare(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Compare`."""
+    """Run the Compare task to score paired passages (circle vs. square) with optional differentiation across text/image/audio modalities.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing the paired passages to compare.
+    circle_column_name, square_column_name:
+        Columns representing the two sides of each comparison.
+    save_dir:
+        Directory where comparison outputs are written.
+    differentiate:
+        Whether to prompt the model to emphasise key differences.
+    additional_instructions:
+        Extra prompt guidance applied to each comparison.
+    model:
+        Model name for comparison calls.
+    n_parallels:
+        Maximum number of concurrent comparison requests.
+    n_runs:
+        Number of repeated comparisons to gather per pair.
+    reset_files:
+        When ``True`` regenerate results regardless of existing files.
+    use_dummy:
+        If ``True`` return deterministic dummy comparison outputs.
+    file_name:
+        CSV filename for saved comparison responses.
+    modality:
+        Content modality hint for prompt rendering.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    template_path:
+        Custom template override for comparison prompts.
+    **cfg_kwargs:
+        Additional configuration passed to :class:`gabriel.tasks.compare.CompareConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame indexed by both input columns with one row per attribute and
+        an ``explanation`` field describing the preference rationale.
+
+    Examples
+    --------
+    Compare paired headlines for persuasiveness::
+
+        import gabriel
+
+        comps = await gabriel.compare(
+            df_pairs,
+            "headline_a",
+            "headline_b",
+            save_dir="~/runs/compare_headlines",
+            attributes={"persuasive": "which headline is more persuasive"},
+        )
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -670,7 +1165,58 @@ async def bucket(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Bucket`."""
+    """Run the Bucket task to propose bucket definitions and assign passages into a fixed number of buckets.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing passages to bucket.
+    column_name:
+        Column holding the text to cluster.
+    save_dir:
+        Directory where bucket definitions and intermediate state are saved.
+    additional_instructions:
+        Extra prompt guidance for bucket creation.
+    model:
+        Model used to propose bucket definitions.
+    n_parallels:
+        Maximum number of concurrent bucket definition calls.
+    reset_files:
+        When ``True`` regenerate outputs despite existing files.
+    use_dummy:
+        Return deterministic dummy buckets for offline testing.
+    file_name:
+        Filename for saved bucket definitions.
+    bucket_count:
+        Target number of buckets to generate.
+    differentiate:
+        Whether to encourage distinctive bucket descriptions.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    template_path:
+        Custom template path for bucket prompts.
+    **cfg_kwargs:
+        Additional overrides forwarded to :class:`gabriel.tasks.bucket.BucketConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing the finalized bucket names and definitions (one
+        row per bucket).
+
+    Examples
+    --------
+    Bucket survey comments into 8 themes::
+
+        import gabriel
+
+        bucket_defs = await gabriel.bucket(
+            df_comments,
+            "comment",
+            bucket_count=8,
+            save_dir="~/runs/bucket_surveys",
+        )
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -723,15 +1269,74 @@ async def discover(
     reset_files: bool = False,
     **cfg_kwargs,
 ) -> Dict[str, pd.DataFrame]:
-    """Convenience wrapper for :class:`gabriel.tasks.Discover`.
+    """Run the Discover task to mine organic labels via bucket + classify loops with optional circle/square bidirectional views.
 
-    Returns intermediate DataFrames from each step of the discovery pipeline.
-    When ``circle_column_name`` and ``square_column_name`` are provided,
-    classification is performed twice (once evaluating the circle entry and
-    once the square entry) using prompts that contain both entries.
-    A ``summary`` key is included in the result describing label prevalence
-    differences between the two directions (``difference_pct`` expresses
-    circle minus square in percentage points).
+    Parameters
+    ----------
+    df:
+        DataFrame containing the corpus to mine for labels.
+    column_name:
+        Column with free-form text to analyse. Optional when providing paired
+        circle/square columns for contrastive discovery.
+    circle_column_name, square_column_name:
+        Optional paired columns enabling bidirectional discovery.
+    save_dir:
+        Directory where intermediate and final discovery outputs are saved.
+    additional_instructions:
+        Extra guidance applied throughout the discovery pipeline.
+    model:
+        Model used for bucket definitions and classification.
+    n_parallels:
+        Maximum concurrent calls per stage.
+    n_runs:
+        Number of classification repetitions to stabilise label prevalence.
+    min_frequency:
+        Minimum frequency threshold for labels to persist.
+    bucket_count:
+        Target number of buckets to propose in the initial step.
+    differentiate:
+        Encourage distinctive bucket descriptions when ``True``.
+    max_words_per_call, max_categories_per_call:
+        Chunking controls for classification prompts.
+    n_terms_per_prompt, repeat_bucketing, repeat_voting:
+        Parameters that regulate how many discovered terms are evaluated and how
+        often bucketing/voting rounds repeat.
+    next_round_frac, top_k_per_round:
+        Controls for carrying top-performing terms into subsequent rounds.
+    raw_term_definitions:
+        Whether to keep raw label definitions in the outputs.
+    use_dummy:
+        If ``True`` perform deterministic offline discovery.
+    modality:
+        Content modality hint forwarded to downstream tasks.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    reset_files:
+        When ``True`` regenerate all discovery artifacts.
+    **cfg_kwargs:
+        Additional overrides passed to :class:`gabriel.tasks.discover.DiscoverConfig`.
+
+    Returns
+    -------
+    Dict[str, pandas.DataFrame]
+        Intermediate DataFrames from each step of the discovery pipeline. When
+        ``circle_column_name`` and ``square_column_name`` are provided,
+        classification is performed twice (circle and square directions). A
+        ``summary`` key describes label prevalence differences with
+        ``difference_pct`` expressed as circle minus square percentage points.
+
+    Examples
+    --------
+    Discover labels from open-ended feedback::
+
+        import gabriel
+
+        discovered = await gabriel.discover(
+            df_feedback,
+            column_name="comment",
+            save_dir="~/runs/discover_feedback",
+            bucket_count=12,
+        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -786,7 +1391,62 @@ async def deduplicate(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Deduplicate`."""
+    """Run the Deduplicate task to collapse near-duplicate passages with optional embedding prefiltering and multiple passes.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing the passages to deduplicate.
+    column_name:
+        Column holding the text to deduplicate.
+    save_dir:
+        Directory where deduplication artifacts are written.
+    additional_instructions:
+        Extra guidance appended to the deduplication prompt.
+    model:
+        Model name used for overlap detection.
+    n_parallels:
+        Maximum number of concurrent calls.
+    n_runs:
+        Number of passes to run; helps stabilise duplicate detection.
+    reset_files:
+        When ``True`` regenerate outputs regardless of existing files.
+    use_dummy:
+        Return deterministic dummy outputs for offline testing.
+    file_name:
+        CSV filename for saved deduplication responses.
+    use_embeddings:
+        Whether to use embedding-based prefiltering prior to model calls.
+    group_size:
+        Number of passages to evaluate per batch during deduplication.
+    max_timeout:
+        Optional timeout per API call.
+    template_path:
+        Custom template override for deduplication prompts.
+    **cfg_kwargs:
+        Additional configuration passed to
+        :class:`gabriel.tasks.deduplicate.DeduplicateConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame including the original content plus ``mapped_<column_name>`` columns
+        (per run and final) indicating the canonical representative for each
+        detected duplicate cluster.
+
+    Examples
+    --------
+    Deduplicate product names with embeddings enabled::
+
+        import gabriel
+
+        deduped = await gabriel.deduplicate(
+            products,
+            "name",
+            save_dir="~/runs/dedupe_products",
+            use_embeddings=True,
+        )
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -837,7 +1497,75 @@ async def merge(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Merge`."""
+    """Run the Merge task to align two DataFrames via model-guided candidate matching with optional embedding shortlists.
+
+    Parameters
+    ----------
+    df_left, df_right:
+        DataFrames to merge.
+    save_dir:
+        Directory where merge results and diagnostics are saved.
+    on, left_on, right_on:
+        Column(s) to match on. ``on`` applies to both sides; ``left_on`` and
+        ``right_on`` override per side.
+    how:
+        Merge strategy (``"left"`` or ``"right"``) determining which side is treated as
+        the short/base table.
+    additional_instructions:
+        Extra prompt context for the model.
+    model:
+        Model used to compare candidate records.
+    n_parallels:
+        Maximum number of concurrent merge comparisons.
+    n_runs:
+        Number of repeated comparisons per candidate.
+    reset_files:
+        When ``True`` regenerate outputs even if files exist.
+    use_dummy:
+        If ``True`` return deterministic dummy matches.
+    file_name:
+        CSV filename for saved merge responses.
+    use_embeddings:
+        Whether to use embeddings to shortlist candidates before calling the
+        model.
+    short_list_len, long_list_len, short_list_multiplier:
+        Controls for candidate pool sizes.
+    max_attempts:
+        Maximum retry attempts per match before giving up.
+    auto_match_threshold:
+        Confidence threshold for automatically accepting matches.
+    use_best_auto_match:
+        When ``True`` pick the highest confidence candidate when multiple exceed
+        ``auto_match_threshold``.
+    candidate_scan_chunks:
+        Number of candidate batches to scan when building the shortlist.
+    template_path:
+        Custom template override for merge prompts.
+    **cfg_kwargs:
+        Additional overrides forwarded to :class:`gabriel.tasks.merge.MergeConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Merged result keyed to the ``how``-selected short side, enriched with
+        model-evaluated matches from the long side and deduplicated on the
+        short key.
+
+    Examples
+    --------
+    Left merge customer tables on noisy names::
+
+        import gabriel
+
+        merged = await gabriel.merge(
+            customers_a,
+            customers_b,
+            on="customer_name",
+            save_dir="~/runs/merge_customers",
+            use_embeddings=True,
+            auto_match_threshold=0.8,
+        )
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -891,7 +1619,66 @@ async def filter(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Convenience wrapper for :class:`gabriel.tasks.Filter`."""
+    """Run the Filter task to keep or drop passages based on a natural-language condition with repeatable LLM evaluations.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing passages to filter.
+    column_name:
+        Column with the text to evaluate.
+    condition:
+        Natural-language condition that determines whether a passage is kept.
+    save_dir:
+        Directory where filter responses are saved.
+    entities_per_call:
+        Number of passages to send in each API call.
+    shuffle:
+        Whether to randomise order before batching.
+    random_seed:
+        Seed used when ``shuffle`` is ``True``.
+    n_runs:
+        Number of repeated evaluations per passage.
+    threshold:
+        Probability threshold above which a passage is retained.
+    additional_instructions:
+        Extra guidance appended to the filter prompt.
+    model:
+        Model used for filtering.
+    n_parallels:
+        Maximum number of concurrent filtering calls.
+    reset_files:
+        When ``True`` regenerate outputs even if files exist.
+    use_dummy:
+        Return deterministic dummy outputs instead of real API responses.
+    file_name:
+        CSV filename for saved filter responses.
+    max_timeout:
+        Optional per-call timeout.
+    template_path:
+        Custom prompt template path.
+    **cfg_kwargs:
+        Additional configuration passed to :class:`gabriel.tasks.filter.FilterConfig`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered DataFrame with keep/score columns reflecting model decisions.
+
+    Examples
+    --------
+    Keep reviews that mention pricing::
+
+        import gabriel
+
+        filtered = await gabriel.filter(
+            reviews,
+            "text",
+            condition="mentions price or cost",
+            save_dir="~/runs/filter_price",
+            n_runs=2,
+        )
+    """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -944,23 +1731,77 @@ async def debias(
     random_seed: int = 12345,
     verbose: bool = True,
 ) -> DebiasResult:
-    """Run the econometric debiasing pipeline on ``df[column_name]``.
+    """Run the econometric debiasing pipeline on ``df[column_name]`` with configurable measurement/removal stages and regression options.
 
     Parameters
     ----------
+    df:
+        DataFrame containing passages to measure and debias.
+    column_name:
+        Column with the text to process.
+    mode:
+        Measurement mode (e.g., ``"rate"``) determining how bias is estimated.
     measurement_attribute, removal_attribute:
         Specify the attribute used for regression and the key from
-        ``signal_dictionary`` that should be removed.  When
-        ``measurement_attribute`` is omitted the first key from
-        ``attributes`` is used.  ``removal_attribute`` defaults to the
-        measurement attribute when it exists in ``signal_dictionary`` or
-        otherwise the first key from ``signal_dictionary``.  When defaults are
-        inferred a notice is printed if ``verbose`` is ``True``.
+        ``signal_dictionary`` that should be removed. When
+        ``measurement_attribute`` is omitted the first key from ``attributes``
+        is used. ``removal_attribute`` defaults to the measurement attribute
+        when present in ``signal_dictionary`` or otherwise the first key from
+        ``signal_dictionary``. Notices are printed when inferred and
+        ``verbose`` is ``True``.
+    signal_dictionary:
+        Mapping of bias signals to their definitions.
+    attributes:
+        Optional rating attributes used during measurement.
+    removal_method:
+        Strategy for removing bias (for example ``"codify"``).
+    save_dir:
+        Base directory for all debiasing artifacts.
+    run_name:
+        Optional run identifier; defaults to a timestamped folder.
+    strip_percentages, categories_to_strip:
+        Optional controls for category pruning during removal.
+    template_path:
+        Optional template override used during removal steps.
+    model:
+        Model used across the measurement and removal stages.
+    n_parallels:
+        Maximum concurrent API calls.
+    measurement_kwargs, removal_kwargs:
+        Fine-grained overrides for the measurement and removal tasks.
     max_words_per_call, n_rounds:
-        Convenience passthroughs for the removal stage.  ``max_words_per_call``
+        Convenience passthroughs for the removal stage. ``max_words_per_call``
         configures the codify task's chunk size, while ``n_rounds`` controls the
         number of completion passes run by codify and any downstream
         paraphrasing steps.
+    use_dummy:
+        If ``True`` run deterministic offline debiasing.
+    robust_regression:
+        Whether to use robust regression when estimating bias coefficients.
+    random_seed:
+        Seed for deterministic behaviour in sampling-heavy steps.
+    verbose:
+        When ``True`` print notices about inferred defaults and progress.
+
+    Returns
+    -------
+    DebiasResult
+        Structured output containing measured bias, debiased DataFrame, and
+        supporting diagnostics.
+
+    Examples
+    --------
+    Rate-based measurement with codify removal::
+
+        import gabriel
+
+        result = await gabriel.debias(
+            df,
+            "text",
+            signal_dictionary={"gender": "gendered terms"},
+            attributes={"quality": "0-100 quality"},
+            save_dir="~/runs/debias_quality",
+        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1031,17 +1872,70 @@ async def whatever(
     reasoning_summary: Optional[str] = None,
     **kwargs,
 ) -> pd.DataFrame:
-    """Wrapper around :func:`get_all_responses` for arbitrary prompts.
+    """Send arbitrary prompts (optionally multimodal) to the Responses API with optional web search and cached outputs.
 
-    Results are saved to ``save_dir/file_name``.  Web search features can be
-    customised with ``web_search_filters`` and ``search_context_size`` (both of
-    which map directly to :func:`gabriel.utils.openai_utils.get_all_responses`).
-    Filters accept ``allowed_domains`` plus optional location hints
-    (``city``, ``country``, ``region``, ``timezone`` and ``type`` – typically
-    ``"approximate"``) that are forwarded to the OpenAI Responses API.
-    The ``web_search`` flag mirrors the OpenAI Python client.  Passing the
-    legacy ``use_web_search`` keyword is still supported and will be coerced to
-    ``web_search`` automatically.
+    Parameters
+    ----------
+    prompts:
+        Single prompt string, list of prompts, or DataFrame of prompts.
+    identifiers:
+        Optional identifiers to align responses with custom keys.
+    save_dir:
+        Directory where raw responses are written.
+    df:
+        Source DataFrame to pull prompts from when ``prompts`` is not provided.
+    column_name:
+        Column in ``df`` containing prompts to send.
+    identifier_column:
+        Column providing identifiers for each prompt row.
+    image_column, audio_column:
+        Optional columns containing image or audio references to include.
+    prompt_images, prompt_audio:
+        Pre-constructed multimodal payloads keyed by identifier.
+    file_name:
+        CSV filename for persisted responses.
+    model:
+        Model name passed to :func:`gabriel.utils.openai_utils.get_all_responses`.
+    json_mode:
+        Whether to request JSON-mode responses where supported.
+    web_search:
+        Enable web search augmentation.
+    web_search_filters:
+        Filters dict forwarded to the Responses API (allowed domains and optional
+        location hints such as ``city`` or ``timezone``).
+    search_context_size:
+        Context size hint for web-search capable models.
+    n_parallels:
+        Maximum concurrent response requests.
+    use_dummy:
+        If ``True`` return deterministic dummy responses.
+    reset_files:
+        When ``True`` regenerate outputs even if files already exist.
+    reasoning_effort, reasoning_summary:
+        Optional OpenAI reasoning controls.
+    **kwargs:
+        Additional parameters forwarded directly to
+        :func:`gabriel.utils.openai_utils.get_all_responses`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame of prompts, identifiers, and model responses saved to
+        ``save_dir/file_name``.
+
+    Examples
+    --------
+    Prompts from a DataFrame with web search::
+
+        import gabriel
+
+        responses = await gabriel.whatever(
+            df_questions,
+            column_name="question",
+            save_dir="~/runs/whatever_search",
+            web_search=True,
+            search_context_size="large",
+        )
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -1111,7 +2005,48 @@ def view(
     font_family: Optional[str] = None,
     color_mode: str = "auto",
 ):
-    """Convenience wrapper for the passage viewer utility."""
+    """Render passages and attributes in an interactive HTML viewer with typography, sizing, and theming controls.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing passages to display.
+    column_name:
+        Column with the primary text to render.
+    attributes:
+        Optional iterable or mapping of attribute columns to include alongside
+        the passage text.
+    header_columns:
+        Optional columns whose values should appear in the viewer header.
+    max_passages:
+        Optional cap on the number of passages displayed.
+    font_scale:
+        Scaling factor applied to viewer typography.
+    font_family:
+        Optional font family override.
+    color_mode:
+        Either ``"auto"``, ``"light"``, or ``"dark"`` to control the viewer
+        theme.
+
+    Returns
+    -------
+    Any
+        The rendered viewer object produced by
+        :func:`gabriel.utils.passage_viewer.view`.
+
+    Examples
+    --------
+    View rated passages with headers::
+
+        import gabriel
+
+        gabriel.view(
+            rated_df,
+            "text",
+            attributes=["clarity", "helpfulness"],
+            header_columns=["id", "source"],
+        )
+    """
 
     return _view_passages(
         df,
