@@ -17,6 +17,8 @@ from .jinja import shuffled, shuffled_dict, get_env
 from .passage_viewer import PassageViewer, view
 from .word_matching import (
     normalize_text_aggressive,
+    normalize_text_generous,
+    normalize_whitespace,
     letters_only,
     robust_find_improved,
     strict_find,
@@ -45,6 +47,8 @@ __all__ = [
     "shuffled_dict",
     "get_env",
     "normalize_text_aggressive",
+    "normalize_text_generous",
+    "normalize_whitespace",
     "letters_only",
     "robust_find_improved",
     "strict_find",
