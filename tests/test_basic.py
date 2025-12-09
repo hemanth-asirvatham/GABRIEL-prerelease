@@ -321,6 +321,40 @@ def test_get_all_responses_dummy(tmp_path):
     assert df["Successful"].all()
 
 
+def test_cap_adjustment_error_is_reported_and_recovers(monkeypatch, capsys, tmp_path):
+    """Ensure concurrency tuning errors are surfaced once and runs continue."""
+
+    async def run() -> pd.DataFrame:
+        prompts = [f"prompt {i}" for i in range(4)]
+        identifiers = [f"id{i}" for i in range(4)]
+
+        real_planner = openai_utils._planned_ppm_and_details
+        call_count = {"n": 0}
+
+        def boom(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                return real_planner(*args, **kwargs)
+            raise RuntimeError("synthetic cap failure")
+
+        monkeypatch.setattr(openai_utils, "_planned_ppm_and_details", boom)
+        return await openai_utils.get_all_responses(
+            prompts=prompts,
+            identifiers=identifiers,
+            use_dummy=True,
+            token_sample_size=1,
+            quiet=True,
+            verbose=False,
+            print_example_prompt=False,
+            save_path=str(tmp_path / "cap_failure.csv"),
+        )
+
+    df = asyncio.run(run())
+    captured = capsys.readouterr().out
+    assert len(df) == 4
+    assert "Error while updating concurrency cap dynamically" in captured
+
+
 def test_get_all_responses_quiet_minimizes_output(tmp_path, capsys):
     asyncio.run(
         openai_utils.get_all_responses(
