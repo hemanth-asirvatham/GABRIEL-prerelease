@@ -1,12 +1,12 @@
 """Prompt template utilities."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 import warnings
 from typing import Dict, Optional, Set
 
-from jinja2 import Environment, PackageLoader, meta
+from jinja2 import Environment, PackageLoader, Template, meta
 
 from ..utils.jinja import shuffled, shuffled_dict
 
@@ -16,6 +16,14 @@ class PromptTemplate:
     """Simple Jinja2-based prompt template."""
 
     text: str
+    _environment: Environment = field(init=False, repr=False)
+    _template: Template = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._environment = Environment(loader=PackageLoader("gabriel", "prompts"))
+        self._environment.filters["shuffled_dict"] = shuffled_dict
+        self._environment.filters["shuffled"] = shuffled
+        self._template = self._environment.from_string(self.text)
 
     def render(self, **params: Dict[str, str]) -> str:
         """Render the template with the given parameters."""
@@ -26,11 +34,7 @@ class PromptTemplate:
                 params["attributes"] = {a: d for a, d in zip(attrs, descs)}
             else:
                 params["attributes"] = {a: a for a in attrs}
-        env = Environment(loader=PackageLoader("gabriel", "prompts"))
-        env.filters["shuffled_dict"] = shuffled_dict
-        env.filters["shuffled"] = shuffled
-        template = env.from_string(self.text)
-        return template.render(**params)
+        return self._template.render(**params)
 
     # ------------------------------------------------------------------
     # Loading helpers

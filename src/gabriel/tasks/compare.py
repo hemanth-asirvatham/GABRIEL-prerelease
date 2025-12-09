@@ -17,6 +17,7 @@ from ..utils import (
     load_image_inputs,
     load_audio_inputs,
 )
+from ..utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -91,6 +92,8 @@ class Compare:
         prompts: List[str] = []
         ids: List[str] = []
         id_to_circle_first: Dict[str, bool] = {}
+        prompt_circle_text: Dict[str, str] = {}
+        prompt_square_text: Dict[str, str] = {}
         for circle, square in pairs:
             ident = hashlib.sha1(f"{circle}|{square}".encode()).hexdigest()[:8]
             ids.append(ident)
@@ -100,20 +103,24 @@ class Compare:
                 else random.random() < 0.5
             )
             id_to_circle_first[ident] = circle_first_flag
-            circle_text = (
+            prompt_circle_text[ident] = (
                 circle if self.cfg.modality in {"text", "entity", "web"} else ""
             )
-            square_text = (
+            prompt_square_text[ident] = (
                 square if self.cfg.modality in {"text", "entity", "web"} else ""
             )
+
+        announce_prompt_rendering("Compare", len(ids))
+
+        for ident in ids:
             prompts.append(
                 self.template.render(
-                    entry_circle=circle_text,
-                    entry_square=square_text,
+                    entry_circle=prompt_circle_text[ident],
+                    entry_square=prompt_square_text[ident],
                     differentiate=self.cfg.differentiate,
                     additional_instructions=self.cfg.additional_instructions or "",
                     modality=self.cfg.modality,
-                    circle_first=circle_first_flag,
+                    circle_first=id_to_circle_first[ident],
                 )
             )
 

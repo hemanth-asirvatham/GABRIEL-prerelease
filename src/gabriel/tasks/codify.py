@@ -18,10 +18,13 @@ from ..utils import (
     load_audio_inputs,
     load_image_inputs,
     normalize_text_aggressive,
+    normalize_text_generous,
+    normalize_whitespace,
     robust_find_improved,
     safe_json,
     strict_find,
 )
+from ..utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -651,6 +654,7 @@ class Codify:
         requests: List[PromptRequest] = []
         prompt_images: Dict[str, List[str]] = {}
         prompt_audio: Dict[str, List[Dict[str, str]]] = {}
+        pending_requests: List[Dict[str, Any]] = []
 
         if not dynamic_mode and categories:
             category_batches = [
@@ -679,24 +683,16 @@ class Codify:
             for chunk_idx, chunk in enumerate(chunks):
                 if dynamic_mode:
                     identifier = f"row{row_idx}_iter{iteration}_chunk{chunk_idx}"
-                    prompt = self.template.render(
-                        text=chunk,
-                        categories=None,
-                        additional_instructions=additional_instructions,
-                        modality=self.cfg.modality,
+                    pending_requests.append(
+                        {
+                            "identifier": identifier,
+                            "chunk": chunk,
+                            "row_index": row_idx,
+                            "batch_categories": None,
+                            "images": images,
+                            "audio": audio_inputs,
+                        }
                     )
-                    requests.append(
-                        PromptRequest(
-                            identifier=identifier,
-                            prompt=prompt,
-                            row_index=row_idx,
-                            chunk_text=chunk,
-                        )
-                    )
-                    if images:
-                        prompt_images[identifier] = list(images)
-                    if audio_inputs:
-                        prompt_audio[identifier] = list(audio_inputs)
                 else:
                     for batch_idx, batch_keys in enumerate(category_batches):
                         assert categories is not None
@@ -704,27 +700,41 @@ class Codify:
                         identifier = (
                             f"row{row_idx}_iter{iteration}_chunk{chunk_idx}_batch{batch_idx}"
                         )
-                        prompt = self.template.render(
-                            text=chunk,
-                            categories=batch_categories,
-                            additional_instructions=additional_instructions,
-                            modality=self.cfg.modality,
+                        pending_requests.append(
+                            {
+                                "identifier": identifier,
+                                "chunk": chunk,
+                                "row_index": row_idx,
+                                "batch_categories": batch_categories,
+                                "images": images,
+                                "audio": audio_inputs,
+                            }
                         )
-                        requests.append(
-                            PromptRequest(
-                                identifier=identifier,
-                                prompt=prompt,
-                                row_index=row_idx,
-                                chunk_text=chunk,
-                            )
-                        )
-                        if images:
-                            prompt_images[identifier] = list(images)
-                        if audio_inputs:
-                            prompt_audio[identifier] = list(audio_inputs)
 
-        if not requests:
+        if not pending_requests:
             return {}
+
+        announce_prompt_rendering("Codify", len(pending_requests))
+
+        for req in pending_requests:
+            prompt = self.template.render(
+                text=req["chunk"],
+                categories=req["batch_categories"],
+                additional_instructions=additional_instructions,
+                modality=self.cfg.modality,
+            )
+            requests.append(
+                PromptRequest(
+                    identifier=req["identifier"],
+                    prompt=prompt,
+                    row_index=req["row_index"],
+                    chunk_text=req["chunk"],
+                )
+            )
+            if req["images"]:
+                prompt_images[req["identifier"]] = list(req["images"])
+            if req["audio"]:
+                prompt_audio[req["identifier"]] = list(req["audio"])
 
         prompts = [req.prompt for req in requests]
         identifiers = [req.identifier for req in requests]
@@ -1005,4 +1015,3 @@ class Codify:
             self.print_final_hit_rates()
 
         return df_proc
-

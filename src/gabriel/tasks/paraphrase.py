@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils.openai_utils import get_all_responses
+from ..utils.logging import announce_prompt_rendering
 
 # Import classifier utilities for recursive validation.  Importing from
 # ``gabriel.tasks.classify`` does not introduce a circular dependency
@@ -135,6 +136,8 @@ class Paraphrase:
         # less than 1 defaults to a single revision to align with
         # existing behaviour.
         n = self.cfg.n_revisions if self.cfg.n_revisions and self.cfg.n_revisions > 0 else 1
+
+        announce_prompt_rendering("Paraphrase", len(texts) * n)
 
         # When recursive validation is disabled, follow the original
         # behaviour: generate a single paraphrase per requested
@@ -312,6 +315,8 @@ class Paraphrase:
             # infinite loop.
             if not prompts:
                 break
+
+            announce_prompt_rendering("Paraphrase:validate", len(prompts))
 
             # Write the prompts to the paraphrasing API.  We construct a
             # unique filename for each round to preserve intermediate

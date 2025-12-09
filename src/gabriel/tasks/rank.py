@@ -66,6 +66,7 @@ from gabriel.utils import (
     load_image_inputs,
     load_audio_inputs,
 )
+from gabriel.utils.logging import announce_prompt_rendering
 from .rate import Rate, RateConfig
 
 
@@ -815,6 +816,9 @@ class Rank:
                     pairs_needed.append((nid, opp))
             if not pairs_needed:
                 continue
+            announce_prompt_rendering(
+                "Rank:catchup", len(attr_batches) * len(pairs_needed)
+            )
             prompts: List[str] = []
             ids: List[str] = []
             pair_images: Dict[str, List[str]] = {}
@@ -1700,6 +1704,9 @@ class Rank:
             )
             if not pairs:
                 break
+            announce_prompt_rendering(
+                "Rank", len(attr_batches) * len(pairs)
+            )
             prompts: List[str] = []
             ids: List[str] = []
             pair_images: Dict[str, List[str]] = {}
@@ -1892,4 +1899,3 @@ class Rank:
         # After processing all rounds, return the final DataFrame
         # The checkpoint has already been written in the final iteration
         return pd.read_csv(final_path)
-
