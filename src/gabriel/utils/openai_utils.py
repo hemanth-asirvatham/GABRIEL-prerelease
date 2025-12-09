@@ -4266,6 +4266,7 @@ async def get_all_responses(
                 usage_samples.append((total_input, total_output, total_reasoning))
                 if len(usage_samples) > token_sample_size:
                     usage_samples.pop(0)
+                new_cap = concurrency_cap
                 if manage_rate_limits and len(usage_samples) >= token_sample_size:
                     avg_in = statistics.mean(u[0] for u in usage_samples)
                     avg_out = statistics.mean(u[1] for u in usage_samples)
@@ -4373,8 +4374,7 @@ async def get_all_responses(
                             emit_parallelization_status(reason, force=True)
                         else:
                             logger.debug(reason)
-                else:
-                    concurrency_cap = new_cap
+                concurrency_cap = new_cap
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
                         elapsed = time.time() - start
@@ -4465,75 +4465,124 @@ async def get_all_responses(
             except asyncio.CancelledError:
                 raise
             except (asyncio.TimeoutError, APITimeoutError) as e:
-                status.num_timeout_errors += 1
                 elapsed = time.time() - start
-                _trigger_timeout_burst(time.time())
-                inflight.pop(ident, None)
-                await adjust_timeout()
                 error_detail = str(e).strip()
-                if isinstance(e, APITimeoutError):
-                    base_message = (
-                        "OpenAI client timed out; consider increasing max_timeout or reducing concurrency."
-                    )
-                else:
-                    base_message = "API call timed out."
-                if error_detail:
-                    base_message = f"{base_message} Details: {error_detail}"
-                    error_logs[ident].append(error_detail)
-                error_message = f"{base_message} (elapsed {elapsed:.2f}s)"
-                timeout_errors_since_last_status += 1
-                timeout_note = f"{ident} timed out after {elapsed:.2f}s"
-                timeout_notes.append(timeout_note)
-                timeout_key: Hashable = (
-                    "timeout",
-                    type(e).__name__,
-                    error_detail or None,
+                detail_lower = error_detail.lower()
+                looks_like_timeout = (
+                    isinstance(e, (asyncio.TimeoutError, APITimeoutError))
+                    and ("timeout" in detail_lower or "timed out" in detail_lower or not error_detail)
                 )
-                _emit_first_error(error_message, dedup_key=timeout_key)
-                if restart_requested:
-                    continue
-                if status.num_timeout_errors == 1:
-                    logger.warning(
-                        "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
-                        timeout_note,
+                if looks_like_timeout:
+                    status.num_timeout_errors += 1
+                    _trigger_timeout_burst(time.time())
+                    inflight.pop(ident, None)
+                    await adjust_timeout()
+                    if isinstance(e, APITimeoutError):
+                        base_message = (
+                            "OpenAI client timed out; consider increasing max_timeout or reducing concurrency."
+                        )
+                    else:
+                        base_message = "API call timed out."
+                    if error_detail:
+                        base_message = f"{base_message} Details: {error_detail}"
+                        error_logs[ident].append(error_detail)
+                    error_message = f"{base_message} (elapsed {elapsed:.2f}s)"
+                    timeout_errors_since_last_status += 1
+                    timeout_note = f"{ident} timed out after {elapsed:.2f}s"
+                    timeout_notes.append(timeout_note)
+                    timeout_key: Hashable = (
+                        "timeout",
+                        type(e).__name__,
+                        error_detail or None,
                     )
+                    _emit_first_error(error_message, dedup_key=timeout_key)
+                    if restart_requested:
+                        continue
+                    if status.num_timeout_errors == 1:
+                        logger.warning(
+                            "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
+                            timeout_note,
+                        )
+                    else:
+                        logger.debug("Timeout error for %s: %s", ident, error_message)
+                    error_logs[ident].append(error_message)
+                    if attempts_left - 1 > 0:
+                        backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
+                        # Retry the same prompt after a delay.  We sleep within the
+                        # worker so the task remains accounted for in ``queue.join``
+                        # and ensure the new task is enqueued before ``task_done``
+                        # is called.  This mirrors the legacy retry behaviour and
+                        # prevents retries from being dropped prematurely.
+                        await asyncio.sleep(backoff)
+                        queue.put_nowait((prompt, ident, attempts_left - 1))
+                    else:
+                        row = {
+                            "Identifier": ident,
+                            "Response": None,
+                            "Time Taken": None,
+                            "Input Tokens": input_tokens,
+                            "Reasoning Tokens": None,
+                            "Output Tokens": None,
+                            "Reasoning Effort": get_response_kwargs.get(
+                                "reasoning_effort", reasoning_effort
+                            ),
+                            "Successful": False,
+                            "Error Log": error_logs.get(ident, []),
+                        }
+                        if response_ids:
+                            row["Response IDs"] = response_ids
+                        if reasoning_summary is not None:
+                            row["Reasoning Summary"] = None
+                        results.append(row)
+                        processed += 1
+                        status.num_tasks_failed += 1
+                        status.num_tasks_in_progress -= 1
+                        pbar.update(1)
+                        error_logs.pop(ident, None)
+                        await flush()
                 else:
-                    logger.debug("Timeout error for %s: %s", ident, error_message)
-                error_logs[ident].append(error_message)
-                if attempts_left - 1 > 0:
-                    backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
-                    # Retry the same prompt after a delay.  We sleep within the
-                    # worker so the task remains accounted for in ``queue.join``
-                    # and ensure the new task is enqueued before ``task_done``
-                    # is called.  This mirrors the legacy retry behaviour and
-                    # prevents retries from being dropped prematurely.
-                    await asyncio.sleep(backoff)
-                    queue.put_nowait((prompt, ident, attempts_left - 1))
-                else:
-                    row = {
-                        "Identifier": ident,
-                        "Response": None,
-                        "Time Taken": None,
-                        "Input Tokens": input_tokens,
-                        "Reasoning Tokens": None,
-                        "Output Tokens": None,
-                        "Reasoning Effort": get_response_kwargs.get(
-                            "reasoning_effort", reasoning_effort
-                        ),
-                        "Successful": False,
-                        "Error Log": error_logs.get(ident, []),
-                    }
-                    if response_ids:
-                        row["Response IDs"] = response_ids
-                    if reasoning_summary is not None:
-                        row["Reasoning Summary"] = None
-                    results.append(row)
-                    processed += 1
-                    status.num_tasks_failed += 1
-                    status.num_tasks_in_progress -= 1
-                    pbar.update(1)
-                    error_logs.pop(ident, None)
-                    await flush()
+                    inflight.pop(ident, None)
+                    status.num_other_errors += 1
+                    base_message = "API call failed before timeout could be applied"
+                    if error_detail:
+                        base_message = f"{base_message}: {error_detail}"
+                        error_logs[ident].append(error_detail)
+                    error_key: Hashable = (
+                        "non-timeout-error",
+                        type(e).__name__,
+                        error_detail or None,
+                    )
+                    _emit_first_error(base_message, dedup_key=error_key)
+                    logger.warning(base_message)
+                    if attempts_left - 1 > 0:
+                        backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
+                        await asyncio.sleep(backoff)
+                        queue.put_nowait((prompt, ident, attempts_left - 1))
+                    else:
+                        row = {
+                            "Identifier": ident,
+                            "Response": None,
+                            "Time Taken": None,
+                            "Input Tokens": input_tokens,
+                            "Reasoning Tokens": None,
+                            "Output Tokens": None,
+                            "Reasoning Effort": get_response_kwargs.get(
+                                "reasoning_effort", reasoning_effort
+                            ),
+                            "Successful": False,
+                            "Error Log": error_logs.get(ident, []),
+                        }
+                        if response_ids:
+                            row["Response IDs"] = response_ids
+                        if reasoning_summary is not None:
+                            row["Reasoning Summary"] = None
+                        results.append(row)
+                        processed += 1
+                        status.num_tasks_failed += 1
+                        status.num_tasks_in_progress -= 1
+                        pbar.update(1)
+                        error_logs.pop(ident, None)
+                        await flush()
             except RateLimitError as e:
                 inflight.pop(ident, None)
                 status.num_rate_limit_errors += 1
