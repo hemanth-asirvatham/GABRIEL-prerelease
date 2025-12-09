@@ -3,6 +3,22 @@ import unicodedata
 from typing import Optional
 
 
+def normalize_whitespace(text: str) -> str:
+    """Collapse all whitespace to single spaces and trim ends."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_text_generous(text: str) -> str:
+    """Lightweight normalization that preserves most punctuation."""
+    if not text:
+        return ""
+
+    text = unicodedata.normalize("NFKC", text)
+    return normalize_whitespace(text)
+
+
 def normalize_text_aggressive(text: str) -> str:
     """Aggressively normalize text for maximum matching flexibility."""
     if not text:
@@ -140,4 +156,3 @@ def strict_find(text: str, excerpt: str) -> bool:
         return True
 
     return False
-
