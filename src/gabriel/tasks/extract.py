@@ -168,6 +168,16 @@ class Extract:
             return result
 
         attr_items = list(self.cfg.attributes.items())
+        attr_count = len(attr_items)
+        if attr_count > self.cfg.n_attributes_per_run:
+            batches = (
+                attr_count + self.cfg.n_attributes_per_run - 1
+            ) // self.cfg.n_attributes_per_run
+            print(
+                f"[Extract] {attr_count} attributes provided. n_attributes_per_run={self.cfg.n_attributes_per_run}. "
+                f"Splitting into {batches} prompt batches. Increase n_attributes_per_run if you want all attributes "
+                "to be processed in the same prompt."
+            )
         attr_batches: List[Dict[str, str]] = [
             dict(attr_items[i : i + self.cfg.n_attributes_per_run])
             for i in range(0, len(attr_items), self.cfg.n_attributes_per_run)

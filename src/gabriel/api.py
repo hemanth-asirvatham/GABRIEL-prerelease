@@ -78,6 +78,7 @@ async def rate(
     model: str = "gpt-5-mini",
     n_parallels: int = 750,
     n_runs: int = 1,
+    n_attributes_per_run: int = 8,
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "ratings.csv",
@@ -115,6 +116,9 @@ async def rate(
         Maximum number of concurrent requests to issue.
     n_runs:
         Number of repeat rating passes to perform for each passage.
+    n_attributes_per_run:
+        Maximum number of attributes to include in a single prompt. Attributes
+        are split across prompts when this limit is exceeded.
     reset_files:
         When ``True`` existing outputs in ``save_dir`` are ignored and
         regenerated.
@@ -150,6 +154,7 @@ async def rate(
         model=model,
         n_parallels=n_parallels,
         n_runs=n_runs,
+        n_attributes_per_run=n_attributes_per_run,
         use_dummy=use_dummy,
         additional_instructions=additional_instructions,
         modality=modality,
@@ -174,6 +179,7 @@ async def extract(
     model: str = "gpt-5-mini",
     n_parallels: int = 750,
     n_runs: int = 1,
+    n_attributes_per_run: int = 8,
     reset_files: bool = False,
     use_dummy: bool = False,
     file_name: str = "extraction.csv",
@@ -209,6 +215,9 @@ async def extract(
     n_runs:
         Number of extraction passes to perform; results are averaged when
         applicable.
+    n_attributes_per_run:
+        Maximum number of attributes to include in each prompt. Attributes are
+        split into multiple prompts when this threshold is exceeded.
     reset_files:
         When ``True`` forces regeneration of outputs in ``save_dir``.
     use_dummy:
@@ -244,6 +253,7 @@ async def extract(
         model=model,
         n_parallels=n_parallels,
         n_runs=n_runs,
+        n_attributes_per_run=n_attributes_per_run,
         use_dummy=use_dummy,
         additional_instructions=additional_instructions,
         modality=modality,
@@ -366,6 +376,7 @@ async def classify(
     square_column_name: Optional[str] = None,
     n_parallels: int = 750,
     n_runs: int = 1,
+    n_attributes_per_run: int = 8,
     min_frequency: float = 0.6,
     reset_files: bool = False,
     use_dummy: bool = False,
@@ -406,6 +417,9 @@ async def classify(
         Maximum number of concurrent classification calls.
     n_runs:
         Number of repeated classification passes.
+    n_attributes_per_run:
+        Maximum number of labels to evaluate per prompt. Labels are split into
+        batches when this count is exceeded.
     min_frequency:
         Minimum label frequency required to keep a label during aggregation.
     reset_files:
@@ -440,6 +454,7 @@ async def classify(
         differentiate=differentiate,
         n_parallels=n_parallels,
         n_runs=n_runs,
+        n_attributes_per_run=n_attributes_per_run,
         min_frequency=min_frequency,
         additional_instructions=additional_instructions or "",
         use_dummy=use_dummy,
@@ -695,6 +710,7 @@ async def rank(
     return_raw_scores: bool = False,
     learning_rate: float = 0.1,
     n_parallels: int = 750,
+    n_attributes_per_run: int = 8,
     use_dummy: bool = False,
     file_name: str = "rankings",
     reset_files: bool = False,
@@ -743,6 +759,9 @@ async def rank(
         Parameters controlling the Elo-style tournament mechanics.
     n_parallels:
         Maximum concurrent ranking calls.
+    n_attributes_per_run:
+        Maximum number of attributes to compare per prompt. Attributes are
+        batched across prompts when this cap is exceeded.
     use_dummy:
         When ``True`` run deterministic offline ranking.
     file_name:
@@ -784,6 +803,7 @@ async def rank(
         learning_rate=learning_rate,
         model=model,
         n_parallels=n_parallels,
+        n_attributes_per_run=n_attributes_per_run,
         use_dummy=use_dummy,
         save_dir=save_dir,
         file_name=file_name,
