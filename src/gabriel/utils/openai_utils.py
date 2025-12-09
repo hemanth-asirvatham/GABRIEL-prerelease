@@ -49,7 +49,19 @@ import time
 import subprocess
 import sys
 import textwrap
-from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Deque,
+    Dict,
+    Hashable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 from collections import defaultdict, deque
 from collections.abc import Iterable
 import pickle
@@ -3713,7 +3725,7 @@ async def get_all_responses(
     cooldown_until = 0.0
     stop_event = asyncio.Event()
     timeout_cancellations: Set[str] = set()
-    seen_error_messages: Set[str] = set()
+    seen_error_messages: Set[Hashable] = set()
     # Counters used for the gentle concurrency adaptation below
     rate_limit_errors_since_adjust = 0
     successes_since_adjust = 0
@@ -3743,18 +3755,21 @@ async def get_all_responses(
     timeout_burst_cooldown = max(1.0, float(timeout_burst_cooldown))
     timeout_burst_max_restarts = max(0, int(timeout_burst_max_restarts))
 
-    def _emit_first_error(message: str, *, level: int = logging.WARNING) -> None:
-        if message not in seen_error_messages:
-            seen_error_messages.add(message)
-            if message_verbose:
-                print(
-                    f"{message} (subsequent occurrences of this error will be silenced in logs)"
-                )
-            logger.log(
-                level,
-                "%s (subsequent occurrences of this error will be silenced in logs)",
-                message,
+    def _emit_first_error(
+        message: str,
+        *,
+        level: int = logging.WARNING,
+        dedup_key: Optional[Hashable] = None,
+    ) -> None:
+        key = dedup_key if dedup_key is not None else message
+        if key not in seen_error_messages:
+            seen_error_messages.add(key)
+            formatted = (
+                f"{message} (subsequent occurrences of this error will be silenced in logs)"
             )
+            if message_verbose and not logger.isEnabledFor(level):
+                print(formatted)
+            logger.log(level, formatted)
         else:
             logger.debug(message)
 
@@ -4455,20 +4470,26 @@ async def get_all_responses(
                 _trigger_timeout_burst(time.time())
                 inflight.pop(ident, None)
                 await adjust_timeout()
+                error_detail = str(e).strip()
                 if isinstance(e, APITimeoutError):
-                    error_message = (
-                        f"OpenAI client timed out after {elapsed:.2f} s; "
-                        "consider increasing max_timeout or reducing concurrency."
+                    base_message = (
+                        "OpenAI client timed out; consider increasing max_timeout or reducing concurrency."
                     )
-                    detail = str(e)
-                    if detail:
-                        error_logs[ident].append(detail)
                 else:
-                    error_message = f"API call timed out after {elapsed:.2f} s"
+                    base_message = "API call timed out."
+                if error_detail:
+                    base_message = f"{base_message} Details: {error_detail}"
+                    error_logs[ident].append(error_detail)
+                error_message = f"{base_message} (elapsed {elapsed:.2f}s)"
                 timeout_errors_since_last_status += 1
                 timeout_note = f"{ident} timed out after {elapsed:.2f}s"
                 timeout_notes.append(timeout_note)
-                _emit_first_error(error_message)
+                timeout_key: Hashable = (
+                    "timeout",
+                    type(e).__name__,
+                    error_detail or None,
+                )
+                _emit_first_error(error_message, dedup_key=timeout_key)
                 if restart_requested:
                     continue
                 if status.num_timeout_errors == 1:
