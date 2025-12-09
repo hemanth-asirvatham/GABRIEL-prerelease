@@ -499,6 +499,7 @@ def _format_throughput_plan(
     allowed_tok_pm: Optional[float],
     include_upgrade_hint: bool = True,
     tokens_per_call: Optional[float] = None,
+    parallel_ceiling: Optional[int] = None,
 ) -> List[str]:
     """Build human-friendly throughput summary lines."""
 
@@ -526,6 +527,14 @@ def _format_throughput_plan(
         f"Expected prompts per minute: ~{planned_ppm}",
         f"Expected total mins to process all prompts: ~{estimated_minutes} mins for {remaining_prompts:,} prompts",
     ]
+    if (
+        parallel_ceiling is not None
+        and planned_ppm is not None
+        and planned_ppm > parallel_ceiling
+    ):
+        lines.append(
+            f"May take longer because concurrency is capped at {parallel_ceiling:,} parallel requests."
+        )
     if tokens_line:
         lines.append(tokens_line)
     if limiter_text:
@@ -3209,6 +3218,7 @@ async def get_all_responses(
             allowed_tok_pm=allowed_tok_pm if manage_rate_limits else None,
             include_upgrade_hint=True,
             tokens_per_call=estimated_tokens_per_call,
+            parallel_ceiling=max_parallel_ceiling,
         ):
             print(line)
 
@@ -3798,7 +3808,9 @@ async def get_all_responses(
 
     concurrency_cap = min(concurrency_cap, _effective_parallel_ceiling())
 
-    def emit_parallelization_status(reason: str, *, force: bool = False) -> None:
+    def emit_parallelization_status(
+        reason: str, *, force: bool = False, label: Optional[str] = "parallelization"
+    ) -> None:
         """Print and log a snapshot of the current worker utilisation."""
 
         if not force and status_report_interval is None and not verbose:
@@ -3835,19 +3847,23 @@ async def get_all_responses(
         if cost_snapshot is not None:
             total_cost, sampled = cost_snapshot
             cost_text = f"cost_so_far={'~' if sampled else ''}${total_cost:.2f}"
-        msg = (
-            f"[parallelization] {timestamp} | {reason_clean}: "
-            f"cap={concurrency_cap}, active={active_workers}, inflight={len(inflight)}, "
-            f"queue={queue.qsize()}, processed={processed}/{status.num_tasks_started}"
-        )
+        prefix = f"[{label}] " if label else ""
+        status_bits: List[str] = [
+            f"cap={concurrency_cap}",
+            f"active={active_workers}",
+            f"inflight={len(inflight)}",
+            f"queue={queue.qsize()}",
+            f"processed={processed}/{status.num_tasks_started}",
+            f"rate_limit_errors={status.num_rate_limit_errors}",
+        ]
         if cost_text:
-            msg += f", {cost_text}"
-        msg += f", rate_limit_errors={status.num_rate_limit_errors}"
+            status_bits.insert(0, cost_text)
         if planned_ppm is not None:
             ppm_piece = f"throughput≈{planned_ppm} prompts/min"
-            msg += f", {ppm_piece}"
+            status_bits.append(ppm_piece)
         if timeout_text:
-            msg += f", {timeout_text}"
+            status_bits.append(timeout_text)
+        msg = f"{prefix}{timestamp} | {reason_clean}: " + ", ".join(status_bits)
         if message_verbose:
             print(msg)
         logger.info(msg)
@@ -4275,47 +4291,92 @@ async def get_all_responses(
                             emit_parallelization_status(reason, force=True)
                         else:
                             logger.debug(reason)
-                    else:
-                        concurrency_cap = new_cap
+                else:
+                    concurrency_cap = new_cap
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
-                        logger.warning(
+                        elapsed = time.time() - start
+                        warning_msg = (
                             f"Timeout for {ident} after {call_timeout:.1f}s. Consider increasing 'max_timeout'."
                         )
-                else:
-                    row = {
-                        "Identifier": ident,
-                        "Response": resps,
-                        "Time Taken": duration,
-                        "Input Tokens": total_input,
-                        "Reasoning Tokens": total_reasoning,
-                        "Output Tokens": total_output,
-                        "Reasoning Effort": get_response_kwargs.get(
-                            "reasoning_effort", reasoning_effort
-                        ),
-                        "Error Log": error_logs.get(ident, []),
-                    }
-                    if response_ids:
-                        row["Response IDs"] = response_ids
-                    if reasoning_summary is not None:
-                        row["Reasoning Summary"] = summary_text
-                    is_success = True if success_override is None else bool(success_override)
-                    row["Successful"] = is_success
-                    results.append(row)
-                    processed += 1
-                    status.num_tasks_in_progress -= 1
-                    pbar.update(1)
-                    error_logs.pop(ident, None)
-                    if is_success:
-                        status.num_tasks_succeeded += 1
-                        successes_since_adjust += 1
-                        rate_limit_errors_since_adjust = 0
-                        maybe_adjust_concurrency()
-                        if processed % save_every_x_responses == 0:
+                        logger.warning(warning_msg)
+                        status.num_timeout_errors += 1
+                        timeout_errors_since_last_status += 1
+                        timeout_note = f"{ident} timed out after {elapsed:.2f}s"
+                        timeout_notes.append(timeout_note)
+                        if status.num_timeout_errors == 1:
+                            logger.warning(
+                                "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
+                                timeout_note,
+                            )
+                        else:
+                            logger.debug("Timeout error for %s: %s", ident, warning_msg)
+                        error_logs[ident].append(warning_msg)
+                        if attempts_left - 1 > 0:
+                            backoff = random.uniform(1, 2) * (
+                                2 ** (max_retries - attempts_left)
+                            )
+                            await asyncio.sleep(backoff)
+                            queue.put_nowait((prompt, ident, attempts_left - 1))
+                        else:
+                            row = {
+                                "Identifier": ident,
+                                "Response": None,
+                                "Time Taken": duration,
+                                "Input Tokens": total_input,
+                                "Reasoning Tokens": total_reasoning,
+                                "Output Tokens": total_output,
+                                "Reasoning Effort": get_response_kwargs.get(
+                                    "reasoning_effort", reasoning_effort
+                                ),
+                                "Successful": False,
+                                "Error Log": error_logs.get(ident, []),
+                            }
+                            if response_ids:
+                                row["Response IDs"] = response_ids
+                            if reasoning_summary is not None:
+                                row["Reasoning Summary"] = None
+                            results.append(row)
+                            processed += 1
+                            status.num_tasks_failed += 1
+                            status.num_tasks_in_progress -= 1
+                            pbar.update(1)
+                            error_logs.pop(ident, None)
                             await flush()
-                    else:
-                        status.num_tasks_failed += 1
+                        continue
+                row = {
+                    "Identifier": ident,
+                    "Response": resps,
+                    "Time Taken": duration,
+                    "Input Tokens": total_input,
+                    "Reasoning Tokens": total_reasoning,
+                    "Output Tokens": total_output,
+                    "Reasoning Effort": get_response_kwargs.get(
+                        "reasoning_effort", reasoning_effort
+                    ),
+                    "Error Log": error_logs.get(ident, []),
+                }
+                if response_ids:
+                    row["Response IDs"] = response_ids
+                if reasoning_summary is not None:
+                    row["Reasoning Summary"] = summary_text
+                is_success = True if success_override is None else bool(success_override)
+                row["Successful"] = is_success
+                results.append(row)
+                processed += 1
+                status.num_tasks_in_progress -= 1
+                pbar.update(1)
+                error_logs.pop(ident, None)
+                if is_success:
+                    status.num_tasks_succeeded += 1
+                    successes_since_adjust += 1
+                    rate_limit_errors_since_adjust = 0
+                    maybe_adjust_concurrency()
+                    if processed % save_every_x_responses == 0:
                         await flush()
+                else:
+                    status.num_tasks_failed += 1
+                    await flush()
             except asyncio.CancelledError:
                 raise
             except (asyncio.TimeoutError, APITimeoutError) as e:
@@ -4573,7 +4634,9 @@ async def get_all_responses(
                 await asyncio.sleep(status_report_interval)
                 if stop_event.is_set() or processed >= status.num_tasks_started:
                     break
-                emit_parallelization_status("Periodic status update", force=True)
+                emit_parallelization_status(
+                    "Periodic status update", force=True, label=None
+                )
                 timeout_errors_since_last_status = 0
         except asyncio.CancelledError:
             pass
