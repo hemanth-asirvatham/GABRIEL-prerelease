@@ -172,6 +172,16 @@ class Classify:
         df_proc = df.reset_index(drop=True).copy()
 
         label_items = list(self.cfg.labels.items())
+        label_count = len(label_items)
+        if label_count > self.cfg.n_attributes_per_run:
+            batches = (
+                label_count + self.cfg.n_attributes_per_run - 1
+            ) // self.cfg.n_attributes_per_run
+            print(
+                f"[Classify] {label_count} labels provided. n_attributes_per_run={self.cfg.n_attributes_per_run}. "
+                f"Splitting into {batches} prompt batches. Increase n_attributes_per_run if you want all attributes "
+                "to be processed in the same prompt."
+            )
         label_batches: List[Dict[str, str]] = [
             dict(label_items[i : i + self.cfg.n_attributes_per_run])
             for i in range(0, len(label_items), self.cfg.n_attributes_per_run)
