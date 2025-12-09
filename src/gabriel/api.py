@@ -88,7 +88,11 @@ async def rate(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Score passages/images/audio/entities on named attributes, 0 to 100 scale.
+    """Asks GPT to score each text / image / audio / item on natural language attributes. Output = 0-100 rating.
+
+    Example Use
+    -----------
+    Measure "patriotic rhetoric" in a speech; "toxicity" of tweets; "luxury" in ad images.
 
     Parameters
     ----------
@@ -180,7 +184,11 @@ async def extract(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Pull structured attributes from passages/images/audio/entities into a table.
+    """Structured fact extraction on each item. Output = string / numeric values.
+
+    Example Use
+    -----------
+    For each product, provide the "company", "CEO", and "year of invention".
 
     Parameters
     ----------
@@ -271,7 +279,11 @@ async def seed(
     reset_files: bool = False,
     **response_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate a large list of mutually exclusive entities.
+    """Enforces a representative distribution / diversity of seeds.
+
+    Example Use
+    -----------
+    Initialize unique personas that match US population distribution.
 
     Parameters
     ----------
@@ -365,7 +377,11 @@ async def classify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Assign labels to passages/images/audio/entities and record predicted classes.
+    """Classifies texts / images / audio / items on whether provided labels apply. Output = one or more classes per item.
+
+    Example Use
+    -----------
+    Tag news articles, product photos, or interview clips into topical categories.
 
     Parameters
     ----------
@@ -475,7 +491,11 @@ async def ideate(
     seed_run_kwargs: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Generate novel research theories, rate/rank them recursively, and return the top ideas.
+    """Generates many novel scientific theories and filters the cream of the crop.
+
+    Example Use
+    -----------
+    Procure novel theories on inflation for potential research.
 
     Parameters
     ----------
@@ -589,7 +609,11 @@ async def deidentify(
     reset_files: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Redact personally identifiable information and replace with conceptually similar substitutes.
+    """Replaces PII with realistic, consistent fake PII. Outputs anonymized text + mapping.
+
+    Example Use
+    -----------
+    Replace names, employers, addresses before sharing interview corpora.
 
     Parameters
     ----------
@@ -694,7 +718,11 @@ async def rank(
     id_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Score passages/images/audio/entities via pairwise comparisons on attributes to get z-score rankings.
+    """Pairwise comparisons between texts yields ELO-like attribute ratings. Output = grounded, relative z scores for each text.
+
+    Example Use
+    -----------
+    Rank technologies by "bulkiness" or artworks by "fine brushwork".
 
     Parameters
     ----------
@@ -832,7 +860,11 @@ async def codify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Passage codes by extracting and highlighting snippets in text that belong to a label.
+    """Passage coding: highlights snippets in text that match qualitative codes.
+
+    Example Use
+    -----------
+    Flag sentences about "economic insecurity" in speeches; "stressors" mentioned in interview.
 
     Parameters
     ----------
@@ -940,7 +972,11 @@ async def paraphrase(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Rewrites passages per given instructions.
+    """Rewrites texts consistently per instructions.
+
+    Example Use
+    -----------
+    Summarize earnings call transcripts to remove company specifics.
 
     Parameters
     ----------
@@ -1041,7 +1077,11 @@ async def compare(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Identifies a list of differences between a pair of passages/images/audio/entities if differentiate is True; else a list of similarities.
+    """Identifies similarities / differences between paired items. Output = list of differences.
+
+    Example Use
+    -----------
+    Contrast op-eds from different districts; compare two ad campaigns.
 
     Parameters
     ----------
@@ -1125,7 +1165,11 @@ async def bucket(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Bucket task to propose bucket definitions and assign passages into a fixed number of buckets.
+    """Builds taxonomies from many terms. Output = bucket/cluster labels.
+
+    Example Use
+    -----------
+    Group technologies, artworks, or HR complaints into emergent categories.
 
     Parameters
     ----------
@@ -1163,19 +1207,6 @@ async def bucket(
     pandas.DataFrame
         DataFrame containing the finalized bucket names and definitions (one
         row per bucket).
-
-    Examples
-    --------
-    Bucket survey comments into 8 themes::
-
-        import gabriel
-
-        bucket_defs = await gabriel.bucket(
-            df_comments,
-            "comment",
-            bucket_count=8,
-            save_dir="~/runs/bucket_surveys",
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1229,7 +1260,11 @@ async def discover(
     reset_files: bool = False,
     **cfg_kwargs,
 ) -> Dict[str, pd.DataFrame]:
-    """Run the Discover task to mine organic labels via bucket + classify loops with optional circle/square bidirectional views.
+    """Discovers natural language features which discriminate two classes of data.
+
+    Example Use
+    -----------
+    Identify what distinguishes 5 star vs. 1 star reviews or successful vs. failed startups.
 
     Parameters
     ----------
@@ -1284,19 +1319,6 @@ async def discover(
         classification is performed twice (circle and square directions). A
         ``summary`` key describes label prevalence differences with
         ``difference_pct`` expressed as circle minus square percentage points.
-
-    Examples
-    --------
-    Discover labels from open-ended feedback::
-
-        import gabriel
-
-        discovered = await gabriel.discover(
-            df_feedback,
-            column_name="comment",
-            save_dir="~/runs/discover_feedback",
-            bucket_count=12,
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1351,7 +1373,11 @@ async def deduplicate(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Deduplicate task to collapse near-duplicate passages with optional embedding prefiltering and multiple passes.
+    """Detects conceptual duplicates. Maps all duplicates to one representative term.
+
+    Example Use
+    -----------
+    Collapse "F-18", "Super Hornet Fighter Jet", "f-18 hornet" into "F-18".
 
     Parameters
     ----------
@@ -1393,19 +1419,6 @@ async def deduplicate(
         DataFrame including the original content plus ``mapped_<column_name>`` columns
         (per run and final) indicating the canonical representative for each
         detected duplicate cluster.
-
-    Examples
-    --------
-    Deduplicate product names with embeddings enabled::
-
-        import gabriel
-
-        deduped = await gabriel.deduplicate(
-            products,
-            "name",
-            save_dir="~/runs/dedupe_products",
-            use_embeddings=True,
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1457,7 +1470,11 @@ async def merge(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Merge task to align two DataFrames via model-guided candidate matching with optional embedding shortlists.
+    """Creates crosswalks. Output = merged table with GPT-matched identifiers.
+
+    Example Use
+    -----------
+    Match two distinct job title directories; link patent titles to product names.
 
     Parameters
     ----------
@@ -1510,21 +1527,6 @@ async def merge(
         Merged result keyed to the ``how``-selected short side, enriched with
         model-evaluated matches from the long side and deduplicated on the
         short key.
-
-    Examples
-    --------
-    Left merge customer tables on noisy names::
-
-        import gabriel
-
-        merged = await gabriel.merge(
-            customers_a,
-            customers_b,
-            on="customer_name",
-            save_dir="~/runs/merge_customers",
-            use_embeddings=True,
-            auto_match_threshold=0.8,
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1579,7 +1581,11 @@ async def filter(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Filter task to keep or drop passages based on a natural-language condition with repeatable LLM evaluations.
+    """High-throughput boolean screening. Outputs items which meet natural language condition.
+
+    Example Use
+    -----------
+    Subset 18M Wikipedia titles to only technologies.
 
     Parameters
     ----------
@@ -1624,20 +1630,6 @@ async def filter(
     -------
     pandas.DataFrame
         Filtered DataFrame with keep/score columns reflecting model decisions.
-
-    Examples
-    --------
-    Keep reviews that mention pricing::
-
-        import gabriel
-
-        filtered = await gabriel.filter(
-            reviews,
-            "text",
-            condition="mentions price or cost",
-            save_dir="~/runs/filter_price",
-            n_runs=2,
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1691,7 +1683,11 @@ async def debias(
     random_seed: int = 12345,
     verbose: bool = True,
 ) -> DebiasResult:
-    """Run the econometric debiasing pipeline on ``df[column_name]`` with configurable measurement/removal stages and regression options.
+    """Post-process measurements to remove inference bias.
+
+    Example Use
+    -----------
+    Ensure GPT isn't guessing climate opinions in speeches based on general political lean.
 
     Parameters
     ----------
@@ -1748,20 +1744,6 @@ async def debias(
     DebiasResult
         Structured output containing measured bias, debiased DataFrame, and
         supporting diagnostics.
-
-    Examples
-    --------
-    Rate-based measurement with codify removal::
-
-        import gabriel
-
-        result = await gabriel.debias(
-            df,
-            "text",
-            signal_dictionary={"gender": "gendered terms"},
-            attributes={"quality": "0-100 quality"},
-            save_dir="~/runs/debias_quality",
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -1832,7 +1814,11 @@ async def whatever(
     reasoning_summary: Optional[str] = None,
     **kwargs,
 ) -> pd.DataFrame:
-    """Send arbitrary prompts (optionally multimodal) to the Responses API with optional web search and cached outputs.
+    """Run any GPT prompts, but leverage GABRIEL's parallelization / checkpointing.
+
+    Example Use
+    -----------
+    Any set of prompts; slots into any pipeline.
 
     Parameters
     ----------
@@ -1882,20 +1868,6 @@ async def whatever(
     pandas.DataFrame
         DataFrame of prompts, identifiers, and model responses saved to
         ``save_dir/file_name``.
-
-    Examples
-    --------
-    Prompts from a DataFrame with web search::
-
-        import gabriel
-
-        responses = await gabriel.whatever(
-            df_questions,
-            column_name="question",
-            save_dir="~/runs/whatever_search",
-            web_search=True,
-            search_context_size="large",
-        )
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -1965,7 +1937,11 @@ def view(
     font_family: Optional[str] = None,
     color_mode: str = "auto",
 ):
-    """Render passages and attributes in an interactive HTML viewer with typography, sizing, and theming controls.
+    """UI to view sample texts with ratings / passage coding.
+
+    Example Use
+    -----------
+    Spot-check classify / rating outputs; view coded passages.
 
     Parameters
     ----------
@@ -1993,19 +1969,6 @@ def view(
     Any
         The rendered viewer object produced by
         :func:`gabriel.utils.passage_viewer.view`.
-
-    Examples
-    --------
-    View rated passages with headers::
-
-        import gabriel
-
-        gabriel.view(
-            rated_df,
-            "text",
-            attributes=["clarity", "helpfulness"],
-            header_columns=["id", "source"],
-        )
     """
 
     return _view_passages(
