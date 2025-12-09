@@ -22,6 +22,7 @@ from ..utils import (
     load_image_inputs,
     load_audio_inputs,
 )
+from ..utils.logging import announce_prompt_rendering
 
 
 # ────────────────────────────
@@ -136,6 +137,11 @@ class Rate:
         ids: List[str] = []
         for batch_idx, batch_attrs in enumerate(attr_batches):
             for ident in base_ids:
+                if batch_idx == 0 and not prompts and batch_attrs is attr_batches[0]:
+                    announce_prompt_rendering(
+                        "Rate",
+                        len(base_ids) * len(attr_batches),
+                    )
                 prompts.append(
                     self.template.render(
                         text=prompt_texts[ident],

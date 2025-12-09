@@ -14,6 +14,7 @@ import pandas as pd
 from gabriel.core.prompt_template import PromptTemplate, resolve_template
 from gabriel.utils import safest_json
 from gabriel.utils.openai_utils import get_all_responses
+from gabriel.utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -210,6 +211,7 @@ class Seed:
         prompt_count = math.ceil(goal / per_call)
         existing_sample = self._sample_existing(seen_entities)
         existing_blob = "\n".join(existing_sample) if existing_sample else None
+        announce_prompt_rendering("Seed", prompt_count)
         for call_index in range(prompt_count):
             identifiers.append(f"seed|{batch_index}|{call_index}")
             prompts.append(

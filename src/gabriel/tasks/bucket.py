@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import random
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,7 @@ import pandas as pd
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils.openai_utils import get_all_responses
 from ..utils import safest_json
+from ..utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -208,6 +210,13 @@ class Bucket:
         if not candidate_defs:
             prompts: List[str] = []
             ids: List[str] = []
+            chunks_per_rep = max(
+                1, math.ceil(len(terms) / self.cfg.n_terms_per_prompt)
+            )
+            announce_prompt_rendering(
+                "Bucket:generate",
+                chunks_per_rep * self.cfg.repeat_bucketing,
+            )
             for rep in range(self.cfg.repeat_bucketing):
                 random.shuffle(terms)
                 chunks = [
@@ -266,6 +275,13 @@ class Bucket:
         def _vote_prompts(opts: List[str], selected: List[str], tag: str):
             pr: List[str] = []
             idn: List[str] = []
+            chunks_per_rep = max(
+                1, math.ceil(len(opts) / self.cfg.n_terms_per_prompt)
+            )
+            announce_prompt_rendering(
+                f"Bucket:{tag}",
+                chunks_per_rep * self.cfg.repeat_voting,
+            )
             for rep in range(self.cfg.repeat_voting):
                 random.shuffle(opts)
                 chunks = [
@@ -414,4 +430,3 @@ class Bucket:
         state["stage"] = "complete"
         persist_state()
         return out_df
-

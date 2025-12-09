@@ -19,6 +19,7 @@ from scipy.cluster.vq import kmeans2
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils.openai_utils import get_all_responses
 from ..utils import safest_json, safe_json, get_all_embeddings
+from ..utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -310,6 +311,7 @@ class Merge:
             prompts: List[str] = []
             identifiers: List[str] = []
             base_ids: List[str] = []
+            announce_prompt_rendering("Merge", len(clusters) * max(1, self.cfg.n_runs))
             for idx, (short_terms, long_terms) in enumerate(zip(clusters, candidates)):
                 short_dict = {s: "" for s in short_terms}
                 prompt = self.template.render(

@@ -18,6 +18,7 @@ from ..utils import (
     load_image_inputs,
     load_audio_inputs,
 )
+from ..utils.logging import announce_prompt_rendering
 
 
 def _collect_predictions(row: pd.Series) -> List[str]:
@@ -209,6 +210,10 @@ class Classify:
                 )
                 id_to_circle_first[sha8] = circle_first_flag
                 base_ids.append(sha8)
+            announce_prompt_rendering(
+                "Classify",
+                len(base_ids) * len(label_batches),
+            )
             for batch_idx, batch_labels in enumerate(label_batches):
                 for ident in base_ids:
                     prompts.append(
@@ -238,6 +243,10 @@ class Classify:
                     else ""
                 )
                 base_ids.append(sha8)
+            announce_prompt_rendering(
+                "Classify",
+                len(base_ids) * len(label_batches),
+            )
             for batch_idx, batch_labels in enumerate(label_batches):
                 for ident in base_ids:
                     prompts.append(

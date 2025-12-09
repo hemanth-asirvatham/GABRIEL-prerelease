@@ -10,6 +10,7 @@ import pandas as pd
 
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils.openai_utils import get_all_responses
+from ..utils.logging import announce_prompt_rendering
 from ..utils import safest_json
 
 
@@ -80,6 +81,7 @@ class Filter:
 
         prompts: List[str] = []
         identifiers: List[str] = []
+        total_chunks = 0
         for run in range(self.cfg.n_runs):
             ents = list(entities)
             if self.cfg.shuffle:
@@ -89,6 +91,7 @@ class Filter:
                 ents[i : i + self.cfg.entities_per_call]
                 for i in range(0, len(ents), self.cfg.entities_per_call)
             ]
+            total_chunks += len(chunks)
             for idx, chunk in enumerate(chunks):
                 prompts.append(
                     self.template.render(
@@ -98,6 +101,8 @@ class Filter:
                     )
                 )
                 identifiers.append(f"filter_{run:03d}_{idx:05d}")
+
+        announce_prompt_rendering("Filter", total_chunks)
 
         save_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
         if prompts:

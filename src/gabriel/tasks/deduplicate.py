@@ -14,6 +14,7 @@ from scipy.cluster.vq import kmeans2
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils.openai_utils import get_all_responses
 from ..utils import safest_json, safe_json, get_all_embeddings
+from ..utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -140,6 +141,7 @@ class Deduplicate:
 
         prompts: List[str] = []
         identifiers: List[str] = []
+        announce_prompt_rendering("Deduplicate", len(batches) * max(1, self.cfg.n_runs))
         for idx, items in enumerate(batches):
             prompts.append(
                 self.template.render(

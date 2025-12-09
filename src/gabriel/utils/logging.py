@@ -70,6 +70,17 @@ def get_logger(name: str) -> logging.Logger:
     return logger
 
 
+def announce_prompt_rendering(task: str, count: int) -> None:
+    """Emit a lightweight notice when prompt rendering begins.
+
+    Direct ``print`` is intentional here so users see activity immediately in
+    notebooks/terminals without needing logging configuration.
+    """
+
+    if count <= 0:
+        return
+    print(f"[{task}] Rendering {count} prompts…", flush=True)
+
+
 # Configure root logger on import according to ``GABRIEL_LOG_LEVEL``.
 set_log_level(CURRENT_LEVEL)
-

@@ -14,6 +14,7 @@ import pandas as pd
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils import safest_json
 from ..utils.openai_utils import get_all_responses
+from ..utils.logging import announce_prompt_rendering
 
 
 # ────────────────────────────
@@ -255,6 +256,8 @@ class Deidentifier:
 
                     if not prompts:
                         continue
+
+                    announce_prompt_rendering("Deidentify", len(prompts))
 
                     save_path = raw_prefix.with_name(
                         f"{raw_prefix.name}_pass{pass_idx}_round{rnd}.csv"

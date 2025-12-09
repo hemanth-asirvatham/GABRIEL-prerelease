@@ -10,6 +10,7 @@ import pandas as pd
 
 from gabriel.core.prompt_template import PromptTemplate, resolve_template
 from gabriel.utils.openai_utils import get_all_responses, response_to_text
+from gabriel.utils.logging import announce_prompt_rendering
 from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.rate import Rate, RateConfig
 from gabriel.tasks.seed import Seed, SeedConfig
@@ -244,6 +245,7 @@ class Ideate:
 
         prompts: List[str] = []
         identifiers: List[str] = []
+        announce_prompt_rendering("Ideate", self.cfg.n_ideas)
         for idx in range(self.cfg.n_ideas):
             seed_text = seed_assignments[idx] if seeds_enabled and idx < len(seed_assignments) else None
             prompts.append(

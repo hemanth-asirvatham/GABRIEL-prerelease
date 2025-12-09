@@ -17,6 +17,7 @@ from ..utils import (
     load_image_inputs,
     load_audio_inputs,
 )
+from ..utils.logging import announce_prompt_rendering
 
 
 @dataclass
@@ -174,6 +175,7 @@ class Extract:
 
         prompts: List[str] = []
         ids: List[str] = []
+        announce_prompt_rendering("Extract", len(base_ids) * len(attr_batches))
         for batch_idx, batch_attrs in enumerate(attr_batches):
             for ident in base_ids:
                 prompts.append(
