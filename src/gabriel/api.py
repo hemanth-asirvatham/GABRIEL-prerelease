@@ -88,7 +88,7 @@ async def rate(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Score passages on named attributes and persist the results.
+    """Score passages/images/audio/entities on named attributes, 0 to 100 scale.
 
     Parameters
     ----------
@@ -180,7 +180,7 @@ async def extract(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Pull structured attributes from passages into a table.
+    """Pull structured attributes from passages/images/audio/entities into a table.
 
     Parameters
     ----------
@@ -271,7 +271,7 @@ async def seed(
     reset_files: bool = False,
     **response_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate a large list of entities for discovery or ideation.
+    """Generate a large list of mutually exclusive entities.
 
     Parameters
     ----------
@@ -365,7 +365,7 @@ async def classify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Assign labels (optionally circle/square pairs) to passages and record predicted classes."""
+    """Assign labels to passages/images/audio/entities and record predicted classes.
 
     Parameters
     ----------
@@ -475,7 +475,7 @@ async def ideate(
     seed_run_kwargs: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Generate ideas, rate/rank them recursively, and return the top list."""
+    """Generate novel research theories, rate/rank them recursively, and return the top ideas.
 
     Parameters
     ----------
@@ -589,7 +589,7 @@ async def deidentify(
     reset_files: bool = False,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Redact personally identifiable information with optional multi-pass replacements."""
+    """Redact personally identifiable information and replace with conceptually similar substitutes.
 
     Parameters
     ----------
@@ -694,7 +694,7 @@ async def rank(
     id_column: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Score passages via pairwise comparisons with optional recursion and initial rating passes.
+    """Score passages/images/audio/entities via pairwise comparisons on attributes to get z-score rankings.
 
     Parameters
     ----------
@@ -832,7 +832,7 @@ async def codify(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Codify task to map passages into structured categories with optional multi-round refinement.
+    """Passage codes by extracting and highlighting snippets in text that belong to a label.
 
     Parameters
     ----------
@@ -884,19 +884,6 @@ async def codify(
     -------
     pandas.DataFrame
         DataFrame with coded categories and any iterative refinement metadata.
-
-    Examples
-    --------
-    Code support tickets into predefined categories::
-
-        import gabriel
-
-        coded = await gabriel.codify(
-            tickets,
-            "text",
-            categories={"billing": "billing issues", "bug": "product bugs"},
-            save_dir="~/runs/codify_tickets",
-        )
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -953,7 +940,7 @@ async def paraphrase(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Paraphrase task to rewrite passages with optional validation, web search, and JSON mode.
+    """Rewrites passages per given instructions.
 
     Parameters
     ----------
@@ -1000,19 +987,6 @@ async def paraphrase(
     -------
     pandas.DataFrame
         DataFrame containing paraphrased text and any validation scores.
-
-    Examples
-    --------
-    Rewrite responses to be shorter and simpler::
-
-        import gabriel
-
-        rewrites = await gabriel.paraphrase(
-            df_answers,
-            "response",
-            instructions="rephrase to be shorter and simpler",
-            save_dir="~/runs/paraphrase_simple",
-        )
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
@@ -1067,7 +1041,7 @@ async def compare(
     template_path: Optional[str] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Run the Compare task to score paired passages (circle vs. square) with optional differentiation across text/image/audio modalities.
+    """Identifies a list of differences between a pair of passages/images/audio/entities if differentiate is True; else a list of similarities.
 
     Parameters
     ----------
@@ -1107,20 +1081,6 @@ async def compare(
     pandas.DataFrame
         DataFrame indexed by both input columns with one row per attribute and
         an ``explanation`` field describing the preference rationale.
-
-    Examples
-    --------
-    Compare paired headlines for persuasiveness::
-
-        import gabriel
-
-        comps = await gabriel.compare(
-            df_pairs,
-            "headline_a",
-            "headline_b",
-            save_dir="~/runs/compare_headlines",
-            attributes={"persuasive": "which headline is more persuasive"},
-        )
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
