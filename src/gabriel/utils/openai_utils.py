@@ -2545,6 +2545,10 @@ async def get_all_responses(
     timeout_factor: float = 2.25,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
+    timeout_burst_threshold: int = 100,
+    timeout_burst_window: float = 60.0,
+    timeout_burst_cooldown: float = 60.0,
+    timeout_burst_max_restarts: int = 3,
     background_mode: Optional[bool] = None,
     background_poll_interval: float = 2.0,
     # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
@@ -3709,6 +3713,7 @@ async def get_all_responses(
     cooldown_until = 0.0
     stop_event = asyncio.Event()
     timeout_cancellations: Set[str] = set()
+    seen_error_messages: Set[str] = set()
     # Counters used for the gentle concurrency adaptation below
     rate_limit_errors_since_adjust = 0
     successes_since_adjust = 0
@@ -3719,6 +3724,7 @@ async def get_all_responses(
     last_concurrency_scale_up = 0.0
     usage_samples: List[Tuple[int, int, int]] = []
     estimated_output_tokens = planning_output_tokens
+    timeout_error_times: Deque[float] = deque()
     limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratio_threshold = 0.3
@@ -3731,6 +3737,70 @@ async def get_all_responses(
     timeout_errors_since_last_status = 0
     current_tokens_per_call = float(estimated_tokens_per_call)
     last_rate_limit_concurrency_change = 0.0
+    restart_requested = False
+    restart_count = int(get_response_kwargs.pop("_timeout_restart_count", 0))
+    timeout_burst_window = max(1.0, float(timeout_burst_window))
+    timeout_burst_cooldown = max(1.0, float(timeout_burst_cooldown))
+    timeout_burst_max_restarts = max(0, int(timeout_burst_max_restarts))
+
+    def _emit_first_error(message: str, *, level: int = logging.WARNING) -> None:
+        if message not in seen_error_messages:
+            seen_error_messages.add(message)
+            if message_verbose:
+                print(
+                    f"{message} (subsequent occurrences of this error will be silenced in logs)"
+                )
+            logger.log(
+                level,
+                "%s (subsequent occurrences of this error will be silenced in logs)",
+                message,
+            )
+        else:
+            logger.debug(message)
+
+    def _record_timeout_event(now: Optional[float] = None) -> None:
+        if timeout_burst_threshold <= 0:
+            return
+        ts = now if now is not None else time.time()
+        timeout_error_times.append(ts)
+        window_start = ts - timeout_burst_window
+        while timeout_error_times and timeout_error_times[0] < window_start:
+            timeout_error_times.popleft()
+
+    def _trigger_timeout_burst(now: Optional[float] = None) -> None:
+        nonlocal restart_requested
+        _record_timeout_event(now)
+        if (
+            timeout_burst_threshold <= 0
+            or restart_requested
+            or len(timeout_error_times) < timeout_burst_threshold
+            or restart_count >= timeout_burst_max_restarts
+        ):
+            return
+        restart_requested = True
+        stop_event.set()
+        msg = (
+            f"[timeouts] {len(timeout_error_times)} timeouts in the last {int(timeout_burst_window)}s. "
+            f"Pausing workers for {int(timeout_burst_cooldown)}s and resuming from the last checkpoint."
+        )
+        if message_verbose:
+            print(msg)
+        logger.warning(msg)
+        for _, (_, task, _) in list(inflight.items()):
+            try:
+                task.cancel()
+            except Exception:
+                continue
+        drained = 0
+        while True:
+            try:
+                _, _, _ = queue.get_nowait()
+                queue.task_done()
+                drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained and message_verbose:
+            print(f"[timeouts] Drained {drained} queued prompts before restart.")
 
     def _cost_progress_snapshot() -> Optional[Tuple[float, bool]]:
         """Return total cost so far and whether the value is sampled."""
@@ -4142,9 +4212,6 @@ async def get_all_responses(
                             error_logs[ident].extend(extra_errors)
                         raw = _synthesise_dummy_raw(str(ident), selected_spec, resps)
                         success_override = selected_spec.successful
-                if duration is not None:
-                    success_times.append(duration)
-                await adjust_timeout()
                 limiter_wait_ratio = 0.0
                 if (
                     limiter_wait_time > 0
@@ -4361,6 +4428,9 @@ async def get_all_responses(
                 if reasoning_summary is not None:
                     row["Reasoning Summary"] = summary_text
                 is_success = True if success_override is None else bool(success_override)
+                if is_success and duration is not None:
+                    success_times.append(duration)
+                    await adjust_timeout()
                 row["Successful"] = is_success
                 results.append(row)
                 processed += 1
@@ -4382,6 +4452,7 @@ async def get_all_responses(
             except (asyncio.TimeoutError, APITimeoutError) as e:
                 status.num_timeout_errors += 1
                 elapsed = time.time() - start
+                _trigger_timeout_burst(time.time())
                 inflight.pop(ident, None)
                 await adjust_timeout()
                 if isinstance(e, APITimeoutError):
@@ -4397,6 +4468,9 @@ async def get_all_responses(
                 timeout_errors_since_last_status += 1
                 timeout_note = f"{ident} timed out after {elapsed:.2f}s"
                 timeout_notes.append(timeout_note)
+                _emit_first_error(error_message)
+                if restart_requested:
+                    continue
                 if status.num_timeout_errors == 1:
                     logger.warning(
                         "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
@@ -4446,6 +4520,7 @@ async def get_all_responses(
                 cooldown_until = status.time_of_last_rate_limit_error + global_cooldown
                 error_text = str(e)
                 logger.warning(f"Rate limit error for {ident}: {e}")
+                _emit_first_error(f"Rate limit error encountered: {error_text}")
                 error_logs[ident].append(error_text)
                 rate_limit_error_times.append(time.time())
                 rate_limit_errors_since_adjust += 1
@@ -4530,6 +4605,7 @@ async def get_all_responses(
                 inflight.pop(ident, None)
                 status.num_api_errors += 1
                 logger.warning(f"Connection error for {ident}: {e}")
+                _emit_first_error(f"Connection error encountered: {e}")
                 error_logs[ident].append(str(e))
                 if attempts_left - 1 > 0 and not stop_event.is_set():
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
@@ -4567,6 +4643,7 @@ async def get_all_responses(
                 inflight.pop(ident, None)
                 status.num_api_errors += 1
                 logger.warning(f"API error for {ident}: {e}")
+                _emit_first_error(f"API error encountered: {e}")
                 error_logs[ident].append(str(e))
                 row = {
                     "Identifier": ident,
@@ -4596,6 +4673,7 @@ async def get_all_responses(
                 inflight.pop(ident, None)
                 status.num_other_errors += 1
                 logger.error(f"Unexpected error for {ident}: {e}")
+                _emit_first_error(f"Unexpected error encountered: {e}", level=logging.ERROR)
                 await flush()
                 raise
             finally:
@@ -4674,6 +4752,98 @@ async def get_all_responses(
         # Flush remaining results and close progress bar
         await flush()
         pbar.close()
+
+    if restart_requested:
+        cooldown_msg = (
+            f"[timeouts] Cooldown triggered after {len(timeout_error_times)} timeouts in "
+            f"{int(timeout_burst_window)}s. Sleeping for {int(timeout_burst_cooldown)}s before resuming from checkpoint."
+        )
+        if message_verbose:
+            print(cooldown_msg)
+        logger.warning(cooldown_msg)
+        await asyncio.sleep(timeout_burst_cooldown)
+        restart_kwargs = dict(get_response_kwargs)
+        for duplicate_key in (
+            "model",
+            "n",
+            "max_output_tokens",
+            "max_tokens",
+            "temperature",
+            "json_mode",
+            "expected_schema",
+            "tools",
+            "tool_choice",
+            "web_search",
+            "web_search_filters",
+            "search_context_size",
+            "reasoning_effort",
+            "reasoning_summary",
+            "use_dummy",
+            "response_fn",
+            "base_url",
+            "background_mode",
+            "background_poll_interval",
+            "api_key",
+        ):
+            restart_kwargs.pop(duplicate_key, None)
+        restart_kwargs["_timeout_restart_count"] = restart_count + 1
+        return await get_all_responses(
+            prompts=prompts,
+            identifiers=identifiers,
+            prompt_images=prompt_images,
+            prompt_audio=prompt_audio,
+            prompt_web_search_filters=prompt_web_search_filters,
+            model=model,
+            n=n,
+            max_output_tokens=max_output_tokens,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_mode=json_mode,
+            expected_schema=expected_schema,
+            tools=tools,
+            tool_choice=tool_choice,
+            web_search=web_search,
+            web_search_filters=web_search_filters,
+            search_context_size=search_context_size,
+            reasoning_effort=reasoning_effort,
+            reasoning_summary=reasoning_summary,
+            dummy_responses=dummy_responses,
+            use_dummy=use_dummy,
+            response_fn=response_fn,
+            base_url=base_url,
+            api_key=api_key,
+            print_example_prompt=print_example_prompt,
+            save_path=save_path,
+            reset_files=False,
+            n_parallels=n_parallels,
+            max_retries=max_retries,
+            timeout_factor=timeout_factor,
+            max_timeout=max_timeout,
+            dynamic_timeout=dynamic_timeout,
+            timeout_burst_threshold=timeout_burst_threshold,
+            timeout_burst_window=timeout_burst_window,
+            timeout_burst_cooldown=timeout_burst_cooldown,
+            timeout_burst_max_restarts=timeout_burst_max_restarts,
+            background_mode=background_mode,
+            background_poll_interval=background_poll_interval,
+            cancel_existing_batch=cancel_existing_batch,
+            use_batch=use_batch,
+            batch_completion_window=batch_completion_window,
+            batch_poll_interval=batch_poll_interval,
+            batch_wait_for_completion=batch_wait_for_completion,
+            max_batch_requests=max_batch_requests,
+            max_batch_file_bytes=max_batch_file_bytes,
+            save_every_x_responses=save_every_x_responses,
+            verbose=verbose,
+            quiet=quiet,
+            global_cooldown=global_cooldown,
+            rate_limit_window=rate_limit_window,
+            token_sample_size=token_sample_size,
+            status_report_interval=status_report_interval,
+            planning_rate_limit_buffer=planning_rate_limit_buffer,
+            logging_level=logging_level,
+            **restart_kwargs,
+        )
 
     logger.info(
         f"Processing complete. {status.num_tasks_succeeded}/{status.num_tasks_started} requests succeeded."
