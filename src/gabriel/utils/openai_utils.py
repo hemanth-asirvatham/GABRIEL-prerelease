@@ -289,11 +289,11 @@ TIER_INFO = [
         "qualification": "User must be in an allowed geography",
         "monthly_quota": "$100 / month",
     },
-    {"tier": "Tier 1", "qualification": "$5 paid", "monthly_quota": None},
-    {"tier": "Tier 2", "qualification": "$50 paid and 7+ days since first payment", "monthly_quota": None},
-    {"tier": "Tier 3", "qualification": "$100 paid and 7+ days since first payment", "monthly_quota": None},
-    {"tier": "Tier 4", "qualification": "$250 paid and 14+ days since first payment", "monthly_quota": None},
-    {"tier": "Tier 5", "qualification": "$1 000 paid and 30+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 1", "qualification": "$5 added", "monthly_quota": None},
+    {"tier": "Tier 2", "qualification": "$50 added and 7+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 3", "qualification": "$100 added and 7+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 4", "qualification": "$250 added and 14+ days since first payment", "monthly_quota": None},
+    {"tier": "Tier 5", "qualification": "$1 000 added and 30+ days since first payment", "monthly_quota": None},
 ]
 
 # Truncated pricing table (USD per million tokens) for a few common models
@@ -515,7 +515,8 @@ def _format_throughput_plan(
 ) -> List[str]:
     """Build human-friendly throughput summary lines."""
 
-    del include_upgrade_hint, tokens_per_call, parallel_ceiling
+    del include_upgrade_hint, tokens_per_call
+    parallel_cap = parallel_ceiling if parallel_ceiling is not None else n_parallels
 
     if planned_ppm is None or planned_ppm <= 0:
         return [
@@ -532,7 +533,16 @@ def _format_throughput_plan(
         f"Expected prompts per minute: maximum of {planned_ppm:,}",
         f"Estimated total mins: minimum of {minimum_minutes} minute{'s' if minimum_minutes != 1 else ''}",
     ]
-    if limiter:
+    meets_parallel_cap = (
+        parallel_cap is not None
+        and planned_ppm >= parallel_cap
+        and (limiter_value is None or limiter_value >= parallel_cap)
+    )
+    if meets_parallel_cap and parallel_cap is not None:
+        lines.append(
+            f"Rate currently limited by n_parallels = {parallel_cap}. Increase n_parallels for faster runs, if your machine allows."
+        )
+    elif limiter:
         rate_val = f"~{int(limiter_value):,}/min" if limiter_value is not None else "rate limits"
         lines.append(
             f"Rate currently limited by {limiter} ({rate_val}). Moving to a higher usage tier can raise these limits and allow faster runs."
@@ -3957,13 +3967,10 @@ async def get_all_responses(
         timeout_text = ""
         total_completed = processed
         if status.num_timeout_errors or total_completed:
-            last_note = timeout_notes[-1] if timeout_notes else "timeout observed"
             denom = max(total_completed, 1)
             timeout_text = f"timeouts={status.num_timeout_errors}/{denom}"
             if status_report_interval is not None and timeout_errors_since_last_status:
                 timeout_text += f" (+{timeout_errors_since_last_status} since last)"
-            if last_note:
-                timeout_text += f" [last: {last_note}]"
             if timeout_errors_since_last_status >= TIMEOUT_BURST_ALERT_THRESHOLD:
                 burst_msg = (
                     f"[timeouts] {timeout_errors_since_last_status} timeouts since last update; "
@@ -3989,7 +3996,7 @@ async def get_all_responses(
         if cost_text:
             status_bits.insert(0, cost_text)
         if planned_ppm is not None:
-            ppm_piece = f"throughput≈{planned_ppm} prompts/min"
+            ppm_piece = f"throughput<={planned_ppm} prompts/min"
             status_bits.append(ppm_piece)
         if timeout_text:
             status_bits.append(timeout_text)
