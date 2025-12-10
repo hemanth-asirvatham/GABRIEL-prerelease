@@ -34,7 +34,7 @@ class CodifyConfig:
     save_dir: str
     file_name: str = "coding_results.csv"
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     max_words_per_call: int = 1000
     max_categories_per_call: int = 8
     debug_print: bool = False

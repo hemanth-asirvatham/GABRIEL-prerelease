@@ -159,7 +159,7 @@ class DebiasConfig:
     categories_to_strip: Optional[List[str]] = None
     template_path: Optional[str] = None
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     measurement_kwargs: Dict[str, Any] = field(default_factory=dict)
     removal_kwargs: Dict[str, Any] = field(default_factory=dict)
     use_dummy: bool = False

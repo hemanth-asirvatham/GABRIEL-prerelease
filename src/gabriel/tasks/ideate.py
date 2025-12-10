@@ -46,7 +46,7 @@ class IdeateConfig:
     file_name: str = "ideation.csv"
     model: str = "gpt-5-mini"
     ranking_model: Optional[str] = None
-    n_parallels: int = 750
+    n_parallels: int = 650
     n_ideas: int = 1000
     evaluation_mode: str = "recursive_rank"
     attributes: Dict[str, str] = field(default_factory=_default_attributes)

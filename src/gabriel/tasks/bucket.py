@@ -28,7 +28,7 @@ class BucketConfig:
     save_dir: str = "buckets"
     file_name: str = "bucket_definitions.csv"
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     use_dummy: bool = False
     max_timeout: Optional[float] = None
     additional_instructions: Optional[str] = None

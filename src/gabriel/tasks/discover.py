@@ -24,7 +24,7 @@ class DiscoverConfig:
 
     save_dir: str = "discover"
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     n_runs: int = 1
     min_frequency: float = 0.6
     bucket_count: int = 10

@@ -25,7 +25,7 @@ class WhateverConfig:
     web_search: Optional[bool] = None
     web_search_filters: Optional[Dict[str, Any]] = None
     search_context_size: str = "medium"
-    n_parallels: int = 750
+    n_parallels: int = 650
     use_dummy: bool = False
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
