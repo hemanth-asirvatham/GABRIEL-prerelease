@@ -7,7 +7,7 @@ def test_example_prompt_is_plain_text(capsys):
     prompt = "Line one\nLine two"
     openai_utils._display_example_prompt(prompt, verbose=True)
     output = capsys.readouterr().out
-    assert "Example prompt (full text):" in output
+    assert "===== Example prompt =====" in output
     assert "Line one" in output and "Line two" in output
     assert "<details" not in output
 
