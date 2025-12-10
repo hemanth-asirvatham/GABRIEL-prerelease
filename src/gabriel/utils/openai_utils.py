@@ -311,6 +311,8 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "cached_input": 0.075, "output": 0.60, "batch": 0.5},
     "o3": {"input": 2.00, "cached_input": 0.50, "output": 8.00, "batch": 0.5},
     "o4-mini": {"input": 1.10, "cached_input": 0.275, "output": 4.40, "batch": 0.5},
+    "gpt-5.2": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
+    "gpt-5.1": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00, "batch": 0.5},
     "gpt-5-nano": {"input": 0.05, "cached_input": 0.005, "output": 0.40, "batch": 0.5},
@@ -343,7 +345,7 @@ def _print_tier_explainer(verbose: bool = True) -> None:
         return
     print("\n===== Tier explainer =====")
     print(
-        "Your organization’s ability to call the OpenAI API is governed by usage tiers."
+        "Your ability to call the OpenAI API is governed by usage tiers. Runs on lower usage tiers will be slower."
     )
     print(
         "As you spend more on the API, you are automatically graduated to higher tiers with larger token and request limits."
@@ -358,9 +360,8 @@ def _print_tier_explainer(verbose: bool = True) -> None:
         "  – Checking your current spend and ensuring you have met the payment criteria for a higher tier."
     )
     print(
-        "  – Adding funds or updating billing details at https://platform.openai.com/settings/organization/billing/."
+        "  – Adding funds at https://platform.openai.com/settings/organization/billing/."
     )
-    print("  – Reducing the number of parallel requests or batching your workload.")
 
 
 def _approx_tokens(text: str) -> int:
