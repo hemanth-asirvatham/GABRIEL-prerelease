@@ -141,7 +141,7 @@ def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> Non
     if not verbose or not example_prompt:
         return
 
-    print("\nExample prompt:")
+    print("\n===== Example prompt =====")
     print(textwrap.indent(example_prompt.strip("\n"), "  "))
 
 
@@ -627,8 +627,12 @@ def _print_run_banner(
     if not verbose:
         return
     print("\n===== Run kickoff =====")
+    total_words = stats.get("word_count", 0) or 0
+    words_per_prompt = (
+        int(round(total_words / max(len(prompts), 1))) if prompts else 0
+    )
     print(
-        f"Prompts: {len(prompts):,} | Approx. words: {stats.get('word_count', 0):,}"
+        f"Prompts: {len(prompts):,} | Words: ~{total_words:,} | Words per prompt: ~{words_per_prompt:,}"
     )
     print(f"Model: {model} | Mode: {'batch' if use_batch else 'streaming'}")
     pricing = _lookup_model_pricing(model)
@@ -982,7 +986,7 @@ def _print_usage_overview(
             limiting_messages.append("of the reported rate limits")
         reason = " and ".join(limiting_messages)
         concurrency_message_lines.append(
-            f"Note: we'll run up to {concurrency_cap} requests at the same time instead of {n_parallels} because {reason}."
+            f"Note: running at most {concurrency_cap:,} concurrent requests (vs. {n_parallels:,} requested) because {reason}."
         )
         if suggest_upgrade:
             concurrency_message_lines.append(
@@ -3809,8 +3813,7 @@ async def get_all_responses(
             formatted = (
                 f"{message} (subsequent occurrences of this error will be silenced in logs)"
             )
-            if message_verbose:
-                print(formatted)
+            print(formatted)
             logger.log(level, formatted)
         else:
             logger.debug(message)
@@ -4129,9 +4132,13 @@ async def get_all_responses(
             and (now - last_concurrency_scale_down) >= rate_limit_window
             and (now - last_concurrency_scale_up) >= rate_limit_window
         ):
-            success_threshold = max(30, int(math.ceil(concurrency_cap * 1.25)))
-            if successes_since_adjust >= success_threshold:
-                increment = max(1, int(math.ceil(max(concurrency_cap * 0.12, 1))))
+            growth_headroom_limit = max(1, int(math.floor(ceiling_cap * 0.9)))
+            success_threshold = max(50, int(math.ceil(concurrency_cap * 1.5)))
+            if (
+                concurrency_cap < growth_headroom_limit
+                and successes_since_adjust >= success_threshold
+            ):
+                increment = max(1, int(math.ceil(max(concurrency_cap * 0.08, 1))))
                 new_cap = min(ceiling_cap, concurrency_cap + increment)
                 if new_cap != concurrency_cap:
                     old_cap = concurrency_cap
