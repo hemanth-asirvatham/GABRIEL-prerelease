@@ -6,7 +6,7 @@ import re
 import random
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, DefaultDict, Dict, List, Optional
+from typing import Any, DefaultDict, Dict, List, Optional, Set
 import json
 
 import pandas as pd
@@ -355,75 +355,76 @@ class Classify:
         if not isinstance(self.cfg.n_runs, int) or self.cfg.n_runs < 1:
             raise ValueError("n_runs must be an integer >= 1")
 
-        if self.cfg.n_runs == 1:
-            df_resp_all = await get_all_responses(
-                prompts=prompts,
-                identifiers=ids,
-                prompt_images=prompt_images,
-                prompt_audio=prompt_audio,
-                n_parallels=self.cfg.n_parallels,
-                save_path=csv_path,
-                reset_files=reset_files,
-                json_mode=self.cfg.modality != "audio",
-                model=self.cfg.model,
-                use_dummy=self.cfg.use_dummy,
-                max_timeout=self.cfg.max_timeout,
-                reasoning_effort=self.cfg.reasoning_effort,
-                reasoning_summary=self.cfg.reasoning_summary,
-                print_example_prompt=True,
-                **kwargs,
+        existing_ids: Set[str] = set()
+        if not reset_files and os.path.exists(csv_path):
+            try:
+                existing_df = pd.read_csv(csv_path, usecols=["Identifier"])
+                existing_ids = set(existing_df["Identifier"].astype(str))
+            except Exception:
+                existing_ids = set()
+
+        run_identifier_lists: List[List[str]] = []
+        for run_idx in range(1, self.cfg.n_runs + 1):
+            run_ids: List[str] = []
+            for ident in ids:
+                if run_idx == 1:
+                    legacy_ident = f"{ident}_run1"
+                    run_ids.append(legacy_ident if legacy_ident in existing_ids else ident)
+                else:
+                    run_ids.append(f"{ident}_run{run_idx}")
+            run_identifier_lists.append(run_ids)
+
+        prompts_all: List[str] = []
+        ids_all: List[str] = []
+        for run_ids in run_identifier_lists:
+            prompts_all.extend(prompts)
+            ids_all.extend(run_ids)
+
+        prompt_images_all: Optional[Dict[str, List[str]]] = None
+        if prompt_images:
+            prompt_images_all = {}
+            for run_ids in run_identifier_lists:
+                for base_ident, run_ident in zip(ids, run_ids):
+                    imgs = prompt_images.get(base_ident)
+                    if imgs:
+                        prompt_images_all[run_ident] = imgs
+        prompt_audio_all: Optional[Dict[str, List[Dict[str, str]]]] = None
+        if prompt_audio:
+            prompt_audio_all = {}
+            for run_ids in run_identifier_lists:
+                for base_ident, run_ident in zip(ids, run_ids):
+                    auds = prompt_audio.get(base_ident)
+                    if auds:
+                        prompt_audio_all[run_ident] = auds
+
+        df_resp_all = await get_all_responses(
+            prompts=prompts_all,
+            identifiers=ids_all,
+            prompt_images=prompt_images_all,
+            prompt_audio=prompt_audio_all,
+            n_parallels=self.cfg.n_parallels,
+            save_path=csv_path,
+            reset_files=reset_files,
+            json_mode=self.cfg.modality != "audio",
+            model=self.cfg.model,
+            use_dummy=self.cfg.use_dummy,
+            max_timeout=self.cfg.max_timeout,
+            reasoning_effort=self.cfg.reasoning_effort,
+            reasoning_summary=self.cfg.reasoning_summary,
+            print_example_prompt=True,
+            **kwargs,
+        )
+        if not isinstance(df_resp_all, pd.DataFrame):
+            raise RuntimeError("get_all_responses returned no DataFrame")
+
+        df_resps = []
+        for run_idx, run_ids in enumerate(run_identifier_lists, start=1):
+            suffix = f"_run{run_idx}"
+            sub = df_resp_all[df_resp_all.Identifier.isin(run_ids)].copy()
+            sub.Identifier = sub.Identifier.str.replace(
+                suffix + "$", "", regex=True
             )
-            if not isinstance(df_resp_all, pd.DataFrame):
-                raise RuntimeError("get_all_responses returned no DataFrame")
-            df_resps = [df_resp_all]
-        else:
-            prompts_all: List[str] = []
-            ids_all: List[str] = []
-            for run_idx in range(1, self.cfg.n_runs + 1):
-                prompts_all.extend(prompts)
-                ids_all.extend([f"{ident}_run{run_idx}" for ident in ids])
-
-            prompt_images_all: Optional[Dict[str, List[str]]] = None
-            if prompt_images:
-                prompt_images_all = {}
-                for ident, imgs in prompt_images.items():
-                    for run_idx in range(1, self.cfg.n_runs + 1):
-                        prompt_images_all[f"{ident}_run{run_idx}"] = imgs
-            prompt_audio_all: Optional[Dict[str, List[Dict[str, str]]]] = None
-            if prompt_audio:
-                prompt_audio_all = {}
-                for ident, auds in prompt_audio.items():
-                    for run_idx in range(1, self.cfg.n_runs + 1):
-                        prompt_audio_all[f"{ident}_run{run_idx}"] = auds
-
-            df_resp_all = await get_all_responses(
-                prompts=prompts_all,
-                identifiers=ids_all,
-                prompt_images=prompt_images_all,
-                prompt_audio=prompt_audio_all,
-                n_parallels=self.cfg.n_parallels,
-                save_path=csv_path,
-                reset_files=reset_files,
-                json_mode=self.cfg.modality != "audio",
-                model=self.cfg.model,
-                use_dummy=self.cfg.use_dummy,
-                max_timeout=self.cfg.max_timeout,
-                reasoning_effort=self.cfg.reasoning_effort,
-                reasoning_summary=self.cfg.reasoning_summary,
-                print_example_prompt=True,
-                **kwargs,
-            )
-            if not isinstance(df_resp_all, pd.DataFrame):
-                raise RuntimeError("get_all_responses returned no DataFrame")
-
-            df_resps = []
-            for run_idx in range(1, self.cfg.n_runs + 1):
-                suffix = f"_run{run_idx}"
-                sub = df_resp_all[df_resp_all.Identifier.str.endswith(suffix)].copy()
-                sub.Identifier = sub.Identifier.str.replace(
-                    suffix + "$", "", regex=True
-                )
-                df_resps.append(sub)
+            df_resps.append(sub)
 
         # parse each run and construct disaggregated records
         full_records: List[Dict[str, Any]] = []
