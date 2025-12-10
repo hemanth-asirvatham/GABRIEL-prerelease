@@ -3839,7 +3839,6 @@ async def get_all_responses(
             formatted = (
                 f"{message} (subsequent occurrences of this error will be silenced in logs)"
             )
-            print(formatted)
             logger.log(level, formatted)
         else:
             logger.debug(message)
