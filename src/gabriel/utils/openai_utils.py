@@ -141,7 +141,7 @@ def _display_example_prompt(example_prompt: str, *, verbose: bool = True) -> Non
     if not verbose or not example_prompt:
         return
 
-    print("\nExample prompt (full text):")
+    print("\nExample prompt:")
     print(textwrap.indent(example_prompt.strip("\n"), "  "))
 
 
@@ -511,47 +511,36 @@ def _format_throughput_plan(
     include_upgrade_hint: bool = True,
     tokens_per_call: Optional[float] = None,
     parallel_ceiling: Optional[int] = None,
+    n_parallels: Optional[int] = None,
 ) -> List[str]:
     """Build human-friendly throughput summary lines."""
+
+    del include_upgrade_hint, tokens_per_call, parallel_ceiling
 
     if planned_ppm is None or planned_ppm <= 0:
         return [
             "Expected prompts per minute: unknown (rate-limit data unavailable; running with conservative defaults)."
         ]
     estimated_minutes = math.ceil(remaining_prompts / planned_ppm) if remaining_prompts > 0 else 0
+    minimum_minutes = max(1, estimated_minutes)
     limiter, limiter_value = _resolve_limiting_factor(
         throughput_details,
         allowed_req_pm=allowed_req_pm,
         allowed_tok_pm=allowed_tok_pm,
     )
-    limiter_text = (
-        f"Limiting factor: {limiter} ({f'~{int(limiter_value):,}/min' if limiter_value is not None else 'rate limits'})"
-        if limiter
-        else ""
-    )
-    tokens_line = ""
-    if tokens_per_call is not None and tokens_per_call > 0:
-        est_tokens = max(1, int(round(tokens_per_call)))
-        est_words = max(1, int(round(est_tokens / 2)))
-        tokens_line = f"Estimated tokens per call: ~{est_tokens:,} (~{est_words:,} words)"
     lines = [
-        f"Expected prompts per minute: ~{planned_ppm}",
-        f"Expected total mins to process all prompts: ~{estimated_minutes} mins for {remaining_prompts:,} prompts",
+        f"Expected prompts per minute: maximum of {planned_ppm:,}",
+        f"Estimated total mins: minimum of {minimum_minutes} minute{'s' if minimum_minutes != 1 else ''}",
     ]
-    if (
-        parallel_ceiling is not None
-        and planned_ppm is not None
-        and planned_ppm > parallel_ceiling
-    ):
+    if limiter:
+        rate_val = f"~{int(limiter_value):,}/min" if limiter_value is not None else "rate limits"
         lines.append(
-            f"May take longer because concurrency is capped at {parallel_ceiling:,} parallel requests."
+            f"Rate currently limited by {limiter} ({rate_val}). Moving to a higher usage tier can raise these limits and allow faster runs."
         )
-    if tokens_line:
-        lines.append(tokens_line)
-    if limiter_text:
-        lines.append(limiter_text)
-    if include_upgrade_hint:
-        lines.append("Moving to a higher usage tier can raise these limits and allow faster runs.")
+    elif n_parallels is not None:
+        lines.append(
+            f"Rate currently limited by n_parallels = {n_parallels}. Increase n_parallels for faster runs, if your machine allows."
+        )
     return lines
 
 
@@ -629,6 +618,7 @@ def _print_run_banner(
     n: int,
     use_batch: bool,
     estimated_cost: Optional[Dict[str, float]],
+    max_output_tokens: Optional[int],
     stats: Dict[str, Any],
     verbose: bool = True,
 ) -> None:
@@ -639,17 +629,34 @@ def _print_run_banner(
     print("\n===== Run kickoff =====")
     print(
         f"Prompts: {len(prompts):,} | Approx. words: {stats.get('word_count', 0):,}"
-        f"{' (sampled)' if stats.get('sampled') else ''}"
     )
     print(f"Model: {model} | Mode: {'batch' if use_batch else 'streaming'}")
+    pricing = _lookup_model_pricing(model)
+    if pricing:
+        print(
+            f"Pricing for model '{model}': input ${pricing['input']}/1M, output ${pricing['output']}/1M"
+        )
+    tokens_per_call = None
+    if stats and prompts:
+        avg_input_tokens = (stats.get("token_count") or 0) / max(1, len(prompts))
+        tokens_per_call = _estimate_tokens_per_call(
+            avg_input_tokens, max_output_tokens, n
+        )
     if estimated_cost:
+        token_usage = (
+            f"Estimated token usage: input {estimated_cost['input_tokens']:,}, output {estimated_cost['output_tokens']:,}"
+        )
+        if tokens_per_call:
+            token_usage += f" | ~{int(round(tokens_per_call)):,} tokens per call"
+        print(token_usage)
         print(
             f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${estimated_cost['total_cost']:.2f} "
             f"(input: ${estimated_cost['input_cost']:.2f}, output: ${estimated_cost['output_cost']:.2f})"
         )
     else:
+        if pricing:
+            print("Estimated token usage unavailable for this model.")
         print("Estimated cost unavailable for this model.")
-    print("Preparing checkpoints and rate limits...")
 
 
 
@@ -809,8 +816,7 @@ def _print_usage_overview(
     stats = stats or _estimate_dataset_stats(prompts, sample_size=sample_size)
     if show_prompt_stats:
         print(f"Prompts: {len(prompts)}")
-        suffix = " (sampled)" if stats.get("sampled") else ""
-        print(f"Approx. input words: {stats.get('word_count', 0):,}{suffix}")
+        print(f"Approx. input words: {stats.get('word_count', 0):,}")
     # Fetch fresh headers if not supplied.  Pass the model and base_url so the
     # helper knows which endpoint to probe when performing the dummy call.
     rl = rate_headers if rate_headers is not None else _get_rate_limit_headers(model, base_url=base_url)
@@ -851,51 +857,16 @@ def _print_usage_overview(
     # If a value is unavailable, display "unknown" instead of substituting another number.
     def fmt(val: Optional[float]) -> str:
         return f"{int(val):,}" if val is not None else "unknown"
-    # Print concise rate limit information.  Only the total per‑minute
-    # capacities are shown; remaining quotas and reset timers are omitted
-    # to reduce clutter.  Unknown values are labelled as "unknown".
-    if lim_r_val is not None:
-        print(f"Requests per minute: {fmt(lim_r_val)}")
-    else:
-        print("Requests per minute: unknown (API did not share a request limit)")
-    if lim_t_val is not None:
-        print(f"Tokens per minute: {fmt(lim_t_val)}")
-        words_per_min = int(lim_t_val) // 2
-        print(f"Approx. words per minute: {words_per_min:,}")
-    else:
-        print("Tokens per minute: unknown (API did not share a token limit)")
-        print("Approx. words per minute: unknown")
-    if lim_r_val is None or lim_t_val is None:
-        warning_msg = (
-            "⚠️ API did not return complete rate-limit headers. Running with conservative defaults. "
-            "If you are on a free/low-balance plan, add funds to avoid quota blocks: "
-            "https://platform.openai.com/settings/organization/billing/"
-        )
-        print(warning_msg)
-        logger.warning(warning_msg)
-    if show_static_sections:
-        print("\nUsage tiers (qualifications):")
-        for tier in TIER_INFO:
-            monthly = tier.get("monthly_quota")
-            monthly_text = f"; monthly quota {monthly}" if monthly else ""
-            print(f"  • {tier['tier']}: qualify by {tier['qualification']}{monthly_text}")
-    pricing = _lookup_model_pricing(model)
-    est = _estimate_cost(prompts, n, max_output_tokens, model, use_batch, sample_size=sample_size)
-    if pricing and est:
-        print(
-            f"\nPricing for model '{model}': input ${pricing['input']}/1M, output ${pricing['output']}/1M"
-        )
-        if use_batch:
-            print("Batch API prices are half the synchronous rates.")
-        print(
-            f"Estimated token usage: input {est['input_tokens']:,}, output {est['output_tokens']:,}"
-        )
-        print(
-            f"Estimated {'batch' if use_batch else 'synchronous'} cost: ${est['total_cost']:.2f}"
-        )
-    else:
-        print(f"\nPricing for model '{model}' is unavailable; cannot estimate cost.")
-    # Compute concurrency based on the retrieved rate limits and token/request budgets.
+    concurrency_message_lines: List[str] = []
+    concurrency_possible: Optional[int] = None
+    concurrency_cap = max(1, n_parallels)
+    concurrency_possible_from_requests: Optional[int] = None
+    concurrency_possible_from_tokens: Optional[int] = None
+    allowed_req_source: Optional[str] = None
+    allowed_tok_source: Optional[str] = None
+    allowed_req: Optional[float] = None
+    allowed_tok: Optional[float] = None
+    tokens_per_call: Optional[float] = None
     try:
         token_total = stats.get("token_count") if stats is not None else None
         avg_input_tokens = (token_total or sum(_approx_tokens(p) for p in prompts)) / max(
@@ -904,10 +875,6 @@ def _print_usage_overview(
         tokens_per_call = _estimate_tokens_per_call(
             avg_input_tokens, max_output_tokens, n
         )
-        # Extract numeric values from the rate limit headers.  If a value is missing or
-        # zero, treat it as unknown (None).  We deliberately avoid falling back to
-        # configured caps here because the user has requested that we rely solely
-        # on the API‑provided limits.
         def _pf(val: Optional[str]) -> Optional[float]:
             try:
                 if val is None:
@@ -924,9 +891,6 @@ def _print_usage_overview(
             rem_r_val2 = _pf(rl.get("remaining_requests"))
             lim_t_val2 = _pf(rl.get("limit_tokens")) or _pf(rl.get("limit_tokens_usage_based"))
             rem_t_val2 = _pf(rl.get("remaining_tokens")) or _pf(rl.get("remaining_tokens_usage_based"))
-            # Track whether we are capping concurrency because of the minute's
-            # remaining allowance or the hard per‑minute limit.  This helps us
-            # explain the cap accurately to the caller.
             if rem_r_val2 is not None:
                 allowed_req = rem_r_val2
                 allowed_req_source = "remaining"
@@ -939,52 +903,50 @@ def _print_usage_overview(
             else:
                 allowed_tok = lim_t_val2
                 allowed_tok_source = "limit" if lim_t_val2 is not None else None
-        else:
-            allowed_req = None
-            allowed_tok = None
-            allowed_req_source = None
-            allowed_tok_source = None
-        # Compute concurrency_possible (maximum possible parallelism based on
-        # rate limits) before applying the user‑supplied ceiling.  If a value
-        # is unknown, treat that dimension as unlimited.
         if allowed_req is None or allowed_req <= 0:
-            concurrency_possible_from_requests: Optional[int] = None
+            concurrency_possible_from_requests = None
         else:
             concurrency_possible_from_requests = int(max(1, allowed_req))
-        if allowed_tok is None or allowed_tok <= 0:
-            concurrency_possible_from_tokens: Optional[int] = None
+        if allowed_tok is None or allowed_tok <= 0 or tokens_per_call is None:
+            concurrency_possible_from_tokens = None
         else:
-            # Use floor division to avoid fractional parallelism
             concurrency_possible_from_tokens = int(max(1, allowed_tok // tokens_per_call))
-        # Determine the theoretical maximum concurrency
         if concurrency_possible_from_requests is None and concurrency_possible_from_tokens is None:
-            concurrency_possible: Optional[int] = None
+            concurrency_possible = None
         elif concurrency_possible_from_requests is None:
             concurrency_possible = concurrency_possible_from_tokens
         elif concurrency_possible_from_tokens is None:
             concurrency_possible = concurrency_possible_from_requests
         else:
             concurrency_possible = min(concurrency_possible_from_requests, concurrency_possible_from_tokens)
-        # Now compute the concurrency cap based on the user‑specified ceiling
         if concurrency_possible is None:
             concurrency_cap = max(1, n_parallels)
         else:
             concurrency_cap = max(1, min(n_parallels, concurrency_possible))
-        planned_ppm, throughput_details = _planned_ppm_and_details(
-            allowed_req, allowed_tok, tokens_per_call
-        )
     except Exception:
-        concurrency_possible = None
+        concurrency_message_lines = []
         concurrency_cap = max(1, n_parallels)
-        planned_ppm = None
-        throughput_details = {}
+        concurrency_possible = None
         tokens_per_call = None
-    # Inform the user about dynamic concurrency.  If the calculated cap is lower
-    # than the ceiling, explain that upgrading the tier would allow more
-    # parallel requests.  If the cap equals the ceiling but additional capacity
-    # remains, suggest that the user could increase n_parallels to make use of
-    # their limits.  Otherwise, confirm that we will use the available cap.
-    if concurrency_cap < n_parallels:
+    # Print concise rate limit information.  Only the total per‑minute
+    # capacities are shown; remaining quotas and reset timers are omitted
+    # to reduce clutter.  Unknown values are labelled as "unknown".
+    if lim_r_val is not None:
+        print(f"Requests per minute: {fmt(lim_r_val)}")
+    else:
+        print("Requests per minute: unknown (API did not share a request limit)")
+    if lim_t_val is not None:
+        print(f"Tokens per minute: {fmt(lim_t_val)}")
+        words_per_min = int(lim_t_val) // 2
+        print(f"Approx. words per minute: {words_per_min:,}")
+    else:
+        print("Tokens per minute: unknown (API did not share a token limit)")
+        print("Approx. words per minute: unknown")
+    if concurrency_possible is not None and concurrency_possible > n_parallels:
+        concurrency_message_lines.append(
+            f"We are running with {n_parallels:,} parallel requests, but your current limits could allow up to {int(concurrency_possible):,} concurrent requests if desired."
+        )
+    elif concurrency_cap < n_parallels:
         limiting_messages: List[str] = []
         suggest_upgrade = False
         if (
@@ -992,11 +954,11 @@ def _print_usage_overview(
             and concurrency_possible_from_requests is not None
             and concurrency_possible == concurrency_possible_from_requests
         ):
-            if allowed_req_source == "remaining":
+            if allowed_req_source == "remaining" and allowed_req is not None:
                 limiting_messages.append(
                     f"the API reported only {int(allowed_req):,} request slots remaining in the current minute"
                 )
-            elif allowed_req_source == "limit":
+            elif allowed_req_source == "limit" and allowed_req is not None:
                 limiting_messages.append(
                     f"your per-minute request limit is {int(allowed_req):,}"
                 )
@@ -1019,30 +981,35 @@ def _print_usage_overview(
         if not limiting_messages:
             limiting_messages.append("of the reported rate limits")
         reason = " and ".join(limiting_messages)
-        print(
-            f"\nNote: we'll run up to {concurrency_cap} requests at the same time instead of {n_parallels} because {reason}."
+        concurrency_message_lines.append(
+            f"Note: we'll run up to {concurrency_cap} requests at the same time instead of {n_parallels} because {reason}."
         )
         if suggest_upgrade:
-            print(
+            concurrency_message_lines.append(
                 "Upgrading your tier would allow more parallel requests and speed up processing."
             )
     else:
-        # If concurrency_possible is larger than the user‑supplied ceiling, let the
-        # user know they could increase n_parallels to utilise the available headroom.
-        if concurrency_possible is not None and concurrency_possible > n_parallels:
-            print(
-                f"\nWe are running with {n_parallels} parallel requests, but your current limits could allow up to {int(concurrency_possible)} concurrent requests if desired."
-            )
-        else:
-            print(
-                f"\nWe can run up to {concurrency_cap} requests at the same time with your current settings."
-            )
-    print("\nAdd funds or manage your billing here: https://platform.openai.com/settings/organization/billing/")
-    if max_output_tokens is None:
-        print(
-            f"\nNo explicit output token limit specified; cost estimate assumes about {ESTIMATED_OUTPUT_TOKENS_PER_PROMPT} tokens per prompt for the response."
+        concurrency_message_lines.append(
+            f"We can run up to {concurrency_cap:,} requests at the same time with your current settings."
         )
-    else:
+    for line in concurrency_message_lines:
+        print(line)
+    if lim_r_val is None or lim_t_val is None:
+        warning_msg = (
+            "⚠️ API did not return complete rate-limit headers. Running with conservative defaults. "
+            "If you are on a free/low-balance plan, add funds to avoid quota blocks: "
+            "https://platform.openai.com/settings/organization/billing/"
+        )
+        print(warning_msg)
+        logger.warning(warning_msg)
+    if show_static_sections:
+        print("\nUsage tiers (higher tier = faster runs):")
+        for tier in TIER_INFO:
+            monthly = tier.get("monthly_quota")
+            monthly_text = f"; monthly quota {monthly}" if monthly else ""
+            print(f"  • {tier['tier']}: qualify by {tier['qualification']}{monthly_text}")
+        print("\nAdd funds or manage your billing here: https://platform.openai.com/settings/organization/billing/")
+    if max_output_tokens is not None:
         print(
             f"\nmax_output_tokens: {max_output_tokens} (safety cutoff; generation will stop if this is reached)"
         )
@@ -2786,6 +2753,7 @@ async def get_all_responses(
         n=n,
         use_batch=use_batch,
         estimated_cost=cost_estimate,
+        max_output_tokens=max_output_tokens,
         stats=dataset_stats,
         verbose=message_verbose,
     )
@@ -3123,7 +3091,7 @@ async def get_all_responses(
             show_static_sections=not _USAGE_SHEET_PRINTED,
             stats=todo_stats,
             sample_size=_ESTIMATION_SAMPLE_SIZE,
-            heading="Run limits and cost overview",
+            heading="Run limits",
             show_prompt_stats=False,
         )
         _USAGE_SHEET_PRINTED = True
@@ -3293,10 +3261,7 @@ async def get_all_responses(
     )
     if message_verbose and not use_batch:
         print("\n===== Parallelization plan =====")
-        print(
-            f"Requested workers: {user_requested_n_parallels} | Rate-limit-aware cap: {concurrency_cap} "
-            f"(soft ceiling {max_parallel_ceiling})"
-        )
+        print(f"Requested workers: {user_requested_n_parallels}")
         for line in _format_throughput_plan(
             planned_ppm=planned_ppm,
             throughput_details=throughput_details_plan,
@@ -3306,6 +3271,7 @@ async def get_all_responses(
             include_upgrade_hint=True,
             tokens_per_call=estimated_tokens_per_call,
             parallel_ceiling=max_parallel_ceiling,
+            n_parallels=user_requested_n_parallels,
         ):
             print(line)
 
