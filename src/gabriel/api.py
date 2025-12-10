@@ -95,7 +95,7 @@ async def rate(
 
     Example Use
     -----------
-    Measure "patriotic rhetoric" in a speech; "toxicity" of tweets; "luxury" in ad images.
+    Measure "populist rhetoric" in a speech; "toxicity" of tweets; "luxury" in ad images.
 
     Parameters
     ----------
