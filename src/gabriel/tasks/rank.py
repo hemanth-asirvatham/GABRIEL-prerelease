@@ -50,7 +50,6 @@ import math
 import copy
 from dataclasses import dataclass, field, fields
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
-import json
 
 import numpy as np
 import pandas as pd
@@ -68,6 +67,7 @@ from gabriel.utils import (
 )
 from gabriel.utils.logging import announce_prompt_rendering
 from .rate import Rate, RateConfig
+from ._attribute_utils import load_persisted_attributes
 
 
 @dataclass
@@ -1293,6 +1293,16 @@ class Rank:
             column with the standard error.  The DataFrame is also written
             to ``save_dir``.
         """
+        base_name = os.path.splitext(self.cfg.file_name)[0]
+        self.cfg.attributes = load_persisted_attributes(
+            save_dir=self.cfg.save_dir,
+            incoming=self.cfg.attributes,
+            reset_files=reset_files,
+            task_name="Rank",
+            item_name="attributes",
+            legacy_filename=f"{base_name}_attrs.json",
+        )
+
         kwargs.setdefault("web_search", self.cfg.modality == "web")
         if self.cfg.recursive:
             return await self._run_recursive(
@@ -1304,9 +1314,7 @@ class Rank:
             )
 
         # prepare file paths
-        base_name = os.path.splitext(self.cfg.file_name)[0]
         final_path = os.path.join(self.cfg.save_dir, f"{base_name}_final.csv")
-        attr_path = os.path.join(self.cfg.save_dir, f"{base_name}_attrs.json")
         if n_runs is not None:
             print(
                 "Parameter 'n_runs' is ignored. Use 'n_rounds' to control the number of iterations. "
@@ -1325,29 +1333,6 @@ class Rank:
                 .astype(str)
                 .map(lambda x: hashlib.sha1(x.encode()).hexdigest()[:8])
             )
-        if reset_files and os.path.exists(attr_path):
-            try:
-                os.remove(attr_path)
-            except Exception:
-                pass
-        if os.path.exists(attr_path):
-            try:
-                with open(attr_path) as f:
-                    saved_attrs = json.load(f)
-                if saved_attrs != self.cfg.attributes:
-                    print(
-                        "[Rank] Loading existing attributes from save directory. If you want to use different attributes, set reset_files=True or use a different save_dir."
-                    )
-                    print(saved_attrs)
-                    self.cfg.attributes = saved_attrs
-            except Exception:
-                pass
-        else:
-            try:
-                with open(attr_path, "w") as f:
-                    json.dump(self.cfg.attributes, f, indent=2)
-            except Exception:
-                pass
         # Determine how many rounds have already been processed when
         # `reset_files` is False.  We look for files named
         # ``<base_name>_round<k>.csv`` to infer progress.  If a final

@@ -19,6 +19,7 @@ from ..utils import (
     load_audio_inputs,
 )
 from ..utils.logging import announce_prompt_rendering
+from ._attribute_utils import load_persisted_attributes
 
 
 def _collect_predictions(row: pd.Series) -> List[str]:
@@ -170,6 +171,16 @@ class Classify:
             raise ValueError("column_name is required when differentiate is False")
 
         df_proc = df.reset_index(drop=True).copy()
+        base_name = os.path.splitext(self.cfg.file_name)[0]
+
+        self.cfg.labels = load_persisted_attributes(
+            save_dir=self.cfg.save_dir,
+            incoming=self.cfg.labels,
+            reset_files=reset_files,
+            task_name="Classify",
+            item_name="labels",
+            legacy_filename=f"{base_name}_attrs.json",
+        )
 
         label_items = list(self.cfg.labels.items())
         label_count = len(label_items)
@@ -321,33 +332,7 @@ class Classify:
                         tmp_a[f"{ident}_batch{batch_idx}"] = auds
             prompt_audio = tmp_a or None
 
-        base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
-        attr_path = os.path.join(self.cfg.save_dir, f"{base_name}_attrs.json")
-
-        if reset_files and os.path.exists(attr_path):
-            try:
-                os.remove(attr_path)
-            except Exception:
-                pass
-        if os.path.exists(attr_path):
-            try:
-                with open(attr_path) as f:
-                    saved_labels = json.load(f)
-                if saved_labels != self.cfg.labels:
-                    print(
-                        "[Classify] Loading existing labels from save directory. If you want to use different labels, set reset_files=True or use a different save_dir."
-                    )
-                    print(saved_labels)
-                    self.cfg.labels = saved_labels
-            except Exception:
-                pass
-        else:
-            try:
-                with open(attr_path, "w") as f:
-                    json.dump(self.cfg.labels, f, indent=2)
-            except Exception:
-                pass
 
         kwargs.setdefault("web_search", self.cfg.modality == "web")
         kwargs.setdefault("search_context_size", self.cfg.search_context_size)
