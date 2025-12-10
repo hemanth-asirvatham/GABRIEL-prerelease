@@ -12,6 +12,7 @@ If the instructions specify a distribution, ensure the overall set of entities r
 For example, if asked to initialize personas that represent the US population, you would use your knowledge to ensure the overall set of entities matches known statistics, such as the fraction of entities of each race or state or educational background or job or personality traits.
 In this case, carefully consider existing entities and your knowledge of the true statistical distributions; if a certain characteristic appears overrepresented (according to STATISTICS not perception), downweight it in your output as to rebalance the overall set (e.g. too many women, output fewer women to reach true distribution; too few Christians, output extra).
 If a certain demographic is only 1% of the population, it should rarely be included in output at all and avoided, to ensure its prevalence in the total set is accurate.
+Consider fraction of your {{ entities_per_generation }} entities that should reasonably be devoted to any group; rare demographics should get none or very few slots, based on their population frequency.
 
 If the instructions instead emphasize true creativity and novelty, you must put extra effort into each entity going in a genuinely different direction than the others, with some going in truly unusual and hypercreative directions to ensure mutual exclusivity and radical novelty.
 For example, if asked to generate novel areas for scientific research, each idea should be specific but going in a clearly novel direction from the others.
