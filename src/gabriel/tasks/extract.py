@@ -18,6 +18,7 @@ from ..utils import (
     load_audio_inputs,
 )
 from ..utils.logging import announce_prompt_rendering
+from ._attribute_utils import load_persisted_attributes
 
 
 @dataclass
@@ -136,6 +137,15 @@ class Extract:
     ) -> pd.DataFrame:
         df_proc = df.reset_index(drop=True).copy()
         input_columns = list(df_proc.columns)
+        base_name = os.path.splitext(self.cfg.file_name)[0]
+        self.cfg.attributes = load_persisted_attributes(
+            save_dir=self.cfg.save_dir,
+            incoming=self.cfg.attributes,
+            reset_files=reset_files,
+            task_name="Extract",
+            item_name="attributes",
+            legacy_filename=f"{base_name}_attrs.json",
+        )
         values = df_proc[column_name].tolist()
         texts = [str(v) for v in values]
 
@@ -158,7 +168,6 @@ class Extract:
         df_proc["_gid"] = row_ids
 
         if not base_ids:
-            base_name = os.path.splitext(self.cfg.file_name)[0]
             out_path = os.path.join(self.cfg.save_dir, f"{base_name}_cleaned.csv")
             result = df_proc.drop(columns=["_gid"])
             result["entity_name"] = pd.NA
@@ -217,7 +226,6 @@ class Extract:
                         tmp_a[f"{ident}_batch{batch_idx}"] = auds
             prompt_audio = tmp_a or None
 
-        base_name = os.path.splitext(self.cfg.file_name)[0]
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
 
         kwargs.setdefault("web_search", self.cfg.modality == "web")
