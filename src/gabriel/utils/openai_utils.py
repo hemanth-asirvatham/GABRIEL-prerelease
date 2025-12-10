@@ -3283,9 +3283,14 @@ async def get_all_responses(
     throughput_ceiling_ppm = (
         max_parallel_ceiling if planned_ppm is None else planned_ppm
     )
+    planned_parallel_workers = min(
+        concurrency_cap,
+        throughput_ceiling_ppm if throughput_ceiling_ppm is not None else concurrency_cap,
+    )
+    planned_parallel_workers = max(1, int(planned_parallel_workers))
     if message_verbose and not use_batch:
         print("\n===== Parallelization plan =====")
-        print(f"Requested workers: {user_requested_n_parallels}")
+        print(f"# of parallel threads: {planned_parallel_workers}")
         for line in _format_throughput_plan(
             planned_ppm=planned_ppm,
             throughput_details=throughput_details_plan,
