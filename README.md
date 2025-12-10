@@ -35,7 +35,7 @@ The tutorial notebook walks through these ideas step-by-step—from setting up a
 
 | Function | Purpose & Output Scale | Example Use |
 | --- | --- | --- |
-| `gabriel.rate` | Asks GPT to score each text / image / audio / item on natural language attributes. Output = 0--100 rating. | Measure “patriotic rhetoric” in a speech; “toxicity” of tweets; “luxury” in ad images. |
+| `gabriel.rate` | Asks GPT to score each text / image / audio / item on natural language attributes. Output = 0--100 rating. | Measure “populist rhetoric” in a speech; “toxicity” of tweets; “luxury” in ad images. |
 | `gabriel.rank` | Pairwise comparisons between texts yields ELO-like attribute ratings. Output = grounded, relative z scores for each text. | Rank technologies by “bulkiness” or artworks by “fine brushwork”. |
 | `gabriel.classify` | Classifies texts / images / audio / items on whether provided labels apply. Output = one or more classes per item. | Tag news articles, product photos, or interview clips into topical categories. |
 | `gabriel.extract` | Structured fact extraction on each item. Output = string / numeric values. | For each product, provide the “company”, “CEO”, and “year of invention”. |
@@ -68,29 +68,20 @@ The tutorial notebook walks through these ideas step-by-step—from setting up a
 ## Installation
 
 ```bash
-pip install gabriel
+pip install gabriel-openai (not yet operational)
 
 # or work from this prerelease repo
-git clone https://github.com/hemanth-asirvatham/GABRIEL-prerelease.git
-cd GABRIEL-prerelease
-pip install -e .
-
-# install extra tooling for local development and tests
-pip install -e .[dev]
-pip install -r requirements-dev.txt
-```
-You can optionally sanity-check the install with a quick version print:
-
-```bash
-gabriel --version  # optional check
+pip install \
+  --force-reinstall \
+  --no-deps \
+  git+https://github.com/hemanth-asirvatham/GABRIEL-prerelease.git@main
 ```
 
 Before running real jobs, point the helpers to your GPT endpoint:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-# Optional if you proxy the OpenAI API
-export OPENAI_BASE_URL="https://api.openai.com/v1"
+# or os.environ['OPENAI_API_KEY'] = "sk-..." inside a Jupyter notebook
 ```
 
 Every task also accepts `use_dummy=True` for offline dry runs (the tutorial uses this to demonstrate workflows without making API calls).
