@@ -152,7 +152,7 @@ class RankConfig:
     power_matching: bool = True
     learning_rate: float = 0.1
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     use_dummy: bool = False
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "rankings"

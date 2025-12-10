@@ -51,7 +51,7 @@ class ParaphraseConfig:
     # Maximum number of parallel requests that will be sent to the
     # underlying API.  Note that classification and paraphrasing share
     # this value for simplicity.
-    n_parallels: int = 750
+    n_parallels: int = 650
     # Use dummy responses instead of real API calls.  Exposed here
     # primarily for testing.
     use_dummy: bool = False

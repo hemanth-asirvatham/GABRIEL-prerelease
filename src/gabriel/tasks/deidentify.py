@@ -25,7 +25,7 @@ class DeidentifyConfig:
     """Configuration for :class:`Deidentifier`."""
 
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     save_dir: str = "deidentify"
     file_name: str = "deidentified.csv"
     use_dummy: bool = False

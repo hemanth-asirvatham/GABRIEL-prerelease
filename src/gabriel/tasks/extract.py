@@ -26,7 +26,7 @@ class ExtractConfig:
     save_dir: str = "extraction"
     file_name: str = "extraction.csv"
     model: str = "gpt-5-mini"
-    n_parallels: int = 750
+    n_parallels: int = 650
     n_runs: int = 1
     use_dummy: bool = False
     max_timeout: Optional[float] = None

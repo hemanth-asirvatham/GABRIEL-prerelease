@@ -89,6 +89,9 @@ _DEPENDENCIES_VERIFIED = False
 # datasets are sampled to keep start-up time predictable.
 _ESTIMATION_SAMPLE_SIZE = 5000
 
+_TIMEOUT_BURST_RATIO = 1.25
+_DEFAULT_TIMEOUT_BURST_THRESHOLD = 100
+
 # Try to import requests/httpx for rate‑limit introspection
 try:
     import requests  # type: ignore
@@ -2552,12 +2555,12 @@ async def get_all_responses(
     # search is enabled the helper automatically lowers this ceiling to
     # one-third of the requested value to avoid overwhelming the search
     # tool.
-    n_parallels: int = 750,
+    n_parallels: int = 650,
     max_retries: int = 3,
     timeout_factor: float = 2.25,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
-    timeout_burst_threshold: int = 100,
+    timeout_burst_threshold: int = _DEFAULT_TIMEOUT_BURST_THRESHOLD,
     timeout_burst_window: float = 60.0,
     timeout_burst_cooldown: float = 60.0,
     timeout_burst_max_restarts: int = 3,
@@ -2617,6 +2620,13 @@ async def get_all_responses(
     before scaling down again so brief spikes do not trigger runaway
     throttling, while successful calls reset the counters and allow the pool to
     scale back up.
+
+    Timeout bursts now scale with the active level of parallelism.  When using
+    the default ``timeout_burst_threshold`` value the helper triggers a
+    protective restart only after observing roughly 1.25× the current parallel
+    worker count worth of timeouts within ``timeout_burst_window`` seconds.  Set
+    ``timeout_burst_threshold`` to a positive integer to override this
+    behaviour or to ``0``/negative to disable burst handling entirely.
 
     Because every prompt that uses web search fans out into additional tool
     calls, the helper automatically lowers the requested ``n_parallels`` to one
@@ -3755,25 +3765,37 @@ async def get_all_responses(
     timeout_burst_cooldown = max(1.0, float(timeout_burst_cooldown))
     timeout_burst_max_restarts = max(0, int(timeout_burst_max_restarts))
 
+    def _effective_timeout_burst_threshold() -> Optional[int]:
+        if timeout_burst_threshold <= 0:
+            return None
+        if timeout_burst_threshold != _DEFAULT_TIMEOUT_BURST_THRESHOLD:
+            return max(1, int(timeout_burst_threshold))
+        parallel_workers = max(1, max(active_workers, concurrency_cap))
+        return int(math.ceil(parallel_workers * _TIMEOUT_BURST_RATIO))
+
     def _emit_first_error(
         message: str,
         *,
         level: int = logging.WARNING,
         dedup_key: Optional[Hashable] = None,
-    ) -> None:
+    ) -> bool:
         key = dedup_key if dedup_key is not None else message
-        if key not in seen_error_messages:
+        first_time = key not in seen_error_messages
+        if first_time:
             seen_error_messages.add(key)
             formatted = (
                 f"{message} (subsequent occurrences of this error will be silenced in logs)"
             )
-            print(formatted)
+            if message_verbose:
+                print(formatted)
             logger.log(level, formatted)
         else:
             logger.debug(message)
+        return first_time
 
     def _record_timeout_event(now: Optional[float] = None) -> None:
-        if timeout_burst_threshold <= 0:
+        threshold = _effective_timeout_burst_threshold()
+        if threshold is None:
             return
         ts = now if now is not None else time.time()
         timeout_error_times.append(ts)
@@ -3784,17 +3806,19 @@ async def get_all_responses(
     def _trigger_timeout_burst(now: Optional[float] = None) -> None:
         nonlocal restart_requested
         _record_timeout_event(now)
+        threshold = _effective_timeout_burst_threshold()
         if (
-            timeout_burst_threshold <= 0
+            threshold is None
             or restart_requested
-            or len(timeout_error_times) < timeout_burst_threshold
+            or len(timeout_error_times) < threshold
             or restart_count >= timeout_burst_max_restarts
         ):
             return
         restart_requested = True
         stop_event.set()
         msg = (
-            f"[timeouts] {len(timeout_error_times)} timeouts in the last {int(timeout_burst_window)}s. "
+            f"[timeouts] {len(timeout_error_times)} timeouts in the last {int(timeout_burst_window)}s "
+            f"(threshold={threshold}). "
             f"Pausing workers for {int(timeout_burst_cooldown)}s and resuming from the last checkpoint."
         )
         if message_verbose:
@@ -4118,6 +4142,13 @@ async def get_all_responses(
                 queue.task_done()
                 break
             try:
+                async def _maybe_retry(backoff: float) -> bool:
+                    if restart_requested or stop_event.is_set():
+                        return False
+                    await asyncio.sleep(backoff)
+                    queue.put_nowait((prompt, ident, attempts_left - 1))
+                    return True
+
                 now = time.time()
                 if now < cooldown_until:
                     await asyncio.sleep(cooldown_until - now)
@@ -4198,6 +4229,8 @@ async def get_all_responses(
                     inflight.pop(ident, None)
                     if ident in timeout_cancellations:
                         timeout_cancellations.discard(ident)
+                        if call_timeout is None or math.isinf(call_timeout):
+                            raise asyncio.TimeoutError("API call exceeded timeout")
                         raise asyncio.TimeoutError(
                             f"API call timed out after {call_timeout} s"
                         )
@@ -4405,8 +4438,7 @@ async def get_all_responses(
                             backoff = random.uniform(1, 2) * (
                                 2 ** (max_retries - attempts_left)
                             )
-                            await asyncio.sleep(backoff)
-                            queue.put_nowait((prompt, ident, attempts_left - 1))
+                            await _maybe_retry(backoff)
                         else:
                             row = {
                                 "Identifier": ident,
@@ -4477,7 +4509,12 @@ async def get_all_responses(
                 detail_lower = error_detail.lower()
                 looks_like_timeout = (
                     isinstance(e, (asyncio.TimeoutError, APITimeoutError))
-                    and ("timeout" in detail_lower or "timed out" in detail_lower or not error_detail)
+                    and (
+                        ident in timeout_cancellations
+                        or call_timeout is not None
+                        or "timeout" in detail_lower
+                        or "timed out" in detail_lower
+                    )
                 )
                 if looks_like_timeout:
                     status.num_timeout_errors += 1
@@ -4520,8 +4557,7 @@ async def get_all_responses(
                         # and ensure the new task is enqueued before ``task_done``
                         # is called.  This mirrors the legacy retry behaviour and
                         # prevents retries from being dropped prematurely.
-                        await asyncio.sleep(backoff)
-                        queue.put_nowait((prompt, ident, attempts_left - 1))
+                        await _maybe_retry(backoff)
                     else:
                         row = {
                             "Identifier": ident,
@@ -4563,8 +4599,7 @@ async def get_all_responses(
                     logger.warning(base_message)
                     if attempts_left - 1 > 0:
                         backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
-                        await asyncio.sleep(backoff)
-                        queue.put_nowait((prompt, ident, attempts_left - 1))
+                        await _maybe_retry(backoff)
                     else:
                         row = {
                             "Identifier": ident,
@@ -4651,8 +4686,7 @@ async def get_all_responses(
                 maybe_adjust_concurrency()
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
-                    await asyncio.sleep(backoff)
-                    queue.put_nowait((prompt, ident, attempts_left - 1))
+                    await _maybe_retry(backoff)
                 else:
                     row = {
                         "Identifier": ident,
@@ -4686,8 +4720,7 @@ async def get_all_responses(
                 error_logs[ident].append(str(e))
                 if attempts_left - 1 > 0 and not stop_event.is_set():
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
-                    await asyncio.sleep(backoff)
-                    queue.put_nowait((prompt, ident, attempts_left - 1))
+                    await _maybe_retry(backoff)
                 else:
                     row = {
                         "Identifier": ident,

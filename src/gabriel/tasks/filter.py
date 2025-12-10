@@ -22,7 +22,7 @@ class FilterConfig:
     save_dir: str
     file_name: str = "filter_responses.csv"
     model: str = "gpt-5-nano"
-    n_parallels: int = 750
+    n_parallels: int = 650
     entities_per_call: int = 150
     shuffle: bool = True
     random_seed: int = 42
