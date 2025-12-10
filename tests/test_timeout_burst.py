@@ -9,13 +9,13 @@ from gabriel.utils import openai_utils
 
 def test_timeout_burst_restarts_and_resumes(tmp_path: Path) -> None:
     attempts = defaultdict(int)
-    first_timeout = {"fired": False}
+    timeout_count = {"count": 0}
 
     async def flaky_responder(prompt: str, **_: object):
         attempts[prompt] += 1
-        # Only the very first overall request times out; all subsequent calls succeed.
-        if not first_timeout["fired"]:
-            first_timeout["fired"] = True
+        # The first two overall calls time out to trigger the burst logic, then all succeed.
+        if timeout_count["count"] < 2:
+            timeout_count["count"] += 1
             await asyncio.sleep(0)
             raise asyncio.TimeoutError("simulated timeout")
         return [f"ok-{prompt}"], 0.01, []
@@ -29,7 +29,6 @@ def test_timeout_burst_restarts_and_resumes(tmp_path: Path) -> None:
             use_dummy=False,
             save_path=str(save_path),
             reset_files=True,
-            timeout_burst_threshold=1,  # trigger on the very first timeout
             timeout_burst_window=10.0,
             timeout_burst_cooldown=0.01,
             timeout_burst_max_restarts=2,
@@ -43,7 +42,8 @@ def test_timeout_burst_restarts_and_resumes(tmp_path: Path) -> None:
     assert set(df["Identifier"]) == {"p1", "p2"}
     assert len(df) == 2
     # At least one timeout should have fired, triggering the burst handler, and the run should return without hanging.
-    assert first_timeout["fired"]
+    assert timeout_count["count"] == 2
+    assert all(count >= 2 for count in attempts.values())
 
 
 def test_timeout_burst_threshold_tracks_concurrency(tmp_path: Path) -> None:
@@ -72,11 +72,13 @@ def test_timeout_burst_threshold_tracks_concurrency(tmp_path: Path) -> None:
             timeout_burst_max_restarts=1,
             dynamic_timeout=False,
             max_retries=3,
-            n_parallels=1,
+            n_parallels=2,
             logging_level="error",
         )
     )
 
+    # Threshold scales with concurrency (n_parallels=2 -> threshold=3), so two
+    # timeouts should not trigger a restart and retries should succeed.
     assert timeout_count["count"] == 2
     assert all(count >= 2 for count in attempts.values())
     assert df["Successful"].all()
@@ -102,7 +104,6 @@ def test_timeout_burst_restart_recovers_with_other_errors(tmp_path: Path) -> Non
             use_dummy=False,
             save_path=str(save_path),
             reset_files=True,
-            timeout_burst_threshold=1,
             timeout_burst_window=5.0,
             timeout_burst_cooldown=0.01,
             timeout_burst_max_restarts=1,
@@ -136,7 +137,6 @@ def test_non_timeout_error_preserved(tmp_path: Path) -> None:
             use_dummy=False,
             save_path=str(save_path),
             reset_files=True,
-            timeout_burst_threshold=0,
             dynamic_timeout=False,
             max_retries=2,
             n_parallels=1,

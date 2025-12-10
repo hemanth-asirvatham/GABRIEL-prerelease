@@ -90,7 +90,6 @@ _DEPENDENCIES_VERIFIED = False
 _ESTIMATION_SAMPLE_SIZE = 5000
 
 _TIMEOUT_BURST_RATIO = 1.25
-_DEFAULT_TIMEOUT_BURST_THRESHOLD = 100
 
 # Try to import requests/httpx for rate‑limit introspection
 try:
@@ -184,11 +183,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2500
 # When a user does not explicitly set ``max_output_tokens``, we assume that each response
 # will contain roughly this many tokens.  This value is used solely for estimating cost
 # and determining how many parallel requests can safely run under the token budget.
-ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 250
-# For unbounded generations, assume the model may return long responses that scale with
-# the prompt length.  This multiplier is applied to the average input token count to
-# derive a conservative output‑token estimate when no explicit cutoff is supplied.
-UNBOUNDED_OUTPUT_TO_INPUT_RATIO = 2.5
+ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 500
 
 # Conservative headroom when translating observed rate limits into concurrency and limiter budgets.
 # Using less than the reported limit provides a buffer for short spikes and accounting inaccuracies.
@@ -2557,10 +2552,9 @@ async def get_all_responses(
     # tool.
     n_parallels: int = 650,
     max_retries: int = 3,
-    timeout_factor: float = 2.25,
+    timeout_factor: float = 2.5,
     max_timeout: Optional[float] = None,
     dynamic_timeout: bool = True,
-    timeout_burst_threshold: int = _DEFAULT_TIMEOUT_BURST_THRESHOLD,
     timeout_burst_window: float = 60.0,
     timeout_burst_cooldown: float = 60.0,
     timeout_burst_max_restarts: int = 3,
@@ -2621,12 +2615,10 @@ async def get_all_responses(
     throttling, while successful calls reset the counters and allow the pool to
     scale back up.
 
-    Timeout bursts now scale with the active level of parallelism.  When using
-    the default ``timeout_burst_threshold`` value the helper triggers a
-    protective restart only after observing roughly 1.25× the current parallel
-    worker count worth of timeouts within ``timeout_burst_window`` seconds.  Set
-    ``timeout_burst_threshold`` to a positive integer to override this
-    behaviour or to ``0``/negative to disable burst handling entirely.
+    Timeout bursts now scale with the active level of parallelism.  The helper
+    triggers a protective restart only after observing roughly 1.25× the
+    current parallel worker count worth of timeouts within
+    ``timeout_burst_window`` seconds.
 
     Because every prompt that uses web search fans out into additional tool
     calls, the helper automatically lowers the requested ``n_parallels`` to one
@@ -3118,11 +3110,6 @@ async def get_all_responses(
                 sum(len(tokenizer.encode(p)) for p, _ in sample_for_tokens)
                 / max(1, len(sample_for_tokens))
             )
-            if cutoff is None:
-                planning_output_tokens = max(
-                    planning_output_tokens,
-                    int(avg_input_tokens * UNBOUNDED_OUTPUT_TO_INPUT_RATIO),
-                )
             gating_output = planning_output_tokens * OUTPUT_TOKEN_HEADROOM
             tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
             tokens_per_call *= TOKEN_ESTIMATE_BUFFER
@@ -3765,11 +3752,7 @@ async def get_all_responses(
     timeout_burst_cooldown = max(1.0, float(timeout_burst_cooldown))
     timeout_burst_max_restarts = max(0, int(timeout_burst_max_restarts))
 
-    def _effective_timeout_burst_threshold() -> Optional[int]:
-        if timeout_burst_threshold <= 0:
-            return None
-        if timeout_burst_threshold != _DEFAULT_TIMEOUT_BURST_THRESHOLD:
-            return max(1, int(timeout_burst_threshold))
+    def _effective_timeout_burst_threshold() -> int:
         parallel_workers = max(1, max(active_workers, concurrency_cap))
         return int(math.ceil(parallel_workers * _TIMEOUT_BURST_RATIO))
 
@@ -3794,9 +3777,6 @@ async def get_all_responses(
         return first_time
 
     def _record_timeout_event(now: Optional[float] = None) -> None:
-        threshold = _effective_timeout_burst_threshold()
-        if threshold is None:
-            return
         ts = now if now is not None else time.time()
         timeout_error_times.append(ts)
         window_start = ts - timeout_burst_window
@@ -3808,8 +3788,7 @@ async def get_all_responses(
         _record_timeout_event(now)
         threshold = _effective_timeout_burst_threshold()
         if (
-            threshold is None
-            or restart_requested
+            restart_requested
             or len(timeout_error_times) < threshold
             or restart_count >= timeout_burst_max_restarts
         ):
@@ -4930,7 +4909,6 @@ async def get_all_responses(
             timeout_factor=timeout_factor,
             max_timeout=max_timeout,
             dynamic_timeout=dynamic_timeout,
-            timeout_burst_threshold=timeout_burst_threshold,
             timeout_burst_window=timeout_burst_window,
             timeout_burst_cooldown=timeout_burst_cooldown,
             timeout_burst_max_restarts=timeout_burst_max_restarts,
