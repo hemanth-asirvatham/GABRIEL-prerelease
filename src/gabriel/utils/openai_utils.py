@@ -512,11 +512,15 @@ def _format_throughput_plan(
     tokens_per_call: Optional[float] = None,
     parallel_ceiling: Optional[int] = None,
     n_parallels: Optional[int] = None,
+    ultimate_parallel_cap: Optional[int] = None,
 ) -> List[str]:
     """Build human-friendly throughput summary lines."""
 
     del include_upgrade_hint, tokens_per_call
     parallel_cap = parallel_ceiling if parallel_ceiling is not None else n_parallels
+    ultimate_parallel_cap = (
+        max(1, ultimate_parallel_cap) if ultimate_parallel_cap is not None else n_parallels
+    )
 
     if planned_ppm is None or planned_ppm <= 0:
         return [
@@ -533,23 +537,29 @@ def _format_throughput_plan(
         f"Expected prompts per minute: maximum of {planned_ppm:,}",
         f"Estimated total mins: minimum of {minimum_minutes} minute{'s' if minimum_minutes != 1 else ''}",
     ]
+    rate_label = limiter or "current rate limits"
+    rate_val = f"~{int(limiter_value):,}/min" if limiter_value is not None else "rate limits"
     meets_parallel_cap = (
         parallel_cap is not None
         and planned_ppm >= parallel_cap
         and (limiter_value is None or limiter_value >= parallel_cap)
     )
-    if meets_parallel_cap and parallel_cap is not None:
+    at_ultimate_parallel_cap = (
+        ultimate_parallel_cap is not None
+        and meets_parallel_cap
+        and parallel_cap == ultimate_parallel_cap
+    )
+    if at_ultimate_parallel_cap:
         lines.append(
-            f"Rate currently limited by n_parallels = {parallel_cap}. Increase n_parallels for faster runs, if your machine allows."
+            f"Rate currently limited by n_parallels = {ultimate_parallel_cap}. Increase n_parallels for faster runs, if your machine allows."
         )
     elif limiter:
-        rate_val = f"~{int(limiter_value):,}/min" if limiter_value is not None else "rate limits"
         lines.append(
             f"Rate currently limited by {limiter} ({rate_val}). Moving to a higher usage tier can raise these limits and allow faster runs."
         )
-    elif n_parallels is not None:
+    else:
         lines.append(
-            f"Rate currently limited by n_parallels = {n_parallels}. Increase n_parallels for faster runs, if your machine allows."
+            f"Rate currently limited by {rate_label} ({rate_val}). Moving to a higher usage tier can raise these limits and allow faster runs."
         )
     return lines
 
@@ -3286,6 +3296,7 @@ async def get_all_responses(
             tokens_per_call=estimated_tokens_per_call,
             parallel_ceiling=max_parallel_ceiling,
             n_parallels=user_requested_n_parallels,
+            ultimate_parallel_cap=user_requested_n_parallels,
         ):
             print(line)
 
