@@ -1,7 +1,7 @@
 import os
 import warnings
 import pandas as pd
-from typing import Callable, Dict, Optional, Union, Any, List, Mapping, Sequence
+from typing import Awaitable, Callable, Dict, Optional, Union, Any, List, Mapping, Sequence
 
 from .tasks import (
     Rate,
@@ -87,6 +87,8 @@ async def rate(
     reasoning_summary: Optional[str] = None,
     search_context_size: str = "medium",
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Asks GPT to score each text / image / audio / item on natural language attributes. Output = 0-100 rating.
@@ -136,6 +138,14 @@ async def rate(
         Size hint forwarded to web-search capable models.
     template_path:
         Override the default rating prompt template with a custom Jinja2 file.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides applied to :class:`gabriel.tasks.rate.RateConfig`.
 
@@ -167,6 +177,8 @@ async def rate(
         df,
         column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 async def extract(
@@ -188,6 +200,8 @@ async def extract(
     reasoning_summary: Optional[str] = None,
     types: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Structured fact extraction on each item. Output = string / numeric values.
@@ -235,6 +249,14 @@ async def extract(
         stronger downstream typing.
     template_path:
         Custom Jinja2 template path to override the default extraction prompt.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides forwarded to :class:`gabriel.tasks.extract.ExtractConfig`.
 
@@ -287,6 +309,8 @@ async def seed(
     template_path: Optional[str] = None,
     existing_entities: Optional[List[str]] = None,
     reset_files: bool = False,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **response_kwargs: Any,
 ) -> pd.DataFrame:
     """Enforces a representative distribution / diversity of seeds.
@@ -328,6 +352,14 @@ async def seed(
         List of pre-existing entities to avoid regenerating.
     reset_files:
         When ``True`` ignore any saved state in ``save_dir`` and regenerate.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **response_kwargs:
         Additional keyword arguments forwarded to
         :func:`gabriel.utils.openai_utils.get_all_responses`.
@@ -359,6 +391,8 @@ async def seed(
     return await task.run(
         existing_entities=existing_entities,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
         **response_kwargs,
     )
 
@@ -386,6 +420,8 @@ async def classify(
     reasoning_summary: Optional[str] = None,
     search_context_size: str = "medium",
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Classifies texts / images / audio / items on whether provided labels apply. Output = one or more classes per item.
@@ -436,6 +472,14 @@ async def classify(
         Context size hint forwarded to the Responses API.
     template_path:
         Override the default classification prompt template.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Extra configuration passed to :class:`gabriel.tasks.classify.ClassifyConfig`.
 
@@ -470,6 +514,8 @@ async def classify(
         circle_column_name=circle_column_name,
         square_column_name=square_column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -505,6 +551,8 @@ async def ideate(
     seed_config_updates: Optional[Dict[str, Any]] = None,
     seed_run_kwargs: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
 ) -> pd.DataFrame:
     """Generates many novel scientific theories and filters the cream of the crop.
 
@@ -550,6 +598,14 @@ async def ideate(
         Fine-grained overrides for nested Rate/Rank/Seed tasks.
     template_path:
         Optional template override for the ideation prompts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
 
     Returns
     -------
@@ -583,6 +639,19 @@ async def ideate(
     if attributes is not None:
         cfg_kwargs["attributes"] = attributes
     cfg = IdeateConfig(**cfg_kwargs)
+
+    def _with_callable_overrides(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        updated = dict(payload or {})
+        if response_fn is not None:
+            updated.setdefault("response_fn", response_fn)
+        if get_all_responses_fn is not None:
+            updated.setdefault("get_all_responses_fn", get_all_responses_fn)
+        return updated
+
+    generation_kwargs = _with_callable_overrides(generation_kwargs)
+    rank_run_kwargs = _with_callable_overrides(rank_run_kwargs)
+    rate_run_kwargs = _with_callable_overrides(rate_run_kwargs)
+    seed_run_kwargs = _with_callable_overrides(seed_run_kwargs)
 
     ideator = Ideate(cfg, template_path=template_path)
     return await ideator.run(
@@ -622,6 +691,8 @@ async def deidentify(
     use_existing_mappings_only: bool = False,
     template_path: Optional[str] = None,
     reset_files: bool = False,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Replaces PII with realistic, consistent fake PII. Outputs anonymized text + mapping.
@@ -664,6 +735,14 @@ async def deidentify(
         Custom prompt template path.
     reset_files:
         When ``True`` ignore cached outputs in ``save_dir``.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides for :class:`gabriel.tasks.deidentify.DeidentifyConfig`.
 
@@ -694,6 +773,8 @@ async def deidentify(
         grouping_column=grouping_column,
         mapping_column=mapping_column,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 async def rank(
@@ -732,6 +813,8 @@ async def rank(
     initial_rating_pass: bool = False,
     rate_kwargs: Optional[Dict[str, Any]] = None,
     id_column: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Pairwise comparisons between texts yields ELO-like attribute ratings. Output = grounded, relative z scores for each text.
@@ -783,6 +866,14 @@ async def rank(
     id_column:
         Optional existing identifier column; otherwise hashes of ``column_name``
         are generated.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Extra parameters passed to :class:`gabriel.tasks.rank.RankConfig`.
 
@@ -831,6 +922,8 @@ async def rank(
         column_name,
         id_column=id_column,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
     # By default only expose the z-score columns (attribute names without suffixes)
@@ -878,6 +971,8 @@ async def codify(
     n_rounds: int = 2,
     completion_classifier_instructions: Optional[str] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Passage coding: highlights snippets in text that match qualitative codes.
@@ -929,6 +1024,14 @@ async def codify(
         Optional classifier guidance for completion steps.
     template_path:
         Custom Jinja2 template for coding prompts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides passed to :class:`gabriel.tasks.codify.CodifyConfig`.
 
@@ -965,6 +1068,8 @@ async def codify(
         categories=categories,
         additional_instructions=additional_instructions,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -990,6 +1095,8 @@ async def paraphrase(
     n_validation_candidates: int = 5,
     use_modified_source: bool = False,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Rewrites texts consistently per instructions.
@@ -1036,6 +1143,14 @@ async def paraphrase(
         If ``True`` allow modified source text to be used during validation.
     template_path:
         Custom template path to override the default paraphrase prompt.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional configuration passed to :class:`gabriel.tasks.paraphrase.ParaphraseConfig`.
 
@@ -1074,6 +1189,8 @@ async def paraphrase(
         df,
         column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1095,6 +1212,8 @@ async def compare(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Identifies similarities / differences between paired items. Output = list of differences.
@@ -1133,6 +1252,14 @@ async def compare(
         Optional OpenAI reasoning controls.
     template_path:
         Custom template override for comparison prompts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional configuration passed to :class:`gabriel.tasks.compare.CompareConfig`.
 
@@ -1164,6 +1291,8 @@ async def compare(
         circle_column_name,
         square_column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1183,6 +1312,8 @@ async def bucket(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Builds taxonomies from many terms. Output = bucket/cluster labels.
@@ -1219,6 +1350,14 @@ async def bucket(
         Optional OpenAI reasoning controls.
     template_path:
         Custom template path for bucket prompts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides forwarded to :class:`gabriel.tasks.bucket.BucketConfig`.
 
@@ -1248,6 +1387,8 @@ async def bucket(
         df,
         column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1278,6 +1419,8 @@ async def discover(
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     reset_files: bool = False,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> Dict[str, pd.DataFrame]:
     """Discovers natural language features which discriminate two classes of data.
@@ -1328,6 +1471,14 @@ async def discover(
         Optional OpenAI reasoning controls.
     reset_files:
         When ``True`` regenerate all discovery artifacts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides passed to :class:`gabriel.tasks.discover.DiscoverConfig`.
 
@@ -1372,6 +1523,8 @@ async def discover(
         circle_column_name=circle_column_name,
         square_column_name=square_column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1391,6 +1544,8 @@ async def deduplicate(
     group_size: int = 500,
     max_timeout: Optional[float] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Detects conceptual duplicates. Maps all duplicates to one representative term.
@@ -1429,6 +1584,14 @@ async def deduplicate(
         Optional timeout per API call.
     template_path:
         Custom template override for deduplication prompts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional configuration passed to
         :class:`gabriel.tasks.deduplicate.DeduplicateConfig`.
@@ -1460,6 +1623,8 @@ async def deduplicate(
         df,
         column_name=column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1488,6 +1653,8 @@ async def merge(
     use_best_auto_match: bool = False,
     candidate_scan_chunks: int = 5,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """Creates crosswalks. Output = merged table with GPT-matched identifiers.
@@ -1538,6 +1705,14 @@ async def merge(
         Number of candidate batches to scan when building the shortlist.
     template_path:
         Custom template override for merge prompts.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional overrides forwarded to :class:`gabriel.tasks.merge.MergeConfig`.
 
@@ -1577,6 +1752,8 @@ async def merge(
         right_on=right_on,
         how=how,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1599,6 +1776,8 @@ async def filter(
     file_name: str = "filter_responses.csv",
     max_timeout: Optional[float] = None,
     template_path: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
     """High-throughput boolean screening. Outputs items which meet natural language condition.
@@ -1643,6 +1822,14 @@ async def filter(
         Optional per-call timeout.
     template_path:
         Custom prompt template path.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **cfg_kwargs:
         Additional configuration passed to :class:`gabriel.tasks.filter.FilterConfig`.
 
@@ -1674,6 +1861,8 @@ async def filter(
         df,
         column_name,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
     )
 
 
@@ -1702,6 +1891,8 @@ async def debias(
     robust_regression: bool = True,
     random_seed: int = 12345,
     verbose: bool = True,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
 ) -> DebiasResult:
     """Post-process measurements to remove inference bias.
 
@@ -1758,6 +1949,14 @@ async def debias(
         Seed for deterministic behaviour in sampling-heavy steps.
     verbose:
         When ``True`` print notices about inferred defaults and progress.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
 
     Returns
     -------
@@ -1769,6 +1968,12 @@ async def debias(
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     measurement_kwargs = dict(measurement_kwargs or {})
     removal_kwargs = dict(removal_kwargs or {})
+    if response_fn is not None:
+        measurement_kwargs.setdefault("response_fn", response_fn)
+        removal_kwargs.setdefault("response_fn", response_fn)
+    if get_all_responses_fn is not None:
+        measurement_kwargs.setdefault("get_all_responses_fn", get_all_responses_fn)
+        removal_kwargs.setdefault("get_all_responses_fn", get_all_responses_fn)
 
     if removal_method == "codify" and max_words_per_call is not None:
         removal_kwargs.setdefault("max_words_per_call", max_words_per_call)
@@ -1832,6 +2037,8 @@ async def whatever(
     reset_files: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **kwargs,
 ) -> pd.DataFrame:
     """Run any GPT prompts, but leverage GABRIEL's parallelization / checkpointing.
@@ -1879,6 +2086,14 @@ async def whatever(
         When ``True`` regenerate outputs even if files already exist.
     reasoning_effort, reasoning_summary:
         Optional OpenAI reasoning controls.
+    response_fn:
+        Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
+        that replaces the per-prompt model invocation. Ignored when
+        ``get_all_responses_fn`` is supplied.
+    get_all_responses_fn:
+        Optional callable that fully replaces :func:`gabriel.utils.openai_utils.get_all_responses`.
+        It must accept ``prompts`` and ``identifiers`` (and ideally ``model`` and
+        ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **kwargs:
         Additional parameters forwarded directly to
         :func:`gabriel.utils.openai_utils.get_all_responses`.
@@ -1894,6 +2109,12 @@ async def whatever(
 
     if df is None and prompts is None:
         raise ValueError("Either prompts or df must be provided to `whatever`.")
+
+    kwargs = dict(kwargs)
+    if response_fn is not None:
+        kwargs.setdefault("response_fn", response_fn)
+    if get_all_responses_fn is not None:
+        kwargs.setdefault("get_all_responses_fn", get_all_responses_fn)
 
     if web_search is None and "web_search" in kwargs:
         web_search = kwargs.pop("web_search")
@@ -1942,6 +2163,8 @@ async def whatever(
         prompt_audio=prompt_audio,
         web_search_filters=web_search_filters,
         reset_files=reset_files,
+        response_fn=response_fn,
+        get_all_responses_fn=get_all_responses_fn,
         **kwargs,
     )
 

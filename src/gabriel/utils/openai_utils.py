@@ -2538,6 +2538,7 @@ async def get_all_responses(
     dummy_responses: Optional[Dict[str, Union[DummyResponseSpec, Dict[str, Any]]]] = None,
     use_dummy: bool = False,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
+    get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     print_example_prompt: bool = True,
@@ -2674,9 +2675,83 @@ async def get_all_responses(
     schema as ``web_search_filters``.  These overrides are merged with the
     global filters before each request, enabling DataFrame-driven location hints
     without hand-crafting separate dictionaries.
+
+    To bypass the built-in orchestration entirely, supply ``get_all_responses_fn``.
+    This callable is invoked at the start of the function and receives as many
+    keyword arguments from this signature as it accepts (including values from
+    ``**get_response_kwargs``).  It must handle prompt dispatch on its own and
+    return a :class:`pandas.DataFrame` containing at least ``"Identifier"`` and
+    ``"Response"`` columns, where ``"Response"`` mirrors this helper’s output
+    structure.  The callable must accept ``prompts`` and ``identifiers`` and
+    should ideally accept ``json_mode`` and ``model`` if relevant.  When
+    provided, ``get_all_responses_fn`` takes precedence over ``response_fn`` and
+    all other internal processing.
 """
     global _USAGE_SHEET_PRINTED
     message_verbose = bool(verbose and not quiet)
+    set_log_level(logging_level)
+    logger = get_logger(__name__)
+    identifiers = prompts if identifiers is None else identifiers
+    if get_all_responses_fn is not None:
+        if response_fn is not None:
+            logger.info(
+                "Both get_all_responses_fn and response_fn were supplied; "
+                "deferring to get_all_responses_fn and ignoring response_fn."
+            )
+        candidate = get_all_responses_fn
+        underlying_callable: Callable[..., Any] = candidate
+        if isinstance(underlying_callable, functools.partial):
+            underlying_callable = underlying_callable.func  # type: ignore[attr-defined]
+        try:
+            sig = inspect.signature(underlying_callable)
+        except (TypeError, ValueError):
+            sig = None
+        accepts_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        ) if sig is not None else True
+        param_lookup = sig.parameters if sig is not None else {}
+        if not (accepts_var_kw or "prompts" in param_lookup):
+            raise TypeError("Custom get_all_responses_fn must accept a `prompts` argument.")
+        if not (accepts_var_kw or "identifiers" in param_lookup):
+            raise TypeError("Custom get_all_responses_fn must accept an `identifiers` argument.")
+        base_kwargs: Dict[str, Any] = {}
+        for name in inspect.signature(get_all_responses).parameters:
+            if name in {"get_all_responses_fn", "get_response_kwargs"}:
+                continue
+            base_kwargs[name] = locals()[name]
+        extra_kwargs = dict(get_response_kwargs)
+        available_kwargs: Dict[str, Any] = {**extra_kwargs, **base_kwargs}
+        used_keys: Set[str] = set()
+        positional_args: List[Any] = []
+        call_kwargs: Dict[str, Any] = {}
+        if sig is not None:
+            for param in sig.parameters.values():
+                if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+                    if param.name in available_kwargs:
+                        positional_args.append(available_kwargs[param.name])
+                        used_keys.add(param.name)
+                    elif param.default is inspect._empty:
+                        raise TypeError(
+                            f"Custom get_all_responses_fn is missing required parameter `{param.name}`."
+                        )
+                elif param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                    if param.name in available_kwargs:
+                        call_kwargs[param.name] = available_kwargs[param.name]
+                        used_keys.add(param.name)
+            if accepts_var_kw:
+                for key, value in available_kwargs.items():
+                    if key not in used_keys:
+                        call_kwargs[key] = value
+        else:
+            call_kwargs = available_kwargs
+        result = await get_all_responses_fn(*positional_args, **call_kwargs)
+        if not isinstance(result, pd.DataFrame):
+            raise TypeError("Custom get_all_responses_fn must return a pandas DataFrame.")
+        if "Response" not in result.columns or "Identifier" not in result.columns:
+            raise ValueError(
+                "Custom get_all_responses_fn must return a DataFrame containing 'Identifier' and 'Response' columns."
+            )
+        return result
     if message_verbose:
         print("Initializing model calls and loading data...")
     if api_key is not None:
@@ -2695,8 +2770,6 @@ async def get_all_responses(
     planning_buffer = float(min(max(planning_rate_limit_buffer, 0.1), 1.0))
     if not use_dummy and not using_custom_response_fn:
         _require_api_key()
-    set_log_level(logging_level)
-    logger = get_logger(__name__)
     _ensure_runtime_dependencies(verbose=message_verbose)
     dataset_stats = _estimate_dataset_stats(prompts)
     cost_estimate = _estimate_cost(
@@ -4870,6 +4943,7 @@ async def get_all_responses(
             "reasoning_summary",
             "use_dummy",
             "response_fn",
+            "get_all_responses_fn",
             "base_url",
             "background_mode",
             "background_poll_interval",
@@ -4900,6 +4974,7 @@ async def get_all_responses(
             dummy_responses=dummy_responses,
             use_dummy=use_dummy,
             response_fn=response_fn,
+            get_all_responses_fn=get_all_responses_fn,
             base_url=base_url,
             api_key=api_key,
             print_example_prompt=print_example_prompt,

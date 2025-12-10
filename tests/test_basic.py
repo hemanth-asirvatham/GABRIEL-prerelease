@@ -454,6 +454,62 @@ def test_get_all_responses_custom_callable_requires_prompt(tmp_path):
         )
 
 
+def test_get_all_responses_custom_driver_receives_kwargs(tmp_path):
+    calls: List[Dict[str, Any]] = []
+
+    async def custom_driver(prompts, identifiers, json_mode=False, model=None, extra=None, **kwargs):
+        calls.append(
+            {
+                "prompts": prompts,
+                "identifiers": identifiers,
+                "json_mode": json_mode,
+                "model": model,
+                "extra": extra,
+                "kwargs": kwargs,
+            }
+        )
+        return pd.DataFrame(
+            {"Identifier": identifiers, "Response": [[f"resp:{ident}"] for ident in identifiers]}
+        )
+
+    save_path = str(tmp_path / "custom_driver.csv")
+
+    df = asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=["p1", "p2"],
+            identifiers=None,
+            json_mode=True,
+            model="demo-model",
+            extra="value",
+            get_all_responses_fn=custom_driver,
+            save_path=save_path,
+        )
+    )
+
+    assert calls and calls[0]["prompts"] == ["p1", "p2"]
+    assert calls[0]["identifiers"] == ["p1", "p2"]
+    assert calls[0]["json_mode"] is True
+    assert calls[0]["model"] == "demo-model"
+    assert calls[0]["extra"] == "value"
+    assert calls[0]["kwargs"]["save_path"] == save_path
+    assert df.loc[df["Identifier"] == "p1", "Response"].iloc[0] == ["resp:p1"]
+
+
+def test_get_all_responses_custom_driver_requires_identifiers(tmp_path):
+    async def missing_identifiers(prompts):
+        return pd.DataFrame({"Identifier": prompts, "Response": [["ok"] for _ in prompts]})
+
+    with pytest.raises(TypeError, match="identifiers"):
+        asyncio.run(
+            openai_utils.get_all_responses(
+                prompts=["a"],
+                identifiers=["a"],
+                get_all_responses_fn=missing_identifiers,  # type: ignore[arg-type]
+                save_path=str(tmp_path / "custom_driver_error.csv"),
+            )
+        )
+
+
 def test_get_all_responses_cancellation_stops_workers(tmp_path):
     prompts = [f"p{i}" for i in range(6)]
     call_log: List[str] = []
