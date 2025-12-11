@@ -49,6 +49,13 @@ def test_normalise_web_search_filters_supports_location_type():
     assert normalised["user_location"] == {"city": "London", "type": "approximate"}
 
 
+def test_normalise_web_search_filters_sets_default_location_type():
+    filters = {"country": "US"}
+    normalised = openai_utils._normalise_web_search_filters(filters)
+    assert normalised["user_location"]["type"] == "approximate"
+    assert normalised["user_location"]["country"] == "US"
+
+
 def test_build_params_embeds_web_search_tool_payload():
     params = openai_utils._build_params(
         model="gpt-4o-mini",
@@ -75,6 +82,79 @@ def test_build_params_embeds_web_search_tool_payload():
     assert web_tool["search_context_size"] == "large"
     assert web_tool["filters"]["allowed_domains"] == ["openai.com"]
     assert web_tool["user_location"] == {"country": "GB", "type": "approximate"}
+    assert "include" in params
+    assert "web_search_call.action.sources" in params["include"]
+
+
+def test_build_params_respects_user_include_and_dedup():
+    params = openai_utils._build_params(
+        model="gpt-4o-mini",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        system_instruction="",
+        temperature=0.7,
+        tools=None,
+        tool_choice=None,
+        web_search=False,
+        web_search_filters=None,
+        search_context_size="medium",
+        json_mode=False,
+        expected_schema=None,
+        reasoning_effort=None,
+        reasoning_summary=None,
+        include=["message.output_text.logprobs", "message.output_text.logprobs"],
+    )
+    assert params["include"] == ["message.output_text.logprobs"]
+
+    params_search = openai_utils._build_params(
+        model="gpt-4o-mini",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        system_instruction="",
+        temperature=0.7,
+        tools=None,
+        tool_choice=None,
+        web_search=True,
+        web_search_filters=None,
+        search_context_size="medium",
+        json_mode=False,
+        expected_schema=None,
+        reasoning_effort=None,
+        reasoning_summary=None,
+        include=["web_search_call.action.sources", "message.output_text.logprobs"],
+    )
+    # Should preserve user include, but not duplicate the sources entry
+    assert params_search["include"].count("web_search_call.action.sources") == 1
+    assert "message.output_text.logprobs" in params_search["include"]
+
+
+def test_extract_web_search_sources_recurses_nested_payload():
+    raw = [
+        {
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "web_search_call": {
+                        "id": "call-1",
+                        "action": {
+                            "query": "python",
+                            "sources": [
+                                {"url": "https://example.com/a", "title": "Result A"},
+                                {"url": "https://example.com/b", "title": "Result B"},
+                            ],
+                        },
+                    },
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Answer"}],
+                },
+            ]
+        }
+    ]
+    sources = openai_utils._extract_web_search_sources(raw)
+    assert sources is not None
+    assert {"url": "https://example.com/a", "title": "Result A"} in sources
 
 
 def test_prompt_template():
