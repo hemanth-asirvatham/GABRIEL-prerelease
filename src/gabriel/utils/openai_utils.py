@@ -4010,6 +4010,18 @@ async def get_all_responses(
     last_concurrency_scale_up = 0.0
     usage_samples: List[Tuple[int, int, int]] = []
     estimated_output_tokens = planning_output_tokens
+    estimated_output_tokens_per_prompt_live = float(planning_output_tokens)
+    estimated_input_tokens_per_prompt = float(
+        (dataset_stats.get("token_count") or 0) / max(1, len(prompts))
+    )
+    observed_input_tokens_total = 0.0
+    observed_output_tokens_total = 0.0
+    observed_reasoning_tokens_total = 0.0
+    observed_usage_count = 0
+    estimate_update_target = max(1, min(_effective_parallel_ceiling(), len(todo_pairs)))
+    estimate_update_done = False
+    estimate_refresh_cooldown = 60.0
+    last_estimate_refresh = 0.0
     timeout_error_times: Deque[float] = deque()
     limiter_wait_durations: Deque[float] = deque(maxlen=max(10, token_sample_size))
     limiter_wait_ratios: Deque[float] = deque(maxlen=max(10, token_sample_size))
@@ -4228,6 +4240,79 @@ async def get_all_responses(
         logger.info(msg)
 
     emit_parallelization_status("Initial parallelization settings", force=True)
+
+    def _maybe_refresh_estimates(trigger_reason: str, *, force: bool = False) -> bool:
+        """Update token and cost estimates from observed usage."""
+
+        nonlocal estimated_output_tokens, estimated_tokens_per_call, current_tokens_per_call
+        nonlocal estimated_output_tokens_per_prompt_live, estimated_input_tokens_per_prompt
+        nonlocal throughput_ceiling_ppm, estimate_update_done, last_estimate_refresh
+        now = time.time()
+        if not force and (now - last_estimate_refresh) < estimate_refresh_cooldown:
+            return False
+        if observed_usage_count <= 0:
+            return False
+        avg_input = observed_input_tokens_total / max(1, observed_usage_count)
+        avg_output = (
+            (observed_output_tokens_total + observed_reasoning_tokens_total)
+            / max(1, observed_usage_count)
+        )
+        if avg_input <= 0 and avg_output <= 0:
+            return False
+        estimated_input_tokens_per_prompt = max(1.0, avg_input)
+        if avg_output > 0:
+            estimated_output_tokens_per_prompt_live = max(1.0, avg_output)
+            estimated_output_tokens = max(
+                estimated_output_tokens, avg_output * OUTPUT_TOKEN_HEADROOM
+            )
+        updated_tokens_per_call = max(
+            1.0, (estimated_input_tokens_per_prompt + estimated_output_tokens) * max(1, n)
+        )
+        estimated_tokens_per_call = updated_tokens_per_call
+        current_tokens_per_call = updated_tokens_per_call
+        planned_ppm_live, _ = _planned_ppm_and_details(
+            allowed_req_pm if manage_rate_limits else None,
+            allowed_tok_pm if manage_rate_limits else None,
+            current_tokens_per_call,
+        )
+        if planned_ppm_live is not None:
+            throughput_ceiling_ppm = planned_ppm_live
+        pricing = _lookup_model_pricing(model)
+        cost_line = None
+        total_rows = max(1, status.num_tasks_started)
+        if pricing is not None and total_rows:
+            total_input_tokens = estimated_input_tokens_per_prompt * max(1, n) * total_rows
+            total_output_tokens = max(avg_output, 0.0) * max(1, n) * total_rows
+            input_cost = (total_input_tokens / 1_000_000) * pricing["input"]
+            output_cost = (total_output_tokens / 1_000_000) * pricing["output"]
+            batch_multiplier = pricing.get("batch", 1.0) if use_batch else 1.0
+            input_cost *= batch_multiplier
+            output_cost *= batch_multiplier
+            cost_line = (
+                f"Updated estimated total cost: ~${(input_cost + output_cost):.2f} "
+                f"(input ${input_cost:.2f}, output ${output_cost:.2f})."
+            )
+        msg_lines = [
+            "[token estimate] Refreshed per-prompt estimates from observed usage "
+            f"({observed_usage_count} sample{'' if observed_usage_count == 1 else 's'}): "
+            f"input ≈ {int(round(estimated_input_tokens_per_prompt)):,} tokens, "
+            f"output (incl. reasoning) ≈ {int(round(estimated_output_tokens_per_prompt_live)):,} tokens."
+        ]
+        if cost_line:
+            msg_lines.append("[token estimate] " + cost_line)
+        if not quiet:
+            for line in msg_lines:
+                print(line)
+        for line in msg_lines:
+            logger.info(line)
+        if force:
+            estimate_update_done = True
+        last_estimate_refresh = now
+        return True
+
+    def _maybe_trigger_threshold_refresh() -> None:
+        if not estimate_update_done and processed >= estimate_update_target:
+            _maybe_refresh_estimates("parallel-cap reached", force=True)
 
     async def flush() -> None:
         nonlocal results, df, processed, csv_header_written, written_identifiers
@@ -4559,6 +4644,11 @@ async def get_all_responses(
                 usage_samples.append((total_input, total_output, total_reasoning))
                 if len(usage_samples) > token_sample_size:
                     usage_samples.pop(0)
+                if any(val > 0 for val in (total_input, total_output, total_reasoning)):
+                    observed_input_tokens_total += float(total_input)
+                    observed_output_tokens_total += float(total_output)
+                    observed_reasoning_tokens_total += float(total_reasoning)
+                    observed_usage_count += 1
                 try:
                     if manage_rate_limits and len(usage_samples) >= token_sample_size:
                         avg_in = statistics.mean(u[0] for u in usage_samples)
@@ -4758,10 +4848,12 @@ async def get_all_responses(
                     successes_since_adjust += 1
                     rate_limit_errors_since_adjust = 0
                     maybe_adjust_concurrency()
+                    _maybe_trigger_threshold_refresh()
                     if processed % save_every_x_responses == 0:
                         await flush()
                 else:
                     status.num_tasks_failed += 1
+                    _maybe_trigger_threshold_refresh()
                     await flush()
             except asyncio.CancelledError:
                 raise
@@ -4888,6 +4980,7 @@ async def get_all_responses(
                         status.num_tasks_in_progress -= 1
                         pbar.update(1)
                         error_logs.pop(ident, None)
+                        _maybe_trigger_threshold_refresh()
                         await flush()
             except RateLimitError as e:
                 inflight.pop(ident, None)
@@ -4947,6 +5040,7 @@ async def get_all_responses(
                     stop_event.set()
                     await flush()
                     raise RuntimeError(fatal_msg)
+                _maybe_refresh_estimates("rate-limit encountered", force=False)
                 maybe_adjust_concurrency()
                 if attempts_left - 1 > 0:
                     backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
@@ -4975,6 +5069,7 @@ async def get_all_responses(
                     status.num_tasks_in_progress -= 1
                     pbar.update(1)
                     error_logs.pop(ident, None)
+                    _maybe_trigger_threshold_refresh()
                     await flush()
             except APIConnectionError as e:
                 inflight.pop(ident, None)
@@ -5007,6 +5102,7 @@ async def get_all_responses(
                     status.num_tasks_in_progress -= 1
                     pbar.update(1)
                     error_logs.pop(ident, None)
+                    _maybe_trigger_threshold_refresh()
                     await flush()
             except (
                 APIError,
@@ -5042,6 +5138,7 @@ async def get_all_responses(
                 status.num_tasks_in_progress -= 1
                 pbar.update(1)
                 error_logs.pop(ident, None)
+                _maybe_trigger_threshold_refresh()
                 await flush()
             except Exception as e:
                 inflight.pop(ident, None)
