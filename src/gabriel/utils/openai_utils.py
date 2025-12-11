@@ -1142,11 +1142,12 @@ def _normalise_web_search_filters(
 
     location_keys = ("city", "country", "region", "timezone", "type")
     location = {
-        key: value
+        key: str(value)
         for key, value in ((k, filters.get(k)) for k in location_keys)
         if value
     }
     if location:
+        location.setdefault("type", "approximate")
         result["user_location"] = location
 
     return result
@@ -1194,6 +1195,102 @@ def _merge_web_search_filters(
     return merged or None
 
 
+def _normalise_include_values(value: Optional[Union[str, Iterable[str]]]) -> List[str]:
+    """Normalise ``include`` into an ordered list of unique strings."""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items: Iterable[str] = [value]
+    elif isinstance(value, Iterable):
+        items = value
+    else:
+        return []
+    seen: Set[str] = set()
+    normalised: List[str] = []
+    for item in items:
+        if item is None:
+            continue
+        try:
+            text = str(item).strip()
+        except Exception:
+            continue
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalised.append(text)
+    return normalised
+
+
+def _extract_web_search_sources(raw_items: List[Any]) -> Optional[List[Any]]:
+    """Retrieve any web-search sources returned in ``raw_items``."""
+
+    collected: List[Any] = []
+    seen: Set[str] = set()
+    visited: Set[int] = set()
+
+    def _record(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, list):
+            for entry in value:
+                _record(entry)
+            return
+        if isinstance(value, dict):
+            try:
+                fingerprint = json.dumps(value, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                fingerprint = None
+            if fingerprint and fingerprint in seen:
+                return
+            if fingerprint:
+                seen.add(fingerprint)
+            collected.append(value)
+            return
+        if isinstance(value, (str, bytes)):
+            text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+            text = text.strip()
+            if text and text not in seen:
+                seen.add(text)
+                collected.append(text)
+
+    def _as_maybe_mapping(obj: Any) -> Any:
+        for attr in ("model_dump", "dict"):
+            meth = getattr(obj, attr, None)
+            if callable(meth):
+                try:
+                    converted = meth()
+                except TypeError:
+                    converted = meth(exclude_none=True)
+                if isinstance(converted, (dict, list)):
+                    return converted
+        data = getattr(obj, "__dict__", None)
+        if isinstance(data, dict) and data:
+            return data
+        return obj
+
+    def _walk(obj: Any) -> None:
+        if obj is None:
+            return
+        obj_id = id(obj)
+        if obj_id in visited:
+            return
+        visited.add(obj_id)
+        obj = _as_maybe_mapping(obj)
+        if isinstance(obj, dict):
+            if "sources" in obj:
+                _record(obj.get("sources"))
+            for value in obj.values():
+                _walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
+    for item in raw_items:
+        _walk(item)
+    return collected or None
+
+
 def _build_params(
     *,
     model: str,
@@ -1210,6 +1307,7 @@ def _build_params(
     expected_schema: Optional[Dict[str, Any]] = None,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    include: Optional[Union[str, Iterable[str]]] = None,
     **extra: Any,
 ) -> Dict[str, Any]:
     """Compose the keyword arguments for an OpenAI Responses API call.
@@ -1257,6 +1355,11 @@ def _build_params(
     reasoning_effort, reasoning_summary:
         Additional settings for ``o``/``gpt-5`` models controlling hidden
         reasoning tokens and optional summaries.
+    include:
+        Optional list (or comma-separated string) of ``include`` fields to
+        request from the Responses API. When ``web_search`` is enabled, the
+        ``web_search_call.action.sources`` include is added automatically
+        unless the caller explicitly supplies an alternative list.
     **extra:
         Any additional key-value pairs to forward directly to the API.
 
@@ -1313,6 +1416,14 @@ def _build_params(
             )
     else:
         params["temperature"] = temperature
+    include_values = _normalise_include_values(include)
+    extra_include = _normalise_include_values(extra.pop("include", None))
+    include_values.extend([val for val in extra_include if val not in include_values])
+    if web_search:
+        if "web_search_call.action.sources" not in include_values:
+            include_values.append("web_search_call.action.sources")
+    if include_values:
+        params["include"] = include_values
     params.update(extra)
     return params
 
@@ -1336,6 +1447,7 @@ async def get_response(
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    include: Optional[Union[str, Iterable[str]]] = None,
     use_dummy: bool = False,
     base_url: Optional[str] = None,
     verbose: bool = True,
@@ -1391,6 +1503,11 @@ async def get_response(
         (``city``, ``country``, ``region``, ``timezone`` and ``type`` – typically
         ``"approximate"``) to guide search results when ``web_search`` is
         enabled.
+    include:
+        Optional ``include`` values forwarded to the Responses API. When
+        ``web_search`` is enabled, ``web_search_call.action.sources`` is added
+        automatically (without duplicating caller-provided values) so sources
+        are available in the returned payloads.
     reasoning_effort, reasoning_summary:
         Additional reasoning controls for ``o`` and ``gpt-5`` models.
     use_dummy:
@@ -1697,6 +1814,7 @@ async def get_response(
             expected_schema=expected_schema,
             reasoning_effort=reasoning_effort,
             reasoning_summary=reasoning_summary,
+            include=include,
             **kwargs,
         )
         if background_argument is not None:
@@ -2526,6 +2644,7 @@ async def get_all_responses(
     search_context_size: str = "medium",
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
+    include: Optional[Union[str, Iterable[str]]] = None,
     dummy_responses: Optional[Dict[str, Union[DummyResponseSpec, Dict[str, Any]]]] = None,
     use_dummy: bool = False,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
@@ -2992,6 +3111,10 @@ async def get_all_responses(
         df["Response"] = df["Response"].apply(_de)
         if "Error Log" in df.columns:
             df["Error Log"] = df["Error Log"].apply(_de)
+        if "Web Search Sources" in df.columns:
+            df["Web Search Sources"] = df["Web Search Sources"].apply(_de)
+        else:
+            df["Web Search Sources"] = pd.NA
         expected_cols = [
             "Input Tokens",
             "Reasoning Tokens",
@@ -2999,6 +3122,7 @@ async def get_all_responses(
             "Reasoning Effort",
             "Successful",
             "Error Log",
+            "Web Search Sources",
         ]
         if reasoning_summary is not None:
             expected_cols.insert(4, "Reasoning Summary")
@@ -3018,6 +3142,7 @@ async def get_all_responses(
         cols = [
             "Identifier",
             "Response",
+            "Web Search Sources",
             "Time Taken",
             "Input Tokens",
             "Reasoning Tokens",
@@ -3315,12 +3440,15 @@ async def get_all_responses(
             if not rows:
                 return
             batch_df = pd.DataFrame(rows)
+            if "Web Search Sources" not in batch_df.columns:
+                batch_df["Web Search Sources"] = pd.NA
             batch_df = batch_df[~batch_df["Identifier"].isin(written_identifiers)]
             if batch_df.empty:
                 return
             to_save = batch_df.copy()
-            to_save["Response"] = to_save["Response"].apply(_ser)
-            to_save["Error Log"] = to_save["Error Log"].apply(_ser)
+            for col in ("Response", "Error Log", "Web Search Sources"):
+                if col in to_save:
+                    to_save[col] = to_save[col].apply(_ser)
             to_save.to_csv(
                 save_path,
                 mode="a" if csv_header_written else "w",
@@ -3435,6 +3563,7 @@ async def get_all_responses(
                     reasoning_summary=get_response_kwargs.get(
                         "reasoning_summary"
                     ),
+                    include=get_response_kwargs.get("include"),
                 )
                 tasks.append(
                     {
@@ -3592,6 +3721,7 @@ async def get_all_responses(
                             row = {
                                 "Identifier": ident,
                                 "Response": None,
+                                "Web Search Sources": None,
                                 "Time Taken": None,
                                 "Input Tokens": None,
                                 "Reasoning Tokens": None,
@@ -3630,6 +3760,7 @@ async def get_all_responses(
                             search_objs.append(candidate)
                         if isinstance(resp_obj, dict):
                             search_objs.append(resp_obj)
+                        sources_data = _extract_web_search_sources(search_objs)
                         for obj in search_objs:
                             if resp_text is None and isinstance(
                                 obj.get("output_text"), (str, bytes)
@@ -3703,6 +3834,7 @@ async def get_all_responses(
                         row = {
                             "Identifier": ident,
                             "Response": [resp_text],
+                            "Web Search Sources": sources_data,
                             "Time Taken": None,
                             "Input Tokens": input_tok,
                             "Reasoning Tokens": reason_tok,
@@ -4026,11 +4158,14 @@ async def get_all_responses(
         nonlocal results, df, processed, csv_header_written, written_identifiers
         if results:
             batch_df = pd.DataFrame(results)
+            if "Web Search Sources" not in batch_df.columns:
+                batch_df["Web Search Sources"] = pd.NA
             batch_df = batch_df[~batch_df["Identifier"].isin(written_identifiers)]
             if not batch_df.empty:
                 to_save = batch_df.copy()
-                to_save["Response"] = to_save["Response"].apply(_ser)
-                to_save["Error Log"] = to_save["Error Log"].apply(_ser)
+                for col in ("Response", "Error Log", "Web Search Sources"):
+                    if col in to_save:
+                        to_save[col] = to_save[col].apply(_ser)
                 to_save.to_csv(
                     save_path,
                     mode="a" if csv_header_written else "w",
@@ -4206,6 +4341,7 @@ async def get_all_responses(
                 input_tokens = len(tokenizer.encode(prompt))
                 gating_output = estimated_output_tokens
                 limiter_wait_time = 0.0
+                sources_data: Optional[List[Any]] = None
                 if req_lim is not None:
                     wait_start = time.perf_counter()
                     await req_lim.acquire()
@@ -4285,6 +4421,7 @@ async def get_all_responses(
                     raise
                 inflight.pop(ident, None)
                 resps, duration, raw = _normalize_response_result(result)
+                sources_data = _extract_web_search_sources(raw)
                 success_override: Optional[bool] = None
                 if use_dummy:
                     selected_spec = dummy_response_specs.get(str(ident))
@@ -4491,6 +4628,7 @@ async def get_all_responses(
                             row = {
                                 "Identifier": ident,
                                 "Response": None,
+                                "Web Search Sources": sources_data,
                                 "Time Taken": duration,
                                 "Input Tokens": total_input,
                                 "Reasoning Tokens": total_reasoning,
@@ -4516,6 +4654,7 @@ async def get_all_responses(
                 row = {
                     "Identifier": ident,
                     "Response": resps,
+                    "Web Search Sources": sources_data,
                     "Time Taken": duration,
                     "Input Tokens": total_input,
                     "Reasoning Tokens": total_reasoning,
@@ -4610,6 +4749,7 @@ async def get_all_responses(
                         row = {
                             "Identifier": ident,
                             "Response": None,
+                            "Web Search Sources": sources_data,
                             "Time Taken": None,
                             "Input Tokens": input_tokens,
                             "Reasoning Tokens": None,
@@ -4652,6 +4792,7 @@ async def get_all_responses(
                         row = {
                             "Identifier": ident,
                             "Response": None,
+                            "Web Search Sources": sources_data,
                             "Time Taken": None,
                             "Input Tokens": input_tokens,
                             "Reasoning Tokens": None,
