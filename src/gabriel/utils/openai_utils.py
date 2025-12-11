@@ -77,6 +77,7 @@ import statistics
 import numpy as np
 import tiktoken
 from dataclasses import dataclass, fields
+from pydantic import BaseModel
 
 logger = get_logger(__name__)
 
@@ -1304,13 +1305,22 @@ def _extract_web_search_sources(raw_items: List[Any]) -> Optional[List[Any]]:
                 collected.append(text)
 
     def _as_maybe_mapping(obj: Any) -> Any:
+        if isinstance(obj, BaseModel):
+            try:
+                converted = obj.model_dump(exclude_none=True, warnings=False)
+            except TypeError:
+                converted = obj.model_dump(exclude_none=True)
+            except Exception:
+                converted = None
+            if isinstance(converted, (dict, list)):
+                return converted
         for attr in ("model_dump", "dict"):
             meth = getattr(obj, attr, None)
             if callable(meth):
                 try:
-                    converted = meth()
-                except TypeError:
                     converted = meth(exclude_none=True)
+                except TypeError:
+                    converted = meth()
                 if isinstance(converted, (dict, list)):
                     return converted
         data = getattr(obj, "__dict__", None)
@@ -1325,6 +1335,16 @@ def _extract_web_search_sources(raw_items: List[Any]) -> Optional[List[Any]]:
         if obj_id in visited:
             return
         visited.add(obj_id)
+        direct_sources = getattr(obj, "sources", None)
+        if direct_sources is not None:
+            _record(direct_sources)
+        action_obj = getattr(obj, "action", None)
+        if action_obj is not None:
+            _record(getattr(action_obj, "sources", None))
+        if isinstance(obj, (list, tuple, set, frozenset)):
+            for item in obj:
+                _walk(item)
+            return
         obj = _as_maybe_mapping(obj)
         if isinstance(obj, dict):
             if "sources" in obj:
@@ -4474,7 +4494,11 @@ async def get_all_responses(
                 rate_limit_errors_since_adjust = 0
 
     async def worker() -> None:
-        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until, estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event, max_parallel_ceiling, last_wait_adjust, current_tokens_per_call, timeout_errors_since_last_status, throughput_ceiling_ppm
+        nonlocal processed, call_count, nonlocal_timeout, active_workers, concurrency_cap, cooldown_until
+        nonlocal estimated_output_tokens, rate_limit_errors_since_adjust, successes_since_adjust, stop_event
+        nonlocal max_parallel_ceiling, last_wait_adjust, current_tokens_per_call, timeout_errors_since_last_status
+        nonlocal throughput_ceiling_ppm, observed_input_tokens_total, observed_output_tokens_total
+        nonlocal observed_reasoning_tokens_total, observed_usage_count
         while True:
             if stop_event.is_set():
                 break
