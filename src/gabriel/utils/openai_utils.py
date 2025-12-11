@@ -1239,6 +1239,38 @@ def _normalise_include_values(value: Optional[Union[str, Iterable[str]]]) -> Lis
     return normalised
 
 
+def _normalise_search_context_size(value: Optional[str]) -> str:
+    """Clamp web-search context size to the Responses API's allowed values.
+
+    The Responses schema accepts ``"low"``, ``"medium"`` and ``"high"`` for
+    ``search_context_size``.  Earlier versions of this library and some
+    notebooks used ``"small"``/``"large"``; these aliases are mapped to
+    ``"low"`` and ``"high"`` respectively to preserve backwards
+    compatibility. Any other value raises ``ValueError`` so misconfigurations
+    surface early instead of generating pydantic warnings when serialising the
+    request.
+    """
+
+    if value is None:
+        return "medium"
+
+    try:
+        normalised = str(value).strip().lower()
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError("search_context_size must be a string") from exc
+
+    aliases = {"small": "low", "medium": "medium", "large": "high", "high": "high"}
+    resolved = aliases.get(normalised, normalised)
+
+    if resolved not in {"low", "medium", "high"}:
+        raise ValueError(
+            "search_context_size must be one of {'low', 'medium', 'high'}"
+        )
+
+    # Preserve the canonical casing used by the API
+    return resolved
+
+
 def _extract_web_search_sources(raw_items: List[Any]) -> Optional[List[Any]]:
     """Retrieve any web-search sources returned in ``raw_items``."""
 
@@ -1364,7 +1396,9 @@ def _build_params(
         to match the Responses API schema.  Keys with falsey values are
         ignored.
     search_context_size:
-        Size of the search context when ``web_search`` is enabled.
+        Size of the search context when ``web_search`` is enabled.  Accepts
+        ``"low"``, ``"medium"`` or ``"high"``; legacy aliases
+        ``"small"``/``"large"`` are normalised to ``"low"``/``"high"``.
     json_mode:
         If ``True`` the model is asked to produce structured JSON output.
     expected_schema:
@@ -1375,8 +1409,9 @@ def _build_params(
     include:
         Optional list (or comma-separated string) of ``include`` fields to
         request from the Responses API. When ``web_search`` is enabled, the
-        ``web_search_call.action.sources`` include is added automatically
-        unless the caller explicitly supplies an alternative list.
+        ``web_search_call.action.sources`` include is added automatically. If
+        no ``include`` values were supplied, the helper defaults to requesting
+        only ``\"web_search_call.action.sources\"``.
     **extra:
         Any additional key-value pairs to forward directly to the API.
 
@@ -1401,7 +1436,8 @@ def _build_params(
         )
     all_tools = list(tools) if tools else []
     if web_search:
-        tool: Dict[str, Any] = {"type": "web_search", "search_context_size": search_context_size}
+        context_size = _normalise_search_context_size(search_context_size)
+        tool: Dict[str, Any] = {"type": "web_search", "search_context_size": context_size}
         filters = _normalise_web_search_filters(web_search_filters)
         if filters:
             domains = filters.get("filters")
@@ -1436,9 +1472,13 @@ def _build_params(
     include_values = _normalise_include_values(include)
     extra_include = _normalise_include_values(extra.pop("include", None))
     include_values.extend([val for val in extra_include if val not in include_values])
+    include_explicitly_requested = bool(include_values or include is not None or extra_include)
     if web_search:
-        if "web_search_call.action.sources" not in include_values:
-            include_values.append("web_search_call.action.sources")
+        if include_explicitly_requested:
+            if "web_search_call.action.sources" not in include_values:
+                include_values.append("web_search_call.action.sources")
+        else:
+            include_values = ["web_search_call.action.sources"]
     if include_values:
         params["include"] = include_values
     params.update(extra)
