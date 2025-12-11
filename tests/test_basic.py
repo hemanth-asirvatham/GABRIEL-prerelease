@@ -71,7 +71,7 @@ def test_build_params_embeds_web_search_tool_payload():
             "country": "GB",
             "type": "approximate",
         },
-        search_context_size="large",
+        search_context_size="high",
         json_mode=False,
         expected_schema=None,
         reasoning_effort=None,
@@ -79,7 +79,7 @@ def test_build_params_embeds_web_search_tool_payload():
     )
     assert any(tool["type"] == "retrieval" for tool in params["tools"])
     web_tool = next(tool for tool in params["tools"] if tool["type"] == "web_search")
-    assert web_tool["search_context_size"] == "large"
+    assert web_tool["search_context_size"] == "high"
     assert web_tool["filters"]["allowed_domains"] == ["openai.com"]
     assert web_tool["user_location"] == {"country": "GB", "type": "approximate"}
     assert "include" in params
@@ -126,6 +126,48 @@ def test_build_params_respects_user_include_and_dedup():
     # Should preserve user include, but not duplicate the sources entry
     assert params_search["include"].count("web_search_call.action.sources") == 1
     assert "message.output_text.logprobs" in params_search["include"]
+
+
+def test_build_params_defaults_include_to_web_sources_only_when_web_search_enabled():
+    params = openai_utils._build_params(
+        model="gpt-4o-mini",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        system_instruction="",
+        temperature=0.7,
+        tools=None,
+        tool_choice=None,
+        web_search=True,
+        web_search_filters=None,
+        search_context_size="medium",
+        json_mode=False,
+        expected_schema=None,
+        reasoning_effort=None,
+        reasoning_summary=None,
+    )
+    assert params["include"] == ["web_search_call.action.sources"]
+
+
+def test_build_params_normalises_search_context_size_aliases():
+    params = openai_utils._build_params(
+        model="gpt-4o-mini",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        system_instruction="",
+        temperature=0.7,
+        tools=None,
+        tool_choice=None,
+        web_search=True,
+        web_search_filters=None,
+        search_context_size="large",  # backwards compatible alias
+        json_mode=False,
+        expected_schema=None,
+        reasoning_effort=None,
+        reasoning_summary=None,
+    )
+
+    web_tool = next(tool for tool in params["tools"] if tool["type"] == "web_search")
+    assert web_tool["search_context_size"] == "high"
 
 
 def test_extract_web_search_sources_recurses_nested_payload():
