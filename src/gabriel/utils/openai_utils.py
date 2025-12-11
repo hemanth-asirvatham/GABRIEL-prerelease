@@ -4014,6 +4014,13 @@ async def get_all_responses(
     estimated_input_tokens_per_prompt = float(
         (dataset_stats.get("token_count") or 0) / max(1, len(prompts))
     )
+
+    def _effective_parallel_ceiling() -> int:
+        ceiling = max_parallel_ceiling
+        if throughput_ceiling_ppm is not None:
+            ceiling = min(ceiling, throughput_ceiling_ppm)
+        return max(1, ceiling)
+
     observed_input_tokens_total = 0.0
     observed_output_tokens_total = 0.0
     observed_reasoning_tokens_total = 0.0
@@ -4173,12 +4180,6 @@ async def get_all_responses(
             except Exception:
                 pass
         return total_in, total_out, total_reason
-
-    def _effective_parallel_ceiling() -> int:
-        ceiling = max_parallel_ceiling
-        if throughput_ceiling_ppm is not None:
-            ceiling = min(ceiling, throughput_ceiling_ppm)
-        return max(1, ceiling)
 
     concurrency_cap = min(concurrency_cap, _effective_parallel_ceiling())
 
