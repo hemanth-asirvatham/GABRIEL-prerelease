@@ -2383,7 +2383,7 @@ async def get_all_embeddings(
                 if isinstance(e, APITimeoutError):
                     error_message = (
                         f"OpenAI client timed out after {elapsed:.2f} s; "
-                        "consider increasing the timeout or reducing concurrency."
+                        "consider reducing concurrency."
                     )
                     detail = str(e)
                     if detail:
@@ -4060,6 +4060,7 @@ async def get_all_responses(
     last_wait_adjust = 0.0
     timeout_notes: Deque[str] = deque(maxlen=3)
     timeout_errors_since_last_status = 0
+    first_timeout_logged = False
     current_tokens_per_call = float(estimated_tokens_per_call)
     last_rate_limit_concurrency_change = 0.0
     restart_requested = False
@@ -4088,7 +4089,18 @@ async def get_all_responses(
             logger.log(level, formatted)
         else:
             logger.debug(message)
-        return first_time
+
+    def _log_timeout_once(message: str, note: str, *, dedup_key: Hashable) -> None:
+        nonlocal first_timeout_logged
+        if not first_timeout_logged:
+            _emit_first_error(message, dedup_key=dedup_key)
+            logger.warning(
+                "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
+                note,
+            )
+            first_timeout_logged = True
+        else:
+            logger.debug("Timeout error: %s", message)
 
     def _record_timeout_event(now: Optional[float] = None) -> None:
         ts = now if now is not None else time.time()
@@ -4229,7 +4241,7 @@ async def get_all_responses(
             if timeout_errors_since_last_status >= TIMEOUT_BURST_ALERT_THRESHOLD:
                 burst_msg = (
                     f"[timeouts] {timeout_errors_since_last_status} timeouts since last update; "
-                    "consider raising max_timeout or lowering concurrency if this persists."
+                    "consider reducing concurrency or checking network stability if this persists."
                 )
                 logger.warning(burst_msg)
                 if message_verbose:
@@ -4793,21 +4805,16 @@ async def get_all_responses(
                 if resps and all((isinstance(r, str) and not r.strip()) for r in resps):
                     if call_timeout is not None:
                         elapsed = time.time() - start
-                        warning_msg = (
-                            f"Timeout for {ident} after {call_timeout:.1f}s. Consider increasing 'max_timeout'."
-                        )
-                        logger.warning(warning_msg)
+                        warning_msg = f"Timeout for {ident} after {call_timeout:.1f}s."
                         status.num_timeout_errors += 1
                         timeout_errors_since_last_status += 1
                         timeout_note = f"{ident} timed out after {elapsed:.2f}s"
                         timeout_notes.append(timeout_note)
-                        if status.num_timeout_errors == 1:
-                            logger.warning(
-                                "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
-                                timeout_note,
-                            )
-                        else:
-                            logger.debug("Timeout error for %s: %s", ident, warning_msg)
+                        _log_timeout_once(
+                            warning_msg,
+                            timeout_note,
+                            dedup_key=("timeout", "call-timeout"),
+                        )
                         error_logs[ident].append(warning_msg)
                         if attempts_left - 1 > 0:
                             backoff = random.uniform(1, 2) * (
@@ -4901,9 +4908,7 @@ async def get_all_responses(
                     inflight.pop(ident, None)
                     await adjust_timeout()
                     if isinstance(e, APITimeoutError):
-                        base_message = (
-                            "OpenAI client timed out; consider increasing max_timeout or reducing concurrency."
-                        )
+                        base_message = "OpenAI client timed out; consider reducing concurrency."
                     else:
                         base_message = "API call timed out."
                     if error_detail:
@@ -4918,16 +4923,13 @@ async def get_all_responses(
                         type(e).__name__,
                         error_detail or None,
                     )
-                    _emit_first_error(error_message, dedup_key=timeout_key)
+                    _log_timeout_once(
+                        error_message,
+                        timeout_note,
+                        dedup_key=timeout_key,
+                    )
                     if restart_requested:
                         continue
-                    if status.num_timeout_errors == 1:
-                        logger.warning(
-                            "First timeout encountered (%s). Subsequent timeouts will be summarised in periodic status updates.",
-                            timeout_note,
-                        )
-                    else:
-                        logger.debug("Timeout error for %s: %s", ident, error_message)
                     error_logs[ident].append(error_message)
                     if attempts_left - 1 > 0:
                         backoff = random.uniform(1, 2) * (2 ** (max_retries - attempts_left))
