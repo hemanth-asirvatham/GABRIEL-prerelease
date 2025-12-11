@@ -183,7 +183,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2500
 # When a user does not explicitly set ``max_output_tokens``, we assume that each response
 # will contain roughly this many tokens.  This value is used solely for estimating cost
 # and determining how many parallel requests can safely run under the token budget.
-ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 500
+ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 400
 
 # Conservative headroom when translating observed rate limits into concurrency and limiter budgets.
 # Using less than the reported limit provides a buffer for short spikes and accounting inaccuracies.
@@ -390,11 +390,14 @@ def _estimate_cost(
     use_batch: bool,
     *,
     sample_size: int = _ESTIMATION_SAMPLE_SIZE,
+    estimated_output_tokens_per_prompt: int = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
 ) -> Optional[Dict[str, float]]:
     """Estimate input/output tokens and cost for a set of prompts.
 
     Returns a dict with keys ``input_tokens``, ``output_tokens``, ``input_cost``, ``output_cost``, and ``total_cost``.
     If the model pricing is unavailable, returns ``None``.
+    ``estimated_output_tokens_per_prompt`` controls the assumed output length when no
+    explicit ``max_output_tokens`` is supplied.
     """
     pricing = _lookup_model_pricing(model)
     if pricing is None:
@@ -417,7 +420,7 @@ def _estimate_cost(
     # as the input.
     if max_output_tokens is None:
         # Use the per‑prompt estimate for each response
-        output_tokens = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT * max(1, n) * len(prompts)
+        output_tokens = estimated_output_tokens_per_prompt * max(1, n) * len(prompts)
     else:
         output_tokens = max_output_tokens * max(1, n) * len(prompts)
     cost_in = (input_tokens / 1_000_000) * pricing["input"]
@@ -435,12 +438,18 @@ def _estimate_cost(
 
 
 def _estimate_tokens_per_call(
-    avg_input_tokens: float, expected_output_tokens: Optional[int], n: int
+    avg_input_tokens: float,
+    expected_output_tokens: Optional[int],
+    n: int,
+    *,
+    estimated_output_tokens_per_prompt: int = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
 ) -> float:
     """Return a conservative token estimate per call for planning throughput."""
 
     gating_output = (
-        expected_output_tokens if expected_output_tokens is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+        expected_output_tokens
+        if expected_output_tokens is not None
+        else estimated_output_tokens_per_prompt
     )
     gating_output *= OUTPUT_TOKEN_HEADROOM
     tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
@@ -640,6 +649,7 @@ def _print_run_banner(
     estimated_cost: Optional[Dict[str, float]],
     max_output_tokens: Optional[int],
     stats: Dict[str, Any],
+    estimated_output_tokens_per_prompt: int = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
     verbose: bool = True,
 ) -> None:
     """Print an immediate run overview so users see progress right away."""
@@ -664,7 +674,10 @@ def _print_run_banner(
     if stats and prompts:
         avg_input_tokens = (stats.get("token_count") or 0) / max(1, len(prompts))
         tokens_per_call = _estimate_tokens_per_call(
-            avg_input_tokens, max_output_tokens, n
+            avg_input_tokens,
+            max_output_tokens,
+            n,
+            estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
         )
     if estimated_cost:
         token_usage = (
@@ -816,6 +829,7 @@ def _print_usage_overview(
     show_static_sections: bool = True,
     stats: Optional[Dict[str, Any]] = None,
     sample_size: int = _ESTIMATION_SAMPLE_SIZE,
+    estimated_output_tokens_per_prompt: int = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
     heading: Optional[str] = "OpenAI API usage summary",
     show_prompt_stats: bool = True,
 ) -> None:
@@ -897,7 +911,10 @@ def _print_usage_overview(
             1, len(prompts)
         )
         tokens_per_call = _estimate_tokens_per_call(
-            avg_input_tokens, max_output_tokens, n
+            avg_input_tokens,
+            max_output_tokens,
+            n,
+            estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
         )
         def _pf(val: Optional[str]) -> Optional[float]:
             try:
@@ -2634,6 +2651,7 @@ async def get_all_responses(
     max_output_tokens: Optional[int] = None,
     # legacy alias
     max_tokens: Optional[int] = None,
+    estimated_output_tokens_per_prompt: Optional[int] = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
     temperature: float = 0.9,
     json_mode: bool = False,
     expected_schema: Optional[Dict[str, Any]] = None,
@@ -2660,8 +2678,7 @@ async def get_all_responses(
     # average prompt length.  See `_print_usage_overview` for more
     # details on how the concurrency cap is calculated.  When web
     # search is enabled the helper automatically lowers this ceiling to
-    # one-third of the requested value to avoid overwhelming the search
-    # tool.
+    # half of the requested value to avoid overwhelming the search tool.
     n_parallels: int = 650,
     max_retries: int = 3,
     timeout_factor: float = 2.5,
@@ -2706,6 +2723,11 @@ async def get_all_responses(
     The API base URL can be overridden per call via ``base_url`` or globally
     with the ``OPENAI_BASE_URL`` environment variable.
 
+    When no ``max_output_tokens`` cutoff is supplied, the helper assumes each
+    response will contain roughly ``estimated_output_tokens_per_prompt`` tokens
+    (default: 400) for cost and throughput planning.  Adjust this parameter if
+    you expect substantially longer or shorter generations.
+
     A dynamic timeout mechanism keeps long‑running jobs efficient: the function
     initially allows unlimited time for each request, then observes how long
     successful responses take and sets a timeout based on the 90th percentile of
@@ -2733,8 +2755,8 @@ async def get_all_responses(
     ``timeout_burst_window`` seconds.
 
     Because every prompt that uses web search fans out into additional tool
-    calls, the helper automatically lowers the requested ``n_parallels`` to one
-    third of its original value whenever ``web_search`` is enabled.  This guard
+    calls, the helper automatically lowers the requested ``n_parallels`` to half
+    of its original value whenever ``web_search`` is enabled.  This guard
     reduces the chance of exhausting the search tool’s own quotas and keeps the
     Responses API from being flooded with the much longer prompts that web
     search produces.  You can still request a smaller value manually if needed,
@@ -2881,6 +2903,16 @@ async def get_all_responses(
     if not use_dummy and not using_custom_response_fn:
         _require_api_key()
     _ensure_runtime_dependencies(verbose=message_verbose)
+    try:
+        estimated_output_tokens_per_prompt = int(
+            ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+            if estimated_output_tokens_per_prompt is None
+            else estimated_output_tokens_per_prompt
+        )
+    except Exception:
+        estimated_output_tokens_per_prompt = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+    if estimated_output_tokens_per_prompt <= 0:
+        estimated_output_tokens_per_prompt = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
     dataset_stats = _estimate_dataset_stats(prompts)
     cost_estimate = _estimate_cost(
         prompts,
@@ -2889,6 +2921,7 @@ async def get_all_responses(
         model,
         use_batch,
         sample_size=_ESTIMATION_SAMPLE_SIZE,
+        estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
     )
     _print_run_banner(
         prompts=prompts,
@@ -2898,6 +2931,7 @@ async def get_all_responses(
         estimated_cost=cost_estimate,
         max_output_tokens=max_output_tokens,
         stats=dataset_stats,
+        estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
         verbose=message_verbose,
     )
     response_param_names: Set[str] = set()
@@ -3055,7 +3089,7 @@ async def get_all_responses(
         )
         logger.warning(web_search_warning_text)
     if web_search_active and not use_batch:
-        reduced = max(1, requested_n_parallels // 3)
+        reduced = max(1, int(math.ceil(requested_n_parallels * 0.5)))
         if reduced < requested_n_parallels:
             requested_n_parallels = reduced
             web_search_parallel_note = (
@@ -3084,7 +3118,7 @@ async def get_all_responses(
     )
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     initial_estimated_output_tokens = (
-        cutoff if cutoff is not None else ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
+        cutoff if cutoff is not None else estimated_output_tokens_per_prompt
     )
     planning_output_tokens = initial_estimated_output_tokens
     # Always load or initialise the CSV
@@ -3240,6 +3274,7 @@ async def get_all_responses(
             show_static_sections=not _USAGE_SHEET_PRINTED,
             stats=todo_stats,
             sample_size=_ESTIMATION_SAMPLE_SIZE,
+            estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
             heading="Run limits",
             show_prompt_stats=False,
         )
