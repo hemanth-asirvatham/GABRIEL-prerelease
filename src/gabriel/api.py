@@ -805,12 +805,12 @@ async def rank(
     recursive_final_round_multiplier: int = 3,
     recursive_cut_attr: Optional[str] = None,
     recursive_cut_side: str = "top",
-    recursive_rate_first_round: bool = False,
+    recursive_rate_first_round: bool = True,
     recursive_rewrite_func: Optional[Callable[[str, str, int], str]] = None,
     recursive_rewrite_text_col: str = "text",
     recursive_keep_stage_columns: bool = True,
     recursive_add_stage_suffix: bool = True,
-    initial_rating_pass: bool = False,
+    initial_rating_pass: bool = True,
     rate_kwargs: Optional[Dict[str, Any]] = None,
     id_column: Optional[str] = None,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
@@ -860,7 +860,9 @@ async def rank(
     recursive_*:
         Settings for recursive pruning (fraction kept, minimum remaining, etc.).
     initial_rating_pass:
-        Whether to run a preliminary rating stage before comparisons.
+        Whether to run a preliminary rating stage before comparisons. Enabled by
+        default to give the tournament grounded starting scores; set to
+        ``False`` to skip the rating seed.
     rate_kwargs:
         Additional configuration forwarded to the preliminary rating stage.
     id_column:
