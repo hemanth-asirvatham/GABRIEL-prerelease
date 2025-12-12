@@ -392,16 +392,24 @@ def _coerce_bool_value(value: Any) -> Optional[bool]:
 
 
 def _coerce_numeric_value(value: Any) -> Optional[float]:
+    if _is_na(value):
+        return None
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        result = float(value)
+        if math.isnan(result):
+            return None
+        return result
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
             return None
         try:
-            return float(stripped)
+            result = float(stripped)
+            if math.isnan(result):
+                return None
+            return result
         except ValueError:
             return None
     return None
