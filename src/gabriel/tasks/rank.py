@@ -148,6 +148,10 @@ class RankConfig:
     rate_kwargs:
         Optional dictionary of overrides forwarded to the rating task
         whenever it is invoked (either as a seed or during recursion).
+    primer_scores, primer_scale, primer_center:
+        Optional manual primers to seed the Bradley–Terry rating state.
+        Scores are centred per attribute when ``primer_center`` is
+        ``True`` and scaled by ``primer_scale``.
     """
 
     attributes: Union[Dict[str, str], List[str]]
@@ -182,6 +186,13 @@ class RankConfig:
     # Optional single pass rating seed controls
     initial_rating_pass: bool = True
     rate_kwargs: Dict[str, Any] = field(default_factory=dict)
+    # Optional manual primers to seed ratings (applies to both recursive and
+    # non-recursive runs). Mapping from identifier -> {attribute: score}.
+    # Scores are centred by attribute and scaled by ``primer_scale`` before
+    # being injected into the Bradley–Terry state.
+    primer_scores: Optional[Dict[str, Dict[str, float]]] = None
+    primer_scale: float = 1.0
+    primer_center: bool = True
 
     def __post_init__(self) -> None:
         if self.additional_instructions is not None:
@@ -257,7 +268,6 @@ class Rank:
         # large standard errors.  If you observe inflated SE values,
         # consider increasing this further (e.g. to 1e‑4).
         self._SE_RIDGE = 1e-5
-
         # The maximum number of candidate pairs to consider per pairing round.
         # When the number of items becomes very large (e.g. tens of thousands),
         # evaluating all possible pairs is intractable.  We therefore cap the
@@ -267,6 +277,53 @@ class Rank:
         # large data sets: for example, with 10 000 items and a cap of
         # 200 000, each item will only consider approximately 20 neighbours.
         self._MAX_CANDIDATE_PAIRS_PER_ROUND = 200_000
+
+    # ------------------------------------------------------------------
+    def _apply_primer(
+        self,
+        ratings: Dict[str, Dict[str, float]],
+        primer: Optional[Dict[str, Dict[str, float]]],
+        attr_keys: List[str],
+    ) -> None:
+        """Inject user-provided primer scores into the rating state.
+
+        Primers are centred per-attribute if ``primer_center`` is True and
+        scaled by ``primer_scale``. Missing attributes are ignored.
+        """
+
+        if not primer:
+            return
+
+        # normalise per attribute
+        attr_to_vals: Dict[str, List[float]] = {a: [] for a in attr_keys}
+        for ident, amap in primer.items():
+            if ident not in ratings:
+                continue
+            for attr in attr_keys:
+                if attr in amap and amap[attr] is not None:
+                    try:
+                        attr_to_vals[attr].append(float(amap[attr]))
+                    except Exception:
+                        continue
+
+        attr_offset: Dict[str, float] = {a: 0.0 for a in attr_keys}
+        if self.cfg.primer_center:
+            for attr, vals in attr_to_vals.items():
+                if vals:
+                    attr_offset[attr] = float(np.mean(vals))
+
+        scale = self.cfg.primer_scale or 1.0
+        for ident, amap in primer.items():
+            if ident not in ratings:
+                continue
+            for attr in attr_keys:
+                if attr not in amap or amap[attr] is None:
+                    continue
+                try:
+                    val = (float(amap[attr]) - attr_offset[attr]) * scale
+                    ratings[ident][attr] = val
+                except Exception:
+                    continue
 
         # ------------------------------------------------------------------
         # Public API for adding multiway rankings
@@ -1049,23 +1106,42 @@ class Rank:
             work_df[rewrite_col] = work_df["text"]
         work_df["identifier"] = work_df["identifier"].astype(str)
 
+        original_cols = list(df.columns)
+        original_df = df.reset_index(drop=True).copy()
+        original_df["identifier"] = work_df["identifier"]
+        latest_text: Dict[str, str] = {
+            ident: txt for ident, txt in zip(work_df["identifier"], work_df["text"])
+        }
+
         base_folder = os.path.join(
             self.cfg.save_dir, f"{self.cfg.file_name}_recursive"
         )
         os.makedirs(base_folder, exist_ok=True)
 
-        cumulative_scores: Dict[str, Dict[str, float]] = {
-            attr: {ident: 0.0 for ident in work_df["identifier"]}
-            for attr in attr_list
-        }
-        exit_stage: Dict[str, Optional[int]] = {
-            ident: None for ident in work_df["identifier"]
-        }
-        stage_dfs: List[pd.DataFrame] = []
-        current_ids = list(work_df["identifier"])
-        all_ids = list(current_ids)
+        def _compute_stage_zscores(
+            stage_df: pd.DataFrame,
+        ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+            zscores: Dict[str, Dict[str, float]] = {attr: {} for attr in attr_list}
+            scales: Dict[str, float] = {attr: 1.0 for attr in attr_list}
+            for attr in attr_list:
+                raw_col = f"{attr}_raw"
+                source_col = raw_col if raw_col in stage_df.columns else attr
+                if source_col not in stage_df.columns:
+                    continue
+                series = pd.to_numeric(stage_df[source_col], errors="coerce")
+                mean = series.mean()
+                std = series.std(ddof=0)
+                if std == 0 or np.isnan(std):
+                    normed = pd.Series([0.0] * len(series), index=stage_df.index)
+                    scales[attr] = 1.0
+                else:
+                    normed = (series - mean) / std
+                    scales[attr] = float(std) if raw_col in stage_df.columns else 1.0
+                for ident, val in zip(stage_df["identifier"], normed):
+                    zscores[attr][str(ident)] = float(val)
+            return zscores, scales
 
-        def _select_next_ids(active_ids: Sequence[str]) -> List[str]:
+        def _select_next_ids(active_ids: Sequence[str], stage_zs: Dict[str, Dict[str, float]]) -> List[str]:
             n = len(active_ids)
             if n <= self.cfg.recursive_min_remaining:
                 return list(active_ids)
@@ -1073,25 +1149,10 @@ class Rank:
                 int(math.ceil(n * self.cfg.recursive_fraction)),
                 self.cfg.recursive_min_remaining,
             )
-            series = pd.Series(
-                {i: cumulative_scores[cut_attr][i] for i in active_ids},
-                name="cumulative",
-            )
+            scores = {i: stage_zs.get(cut_attr, {}).get(i, 0.0) for i in active_ids}
             ascending = cut_side == "bottom"
-            ranked = series.sort_values(ascending=ascending)
-            return ranked.head(keep_n).index.tolist()
-
-        def _update_cumulative(stage_df: pd.DataFrame) -> None:
-            for attr in attr_list:
-                raw_col = f"{attr}_raw"
-                col_name = raw_col if raw_col in stage_df.columns else attr
-                if col_name not in stage_df.columns:
-                    continue
-                for ident, value in zip(stage_df["identifier"], stage_df[col_name]):
-                    try:
-                        cumulative_scores[attr][str(ident)] += float(value)
-                    except Exception:
-                        continue
+            ranked = sorted(active_ids, key=lambda x: scores.get(x, 0.0), reverse=not ascending)
+            return ranked[:keep_n]
 
         def _maybe_rewrite_texts(
             df_local: pd.DataFrame,
@@ -1103,13 +1164,13 @@ class Rank:
             mask = df_local["identifier"].isin(ids_to_keep)
             rewritten: List[str] = []
             for _, row in df_local[mask].iterrows():
-                rewritten.append(
-                    self.cfg.recursive_rewrite_func(
-                        row[self.cfg.recursive_rewrite_text_col],
-                        row["identifier"],
-                        stage_idx,
-                    )
+                new_text = self.cfg.recursive_rewrite_func(
+                    row[self.cfg.recursive_rewrite_text_col],
+                    row["identifier"],
+                    stage_idx,
                 )
+                rewritten.append(new_text)
+                latest_text[str(row["identifier"])] = new_text
             df_local.loc[mask, self.cfg.recursive_rewrite_text_col] = rewritten
             if (
                 self.cfg.recursive_rewrite_text_col != "text"
@@ -1122,6 +1183,10 @@ class Rank:
 
         stage_idx = 0
         final_stage_df: Optional[pd.DataFrame] = None
+        stage_z_history: Dict[int, Dict[str, Dict[str, float]]] = {}
+        exit_stage: Dict[str, Optional[int]] = {ident: None for ident in work_df["identifier"]}
+        current_ids = list(work_df["identifier"])
+        stage_primer = self.cfg.primer_scores or None
 
         while current_ids:
             stage_idx += 1
@@ -1152,6 +1217,9 @@ class Rank:
             stage_cfg.n_rounds = stage_rounds
             stage_cfg.file_name = self.cfg.file_name
             stage_cfg.rate_kwargs = dict(self.cfg.rate_kwargs)
+            stage_cfg.initial_rating_pass = False
+            stage_cfg.primer_scores = stage_primer
+            stage_cfg.primer_center = False
 
             stage_df_in = work_df[work_df["identifier"].isin(current_ids)].copy()
 
@@ -1168,6 +1236,7 @@ class Rank:
                     reset_files=reset_files,
                     runtime_kwargs=kwargs,
                 )
+                stage_df_out["identifier"] = stage_df_in["identifier"].values
             else:
                 stage_ranker = Rank(stage_cfg, template=self.template)
                 stage_df_out = await stage_ranker.run(
@@ -1178,20 +1247,8 @@ class Rank:
                     **kwargs,
                 )
 
-            if self.cfg.recursive_keep_stage_columns:
-                keep_cols = [c for c in stage_df_out.columns if c != "text"]
-                if self.cfg.recursive_add_stage_suffix:
-                    renamed = {
-                        c: f"stage{stage_idx}_{c}"
-                        for c in keep_cols
-                        if c != "identifier"
-                    }
-                    stage_df_clean = stage_df_out.rename(columns=renamed)
-                else:
-                    stage_df_clean = stage_df_out.copy()
-                stage_dfs.append(stage_df_clean.drop(columns=["text"], errors="ignore"))
-
-            _update_cumulative(stage_df_out)
+            stage_zs, stage_scales = _compute_stage_zscores(stage_df_out)
+            stage_z_history[stage_idx] = stage_zs
 
             if is_final_stage:
                 for ident in current_ids:
@@ -1199,101 +1256,87 @@ class Rank:
                 final_stage_df = stage_df_out
                 break
 
-            next_ids = _select_next_ids(current_ids)
+            next_ids = _select_next_ids(current_ids, stage_zs)
             removed = set(current_ids) - set(next_ids)
             for ident in removed:
                 exit_stage[ident] = stage_idx
+            stage_primer = {
+                ident: {
+                    attr: stage_zs.get(attr, {}).get(ident, 0.0) * stage_scales.get(attr, 1.0)
+                    for attr in attr_list
+                }
+                for ident in next_ids
+            }
             work_df = _maybe_rewrite_texts(work_df, next_ids, stage_idx)
             current_ids = next_ids
 
         if final_stage_df is None:
             final_stage_df = work_df[work_df["identifier"].isin(current_ids)].copy()
 
-        cum_rows = []
-        for ident in all_ids:
-            row = {"identifier": ident}
+        # Build final output
+        stage_cols: Dict[str, List[Optional[float]]] = {}
+        final_attr_cols: Dict[str, List[Optional[float]]] = {a: [] for a in attr_list}
+        exit_col: List[Optional[int]] = []
+
+        # build a consolidated map of stage-wise z-scores per identifier
+        stage_order = sorted(stage_z_history.keys())
+        id_list = list(original_df["identifier"])
+        for ident in id_list:
+            ident_stage = exit_stage.get(ident)
+            exit_col.append(ident_stage)
+            last_attr_vals: Dict[str, Optional[float]] = {a: None for a in attr_list}
+            for stage in stage_order:
+                zs = stage_z_history.get(stage, {})
+                for attr in attr_list:
+                    col_name = f"stage{stage}_{attr}"
+                    stage_cols.setdefault(col_name, []).append(zs.get(attr, {}).get(ident))
+                    if ident_stage == stage:
+                        last_attr_vals[attr] = zs.get(attr, {}).get(ident)
             for attr in attr_list:
-                row[f"cumulative_{attr}"] = cumulative_scores[attr][ident]
-            cum_rows.append(row)
-        cum_df = pd.DataFrame(cum_rows)
+                final_attr_cols[attr].append(last_attr_vals[attr])
 
-        exit_df = pd.DataFrame(
-            {"identifier": list(exit_stage.keys()), "exit_stage": list(exit_stage.values())}
-        )
+        ordered_df = original_df.copy()
+        ordered_df[text_column] = ordered_df["identifier"].map(latest_text)
+        ordered_df["exit_stage"] = exit_col
+        for attr, vals in final_attr_cols.items():
+            ordered_df[attr] = vals
+        for col, vals in stage_cols.items():
+            ordered_df[col] = vals
 
-        final_cols = [c for c in final_stage_df.columns if c != "identifier"]
-        final_raw = final_stage_df.rename(
-            columns={
-                c: ("final_text" if c == "text" else f"final_{c}")
-                for c in final_cols
-            }
-        )
+        # Compute overall ranking: later stages outrank earlier; within a stage, sort by cut_attr z-score
+        cut_scores = {i: ordered_df.loc[idx, cut_attr] if cut_attr in ordered_df else None for idx, i in enumerate(id_list)}
+        def _rank_key(idx: int) -> Tuple[int, float]:
+            ident = id_list[idx]
+            stage_num = ordered_df.loc[idx, "exit_stage"] or 0
+            score = cut_scores.get(ident)
+            if score is None or np.isnan(score):
+                score = -np.inf if cut_side == "top" else np.inf
+            if cut_side == "bottom":
+                score = -score
+            return (stage_num, score)
 
-        latest_text_df = work_df[["identifier", "text"]].copy()
+        order_indices = sorted(range(len(id_list)), key=_rank_key, reverse=True)
+        ordered_df = ordered_df.iloc[order_indices].reset_index(drop=True)
+        ordered_df.insert(0, "overall_rank", range(1, len(ordered_df) + 1))
 
-        out = (
-            cum_df.merge(exit_df, on="identifier", how="left")
-            .merge(latest_text_df, on="identifier", how="left")
-            .merge(final_raw, on="identifier", how="left")
-        )
-        if self.cfg.recursive_keep_stage_columns and stage_dfs:
-            for sdf in stage_dfs:
-                out = out.merge(sdf, on="identifier", how="left")
-
-        prefixed_cum = [c for c in out.columns if c.startswith("cumulative_")]
-        prefixed_final = [c for c in out.columns if c.startswith("final_")]
-        ordered_cols = ["identifier", "text", "exit_stage"] + prefixed_cum + prefixed_final
-        remaining = [c for c in out.columns if c not in ordered_cols]
-        out = out[ordered_cols + remaining]
-
-        def _attach_rank(
-            df_local: pd.DataFrame, score_col: str, rank_col: str, *, ascending: bool
-        ) -> None:
-            if score_col not in df_local.columns:
-                return
-            scores = pd.to_numeric(df_local[score_col], errors="coerce")
-            df_local[rank_col] = pd.Series(
-                scores.rank(method="dense", ascending=ascending, na_option="keep"),
-                dtype="Int64",
-            )
-
-        primary_candidates = [
-            f"final_{cut_attr}",
-            f"final_{cut_attr}_raw",
-            f"cumulative_{cut_attr}",
-            cut_attr,
-        ]
-        primary_col = next((c for c in primary_candidates if c in out.columns), None)
-        ascending_primary = cut_side == "bottom"
+        final_columns: List[str] = []
+        if text_column in original_cols:
+            for col in original_cols:
+                final_columns.append(col)
+                if col == text_column:
+                    final_columns.append("overall_rank")
+        else:
+            final_columns = ["overall_rank"] + [c for c in original_cols]
         for attr in attr_list:
-            candidates = [
-                f"final_{attr}",
-                f"final_{attr}_raw",
-                f"cumulative_{attr}",
-                attr,
-            ]
-            score_col = next((c for c in candidates if c in out.columns), None)
-            if not score_col:
-                continue
-            rank_col = f"{attr}_rank"
-            _attach_rank(out, score_col, rank_col, ascending=False)
-            if primary_col is None and attr == cut_attr:
-                primary_col = score_col
-
-        if primary_col:
-            _attach_rank(
-                out,
-                primary_col,
-                f"overall_rank_by_{cut_attr}",
-                ascending=ascending_primary,
-            )
-            out = out.sort_values(
-                by=primary_col, ascending=ascending_primary, na_position="last"
-            ).reset_index(drop=True)
+            final_columns.append(attr)
+        final_columns.append("exit_stage")
+        final_columns.extend(sorted(stage_cols.keys()))
+        final_columns = [c for c in final_columns if c in ordered_df.columns and c != "identifier"]
+        ordered_df = ordered_df[final_columns]
 
         final_path = os.path.join(base_folder, "recursive_final.csv")
-        out.to_csv(final_path, index=False)
-        return out
+        ordered_df.to_csv(final_path, index=False)
+        return ordered_df
 
     # ------------------------------------------------------------------
     # Main ranking loop
@@ -1474,6 +1517,8 @@ class Rank:
             i: {a: 0.0 for a in attr_keys} for i in item_ids
         }
         rate_seed: Dict[str, Dict[str, float]] = {}
+        if self.cfg.primer_scores:
+            self._apply_primer(ratings, self.cfg.primer_scores, attr_keys)
         if self.cfg.initial_rating_pass and attr_keys:
             print(
                 "[Rank] Running initial rating pass to seed pairwise comparisons "
@@ -1558,15 +1603,9 @@ class Rank:
                 # z‑scores
                 z_map = zscores_local.get(attr, {i: np.nan for i in item_ids})
                 df_proc[attr] = df_proc["_id"].map(z_map)
-                # add dense rank to make top performers obvious in outputs
-                score_series = pd.to_numeric(df_proc[attr], errors="coerce")
-                rank_series = score_series.rank(
-                    method="dense", ascending=False, na_option="keep"
-                )
-                df_proc[f"{attr}_rank"] = pd.Series(rank_series, dtype="Int64")
 
             # Reorder columns: original user columns first (excluding the internal ``_id``),
-            # then for each attribute the z‑score column, a rank, followed by raw scores and
+            # then for each attribute the z‑score column followed by raw scores and
             # standard errors.
             original_cols = [
                 c for c in df.columns
@@ -1574,7 +1613,6 @@ class Rank:
             new_cols: List[str] = []
             for attr in attr_keys:
                 new_cols.append(attr)
-                new_cols.append(f"{attr}_rank")
                 new_cols.append(f"{attr}_raw")
                 new_cols.append(f"{attr}_se")
             final_cols = original_cols + new_cols
