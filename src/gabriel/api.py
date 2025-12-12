@@ -812,6 +812,9 @@ async def rank(
     recursive_add_stage_suffix: bool = True,
     initial_rating_pass: bool = True,
     rate_kwargs: Optional[Dict[str, Any]] = None,
+    primer_scores: Optional[Dict[str, Dict[str, float]]] = None,
+    primer_scale: float = 1.0,
+    primer_center: bool = True,
     id_column: Optional[str] = None,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
     get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
@@ -865,6 +868,10 @@ async def rank(
         ``False`` to skip the rating seed.
     rate_kwargs:
         Additional configuration forwarded to the preliminary rating stage.
+    primer_scores, primer_scale, primer_center:
+        Optional seed ratings to prime the Bradley–Terry loop. Scores are
+        centred per attribute when ``primer_center`` is ``True`` and scaled
+        by ``primer_scale``.
     id_column:
         Optional existing identifier column; otherwise hashes of ``column_name``
         are generated.
@@ -917,6 +924,9 @@ async def rank(
         recursive_add_stage_suffix=recursive_add_stage_suffix,
         initial_rating_pass=initial_rating_pass,
         rate_kwargs=rate_kwargs or {},
+        primer_scores=primer_scores,
+        primer_scale=primer_scale,
+        primer_center=primer_center,
         **cfg_kwargs,
     )
     result_df = await Rank(cfg, template_path=template_path).run(

@@ -960,6 +960,42 @@ def test_rank_outputs_standard_errors(tmp_path):
     assert np.isfinite(df["clarity_se"].fillna(0.0)).all()
 
 
+def test_rank_primer_centering():
+    cfg = RankConfig(attributes={"clarity": ""})
+    task = Rank(cfg)
+    ratings = {"a": {"clarity": 0.0}, "b": {"clarity": 0.0}}
+    primer = {"a": {"clarity": 10.0}, "b": {"clarity": 30.0}}
+    task._apply_primer(ratings, primer, ["clarity"])
+    assert ratings["a"]["clarity"] == -10.0
+    assert ratings["b"]["clarity"] == 10.0
+
+
+def test_recursive_rank_outputs(tmp_path):
+    cfg = RankConfig(
+        attributes={"clarity": ""},
+        save_dir=str(tmp_path),
+        file_name="rankings.csv",
+        use_dummy=True,
+        recursive=True,
+        recursive_fraction=0.5,
+        recursive_min_remaining=1,
+        recursive_rate_first_round=False,
+        n_rounds=1,
+        matches_per_round=1,
+        n_parallels=4,
+    )
+    task = Rank(cfg)
+    data = pd.DataFrame({"text": ["alpha", "beta", "gamma"]})
+    df = asyncio.run(task.run(data, column_name="text"))
+    assert "overall_rank" in df.columns
+    assert "exit_stage" in df.columns
+    assert "clarity" in df.columns
+    assert any(col.startswith("stage1_") for col in df.columns)
+    assert "identifier" not in df.columns
+    assert not any(col.startswith("final_") for col in df.columns)
+    assert not any(col.startswith("cumulative_") for col in df.columns)
+
+
 def test_api_rank_hides_raw_columns(tmp_path):
     data = pd.DataFrame({"text": ["first", "second"]})
     df = asyncio.run(
