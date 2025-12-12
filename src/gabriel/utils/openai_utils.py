@@ -4339,7 +4339,7 @@ async def get_all_responses(
                 minimum_minutes = max(1, estimated_minutes)
                 msg_lines.append(
                     "[token estimate] Updated time estimate: minimum of "
-                    f"{minimum_minutes} minute{'s' if minimum_minutes != 1 else ''}."
+                    f"{minimum_minutes} minute{'s' if minimum_minutes != 1 else ''}. Moving to a higher usage tier raises rate limits and allows much faster runs."
                 )
         if not quiet:
             for line in msg_lines:
