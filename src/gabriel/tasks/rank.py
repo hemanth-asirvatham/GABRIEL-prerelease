@@ -126,6 +126,8 @@ class RankConfig:
     recursive_rate_first_round:
         If ``True`` perform a :class:`Rate` sweep before the first
         recursive stage and seed subsequent rounds with those scores.
+        This is enabled by default so the initial culling uses grounded
+        single-pass ratings; set to ``False`` to skip.
     recursive_rewrite_func, recursive_rewrite_text_col:
         Optional hook to rewrite surviving passages between stages and
         the column where rewritten text should be stored.
@@ -141,6 +143,8 @@ class RankConfig:
         Enables a one-off :class:`Rate` pass before standard ranking
         rounds.  The centred scores from that pass seed the initial
         Bradley–Terry ratings which helps pairing focus on refinement.
+        Enabled by default; set ``initial_rating_pass=False`` if you
+        want to start directly with pairwise comparisons.
     rate_kwargs:
         Optional dictionary of overrides forwarded to the rating task
         whenever it is invoked (either as a seed or during recursion).
@@ -170,13 +174,13 @@ class RankConfig:
     recursive_final_round_multiplier: int = 3
     recursive_cut_attr: Optional[str] = None
     recursive_cut_side: str = "top"
-    recursive_rate_first_round: bool = False
+    recursive_rate_first_round: bool = True
     recursive_rewrite_func: Optional[Callable[[str, str, int], str]] = None
     recursive_rewrite_text_col: str = "text"
     recursive_keep_stage_columns: bool = True
     recursive_add_stage_suffix: bool = True
     # Optional single pass rating seed controls
-    initial_rating_pass: bool = False
+    initial_rating_pass: bool = True
     rate_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -708,7 +712,12 @@ class Rank:
             var_a = se_agg.get(a, 1.0) ** 2
             var_b = se_agg.get(b, 1.0) ** 2
             param_unc = var_a + var_b
-            score = outcome_var * param_unc
+            # Encourage comparisons between similarly‑rated items (high information
+            # gain) while still prioritising uncertain pairs.  The closeness term
+            # dampens pairings with large rating gaps to tease out subtle ordering
+            # differences.
+            closeness = 1.0 / (1.0 + abs(diff))
+            score = outcome_var * param_unc * closeness
             scored_pairs.append((score, a, b))
         scored_pairs.sort(key=lambda x: x[0], reverse=True)
         needed: Dict[str, int] = {i: mpr for i in item_ids}
@@ -1147,6 +1156,10 @@ class Rank:
             stage_df_in = work_df[work_df["identifier"].isin(current_ids)].copy()
 
             if stage_idx == 1 and self.cfg.recursive_rate_first_round:
+                print(
+                    "[Rank] Recursive stage 1: running Rate for initial culling "
+                    "(disable with recursive_rate_first_round=False)."
+                )
                 stage_df_out = await self._run_rate_pass(
                     stage_df_in,
                     column_name="text",
@@ -1232,6 +1245,51 @@ class Rank:
         ordered_cols = ["identifier", "text", "exit_stage"] + prefixed_cum + prefixed_final
         remaining = [c for c in out.columns if c not in ordered_cols]
         out = out[ordered_cols + remaining]
+
+        def _attach_rank(
+            df_local: pd.DataFrame, score_col: str, rank_col: str, *, ascending: bool
+        ) -> None:
+            if score_col not in df_local.columns:
+                return
+            scores = pd.to_numeric(df_local[score_col], errors="coerce")
+            df_local[rank_col] = pd.Series(
+                scores.rank(method="dense", ascending=ascending, na_option="keep"),
+                dtype="Int64",
+            )
+
+        primary_candidates = [
+            f"final_{cut_attr}",
+            f"final_{cut_attr}_raw",
+            f"cumulative_{cut_attr}",
+            cut_attr,
+        ]
+        primary_col = next((c for c in primary_candidates if c in out.columns), None)
+        ascending_primary = cut_side == "bottom"
+        for attr in attr_list:
+            candidates = [
+                f"final_{attr}",
+                f"final_{attr}_raw",
+                f"cumulative_{attr}",
+                attr,
+            ]
+            score_col = next((c for c in candidates if c in out.columns), None)
+            if not score_col:
+                continue
+            rank_col = f"{attr}_rank"
+            _attach_rank(out, score_col, rank_col, ascending=False)
+            if primary_col is None and attr == cut_attr:
+                primary_col = score_col
+
+        if primary_col:
+            _attach_rank(
+                out,
+                primary_col,
+                f"overall_rank_by_{cut_attr}",
+                ascending=ascending_primary,
+            )
+            out = out.sort_values(
+                by=primary_col, ascending=ascending_primary, na_position="last"
+            ).reset_index(drop=True)
 
         final_path = os.path.join(base_folder, "recursive_final.csv")
         out.to_csv(final_path, index=False)
@@ -1417,6 +1475,10 @@ class Rank:
         }
         rate_seed: Dict[str, Dict[str, float]] = {}
         if self.cfg.initial_rating_pass and attr_keys:
+            print(
+                "[Rank] Running initial rating pass to seed pairwise comparisons "
+                "(disable with initial_rating_pass=False)."
+            )
             rate_dir = os.path.join(self.cfg.save_dir, f"{base_name}_initial_rate")
             os.makedirs(rate_dir, exist_ok=True)
             rate_df = await self._run_rate_pass(
@@ -1434,6 +1496,11 @@ class Rank:
                 item_ids=item_ids,
                 attr_keys=attr_keys,
             )
+            if rate_seed:
+                print(
+                    "[Rank] Initial rating pass complete. Seeding tournament with "
+                    "centred ratings from the rate stage."
+                )
             for item_id, attr_map in rate_seed.items():
                 for attr, val in attr_map.items():
                     ratings[item_id][attr] = val
@@ -1491,14 +1558,23 @@ class Rank:
                 # z‑scores
                 z_map = zscores_local.get(attr, {i: np.nan for i in item_ids})
                 df_proc[attr] = df_proc["_id"].map(z_map)
+                # add dense rank to make top performers obvious in outputs
+                score_series = pd.to_numeric(df_proc[attr], errors="coerce")
+                rank_series = score_series.rank(
+                    method="dense", ascending=False, na_option="keep"
+                )
+                df_proc[f"{attr}_rank"] = pd.Series(rank_series, dtype="Int64")
+
             # Reorder columns: original user columns first (excluding the internal ``_id``),
-            # then for each attribute the z‑score column, followed by raw scores and standard errors.
+            # then for each attribute the z‑score column, a rank, followed by raw scores and
+            # standard errors.
             original_cols = [
                 c for c in df.columns
             ]  # preserve the order provided by the user
             new_cols: List[str] = []
             for attr in attr_keys:
                 new_cols.append(attr)
+                new_cols.append(f"{attr}_rank")
                 new_cols.append(f"{attr}_raw")
                 new_cols.append(f"{attr}_se")
             final_cols = original_cols + new_cols
