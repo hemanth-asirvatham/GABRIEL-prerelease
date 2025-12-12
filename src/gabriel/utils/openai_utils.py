@@ -184,7 +184,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2500
 # When a user does not explicitly set ``max_output_tokens``, we assume that each response
 # will contain roughly this many tokens.  This value is used solely for estimating cost
 # and determining how many parallel requests can safely run under the token budget.
-ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 400
+ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 500
 
 # Conservative headroom when translating observed rate limits into concurrency and limiter budgets.
 # Using less than the reported limit provides a buffer for short spikes and accounting inaccuracies.
@@ -312,7 +312,7 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "cached_input": 0.075, "output": 0.60, "batch": 0.5},
     "o3": {"input": 2.00, "cached_input": 0.50, "output": 8.00, "batch": 0.5},
     "o4-mini": {"input": 1.10, "cached_input": 0.275, "output": 4.40, "batch": 0.5},
-    "gpt-5.2": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
+    "gpt-5.2": {"input": 1.75, "cached_input": 0.175, "output": 14.00, "batch": 0.5},
     "gpt-5.1": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00, "batch": 0.5},
