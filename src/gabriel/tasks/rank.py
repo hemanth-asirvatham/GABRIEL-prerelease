@@ -1182,6 +1182,7 @@ class Rank:
             return df_local
 
         stage_idx = 0
+        final_stage_idx: Optional[int] = None
         final_stage_df: Optional[pd.DataFrame] = None
         stage_z_history: Dict[int, Dict[str, Dict[str, float]]] = {}
         exit_stage: Dict[str, Optional[int]] = {ident: None for ident in work_df["identifier"]}
@@ -1204,9 +1205,8 @@ class Rank:
 
             stage_rounds = self.cfg.n_rounds
             if is_final_stage:
-                stage_rounds = max(
-                    1, stage_rounds * self.cfg.recursive_final_round_multiplier
-                )
+                final_multiplier = self.cfg.recursive_final_round_multiplier or 3
+                stage_rounds = max(1, stage_rounds * final_multiplier)
 
             stage_folder = os.path.join(base_folder, f"stage{stage_idx}")
             os.makedirs(stage_folder, exist_ok=True)
@@ -1254,6 +1254,7 @@ class Rank:
                 for ident in current_ids:
                     exit_stage[ident] = stage_idx
                 final_stage_df = stage_df_out
+                final_stage_idx = stage_idx
                 break
 
             next_ids = _select_next_ids(current_ids, stage_zs)
@@ -1272,6 +1273,8 @@ class Rank:
 
         if final_stage_df is None:
             final_stage_df = work_df[work_df["identifier"].isin(current_ids)].copy()
+            if stage_idx:
+                final_stage_idx = stage_idx
 
         # Build final output
         stage_cols: Dict[str, List[Optional[float]]] = {}
@@ -1284,16 +1287,16 @@ class Rank:
         for ident in id_list:
             ident_stage = exit_stage.get(ident)
             exit_col.append(ident_stage)
-            last_attr_vals: Dict[str, Optional[float]] = {a: None for a in attr_list}
+            final_attr_vals: Dict[str, Optional[float]] = {a: None for a in attr_list}
             for stage in stage_order:
                 zs = stage_z_history.get(stage, {})
                 for attr in attr_list:
                     col_name = f"stage{stage}_{attr}"
                     stage_cols.setdefault(col_name, []).append(zs.get(attr, {}).get(ident))
-                    if ident_stage == stage:
-                        last_attr_vals[attr] = zs.get(attr, {}).get(ident)
+                    if final_stage_idx is not None and stage == final_stage_idx:
+                        final_attr_vals[attr] = zs.get(attr, {}).get(ident)
             for attr in attr_list:
-                final_attr_cols[attr].append(last_attr_vals[attr])
+                final_attr_cols[attr].append(final_attr_vals[attr])
 
         ordered_df = original_df.copy()
         ordered_df[text_column] = ordered_df["identifier"].map(latest_text)
