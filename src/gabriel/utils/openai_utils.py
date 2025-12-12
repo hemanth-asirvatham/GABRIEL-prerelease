@@ -3129,7 +3129,6 @@ async def get_all_responses(
     planning_output_tokens = initial_estimated_output_tokens
     output_headroom_live = OUTPUT_TOKEN_HEADROOM_INITIAL
     output_headroom_reduced = False
-    output_headroom_confidence = max(5, int(token_sample_size))
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
     save_path = os.path.expandvars(os.path.expanduser(save_path))
@@ -4017,15 +4016,15 @@ async def get_all_responses(
     timeout_burst_cooldown = max(1.0, float(timeout_burst_cooldown))
     timeout_burst_max_restarts = max(0, int(timeout_burst_max_restarts))
 
-    def _maybe_reduce_output_headroom() -> bool:
-        """Lower output headroom after accumulating sufficient usage data."""
+    def _maybe_reduce_output_headroom(*, allow_reduce: bool) -> bool:
+        """Lower output headroom after the first token estimate refresh."""
 
         nonlocal output_headroom_live, output_headroom_reduced, estimated_output_tokens
         nonlocal estimated_tokens_per_call, current_tokens_per_call, throughput_ceiling_ppm
         nonlocal estimated_input_tokens_per_prompt
-        if output_headroom_reduced:
+        if output_headroom_reduced or not allow_reduce:
             return False
-        if observed_usage_count < output_headroom_confidence:
+        if observed_usage_count <= 0:
             return False
         previous_headroom = output_headroom_live
         output_headroom_live = OUTPUT_TOKEN_HEADROOM_STEADY
@@ -4056,7 +4055,7 @@ async def get_all_responses(
             throughput_ceiling_ppm = planned_ppm_live
         msg = (
             f"[token headroom] Lowered output headroom from {previous_headroom:.2f} "
-            f"to {output_headroom_live:.2f} after {observed_usage_count} usage samples."
+            f"to {output_headroom_live:.2f} after refreshing token estimates."
         )
         if not quiet:
             print(msg)
@@ -4281,7 +4280,7 @@ async def get_all_responses(
             return False
         if observed_usage_count <= 0:
             return False
-        _maybe_reduce_output_headroom()
+        _maybe_reduce_output_headroom(allow_reduce=force)
         avg_input = observed_input_tokens_total / max(1, observed_usage_count)
         avg_output = (
             (observed_output_tokens_total + observed_reasoning_tokens_total)
@@ -4309,6 +4308,11 @@ async def get_all_responses(
         pricing = _lookup_model_pricing(model)
         cost_line = None
         total_rows = max(1, status.num_tasks_started)
+        updated_parallel_workers = min(
+            concurrency_cap,
+            throughput_ceiling_ppm if throughput_ceiling_ppm is not None else concurrency_cap,
+        )
+        updated_parallel_workers = max(1, int(updated_parallel_workers))
         if pricing is not None and total_rows:
             total_input_tokens = estimated_input_tokens_per_prompt * max(1, n) * total_rows
             total_output_tokens = max(avg_output, 0.0) * max(1, n) * total_rows
@@ -4319,7 +4323,9 @@ async def get_all_responses(
             output_cost *= batch_multiplier
             cost_line = (
                 f"Updated estimated total cost: ~${(input_cost + output_cost):.2f} "
-                f"(input ${input_cost:.2f}, output ${output_cost:.2f})."
+                f"(input ${input_cost:.2f}, output ${output_cost:.2f}). "
+                f"Updated parallel threads: {updated_parallel_workers} based on refreshed "
+                "token usage."
             )
         msg_lines = [
             "[token estimate] Refreshed per-prompt estimates from observed usage "
@@ -4682,7 +4688,6 @@ async def get_all_responses(
                     observed_output_tokens_total += float(total_output)
                     observed_reasoning_tokens_total += float(total_reasoning)
                     observed_usage_count += 1
-                    _maybe_reduce_output_headroom()
                 try:
                     if manage_rate_limits and len(usage_samples) >= token_sample_size:
                         avg_in = statistics.mean(u[0] for u in usage_samples)
