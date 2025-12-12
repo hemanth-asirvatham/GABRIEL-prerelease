@@ -68,6 +68,7 @@ class IdeateConfig:
     seed_existing_entities_cap: Optional[int] = None
     seed_additional_instructions: Optional[str] = None
     seed_template_path: Optional[str] = None
+    seed_deduplicate: bool = True
 
     def __post_init__(self) -> None:
         if self.additional_instructions is not None:
@@ -314,6 +315,7 @@ class Ideate:
             entity_batch_frac=self.cfg.seed_entity_batch_frac or 0.2,
             existing_entities_cap=self.cfg.seed_existing_entities_cap or 100,
             use_dummy=self.cfg.use_dummy,
+            deduplicate=self.cfg.seed_deduplicate,
             reasoning_effort=self.cfg.reasoning_effort,
             reasoning_summary=self.cfg.reasoning_summary,
         )
@@ -368,6 +370,7 @@ class Ideate:
             "testable_predictions": [],
             "full_thinking": [],
             "summary_preview": [],
+            "report_preview": [],
         }
 
         for text in df_proc["report_text"].astype(str):
@@ -389,7 +392,9 @@ class Ideate:
                 value = parsed.get(key)
                 if value:
                     preview_parts.append(f"{label}: {value}")
-            sections["summary_preview"].append("\n\n".join(preview_parts) if preview_parts else None)
+            preview_text = "\n\n".join(preview_parts) if preview_parts else None
+            sections["summary_preview"].append(preview_text)
+            sections["report_preview"].append(preview_text)
 
         for key, values in sections.items():
             df_proc[key] = values
@@ -428,6 +433,7 @@ class Ideate:
             "testable_predictions",
             "full_thinking",
             "summary_preview",
+            "report_preview",
         ]
 
         ordered = [col for col in preferred_order if col in cleaned.columns]
@@ -682,6 +688,8 @@ class Ideate:
         parts: List[str] = []
         if "summary_preview" in row and isinstance(row["summary_preview"], str):
             return row["summary_preview"].strip()
+        if "report_preview" in row and isinstance(row["report_preview"], str):
+            return row["report_preview"].strip()
         title = row.get("title")
         nutshell = row.get("in_a_nutshell")
         paragraph = row.get("in_one_paragraph")

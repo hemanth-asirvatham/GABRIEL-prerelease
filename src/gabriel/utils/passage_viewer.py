@@ -1865,10 +1865,17 @@ def _render_passage_viewer(
 
     df = df.copy()
     attribute_requests = _normalize_attribute_requests(attributes)
-    if not attribute_requests and "coded_passages" in df.columns:
-        attribute_requests = [
-            _AttributeRequest("coded_passages", "Coded Passages", dynamic=True)
-        ]
+    if attributes is None and "coded_passages" in df.columns:
+        if not any(req.column == "coded_passages" for req in attribute_requests):
+            attribute_requests.append(
+                _AttributeRequest("coded_passages", "Coded Passages", dynamic=True)
+            )
+    if "overall_rank" in df.columns and not any(
+        req.column == "overall_rank" for req in attribute_requests
+    ):
+        attribute_requests.insert(
+            0, _AttributeRequest("overall_rank", "Overall Rank")
+        )
     df, attribute_requests = _expand_mapping_attribute_requests(df, attribute_requests)
 
     attribute_specs: List[_AttributeSpec] = []
