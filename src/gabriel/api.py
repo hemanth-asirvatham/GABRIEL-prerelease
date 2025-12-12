@@ -53,6 +53,7 @@ __all__ = [
     "seed",
     "classify",
     "ideate",
+    "id8",
     "deidentify",
     "rank",
     "codify",
@@ -303,6 +304,8 @@ async def seed(
     entity_batch_frac: float = 0.2,
     existing_entities_cap: int = 100,
     use_dummy: bool = False,
+    deduplicate: bool = False,
+    deduplicate_sample_seed: int = 42,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     max_timeout: Optional[float] = None,
@@ -342,6 +345,12 @@ async def seed(
         Maximum number of prior entities to consider when avoiding duplicates.
     use_dummy:
         If ``True`` emit deterministic dummy seeds for offline testing.
+    deduplicate:
+        When ``True`` over-generate and apply a shallow deduplication pass
+        before returning results.
+    deduplicate_sample_seed:
+        Random seed used when sampling a deterministic subset after
+        deduplication.
     reasoning_effort, reasoning_summary:
         Optional OpenAI reasoning controls.
     max_timeout:
@@ -383,6 +392,8 @@ async def seed(
         entity_batch_frac=entity_batch_frac,
         existing_entities_cap=existing_entities_cap,
         use_dummy=use_dummy,
+        deduplicate=deduplicate,
+        deduplicate_sample_seed=deduplicate_sample_seed,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
         max_timeout=max_timeout,
@@ -548,6 +559,7 @@ async def ideate(
     rate_config_updates: Optional[Dict[str, Any]] = None,
     rate_run_kwargs: Optional[Dict[str, Any]] = None,
     use_seed_entities: Optional[bool] = None,
+    seed_deduplicate: bool = True,
     seed_config_updates: Optional[Dict[str, Any]] = None,
     seed_run_kwargs: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
@@ -596,6 +608,8 @@ async def ideate(
         Force regeneration of outputs in ``save_dir``.
     *_config_updates, *_run_kwargs:
         Fine-grained overrides for nested Rate/Rank/Seed tasks.
+    seed_deduplicate:
+        When ``True`` enable deduplication in the nested seed generation.
     template_path:
         Optional template override for the ideation prompts.
     response_fn:
@@ -635,6 +649,7 @@ async def ideate(
         use_dummy=use_dummy,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        seed_deduplicate=seed_deduplicate,
     )
     if attributes is not None:
         cfg_kwargs["attributes"] = attributes
@@ -670,6 +685,12 @@ async def ideate(
         seed_config_updates=seed_config_updates,
         seed_run_kwargs=seed_run_kwargs,
     )
+
+
+async def id8(*args, **kwargs) -> pd.DataFrame:
+    """Alias for :func:`ideate`."""
+
+    return await ideate(*args, **kwargs)
 
 
 async def deidentify(

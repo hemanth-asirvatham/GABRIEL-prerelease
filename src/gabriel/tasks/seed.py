@@ -31,6 +31,8 @@ class SeedConfig:
     entity_batch_frac: float = 0.2
     existing_entities_cap: int = 100
     use_dummy: bool = False
+    deduplicate: bool = False
+    deduplicate_sample_seed: int = 42
     max_timeout: Optional[float] = None
     reasoning_effort: Optional[str] = None
     reasoning_summary: Optional[str] = None
@@ -71,7 +73,25 @@ class Seed:
         **response_kwargs: Any,
     ) -> pd.DataFrame:
         """Generate ``num_entities`` unique seed entities."""
+        if self.cfg.deduplicate:
+            return await self._run_with_deduplication(
+                existing_entities=existing_entities,
+                reset_files=reset_files,
+                **response_kwargs,
+            )
+        return await self._run_standard(
+            existing_entities=existing_entities,
+            reset_files=reset_files,
+            **response_kwargs,
+        )
 
+    async def _run_standard(
+        self,
+        *,
+        existing_entities: Optional[Sequence[str]],
+        reset_files: bool,
+        **response_kwargs: Any,
+    ) -> pd.DataFrame:
         normalized_existing = self._prepare_initial_existing(existing_entities)
         seen: Dict[str, str] = {}
         for ent in normalized_existing:
@@ -101,23 +121,13 @@ class Seed:
                 f"[Seed] Requesting {len(prompts)} prompts (batch {batch_index}, "
                 f"targeting {current_goal} entities)."
             )
-            kwargs = dict(response_kwargs)
-            kwargs.setdefault("model", self.cfg.model)
-            kwargs.setdefault("n_parallels", self.cfg.n_parallels)
-            kwargs.setdefault("use_dummy", self.cfg.use_dummy)
-            kwargs.setdefault("max_timeout", self.cfg.max_timeout)
-            kwargs.setdefault("reasoning_effort", self.cfg.reasoning_effort)
-            kwargs.setdefault("reasoning_summary", self.cfg.reasoning_summary)
-            kwargs.setdefault("json_mode", True)
-            kwargs.setdefault("save_path", raw_save)
-            kwargs.setdefault("reset_files", reset_next)
-            df_resp = await get_all_responses(
-                prompts=prompts,
-                identifiers=identifiers,
-                **kwargs,
+            df_resp = await self._request_entities(
+                prompts,
+                identifiers,
+                raw_save=raw_save,
+                reset_files=reset_next,
+                **response_kwargs,
             )
-            if not isinstance(df_resp, pd.DataFrame):
-                raise RuntimeError("get_all_responses returned no DataFrame")
             resp_lookup = dict(zip(df_resp.Identifier, df_resp.Response))
             parsed = await asyncio.gather(
                 *[
@@ -126,8 +136,8 @@ class Seed:
                 ]
             )
             added = 0
-            for ident, entity_list in zip(identifiers, parsed):
-                for position, entity in enumerate(entity_list):
+            for entity_list in parsed:
+                for entity in entity_list:
                     norm = self._normalize_entity(entity)
                     if not norm or norm in seen:
                         continue
@@ -143,14 +153,114 @@ class Seed:
 
         ordered = [seen[norm] for norm in seen]
         trimmed = ordered[: self.cfg.num_entities]
+        return self._finalize_entities(trimmed)
+
+    async def _run_with_deduplication(
+        self,
+        *,
+        existing_entities: Optional[Sequence[str]],
+        reset_files: bool,
+        **response_kwargs: Any,
+    ) -> pd.DataFrame:
+        normalized_existing = self._prepare_initial_existing(existing_entities)
+        all_entities: List[str] = list(normalized_existing)
+        seen_norm: Set[str] = set()
+        for ent in all_entities:
+            norm = self._normalize_entity(ent)
+            if norm:
+                seen_norm.add(norm)
+
+        deduped = self._deduplicate_entities(all_entities)
+        raw_save = os.path.join(self.cfg.save_dir, "seed_raw_responses.csv")
+        batch_index = 0
+        reset_next = reset_files
+        while len(deduped) < self.cfg.num_entities:
+            remaining = self.cfg.num_entities - len(deduped)
+            current_goal = max(self.cfg.entities_per_generation, math.ceil(remaining * 2))
+            prompts, identifiers = self._build_prompts(
+                current_goal,
+                batch_index,
+                deduped,
+            )
+            if not prompts:
+                break
+            print(
+                f"[Seed] Requesting {len(prompts)} prompts (batch {batch_index}, "
+                f"targeting {current_goal} entities before deduplication)."
+            )
+            df_resp = await self._request_entities(
+                prompts,
+                identifiers,
+                raw_save=raw_save,
+                reset_files=reset_next,
+                **response_kwargs,
+            )
+            resp_lookup = dict(zip(df_resp.Identifier, df_resp.Response))
+            parsed = await asyncio.gather(
+                *[
+                    self._parse_entities(resp_lookup.get(identifier, ""))
+                    for identifier in identifiers
+                ]
+            )
+            added = 0
+            for entity_list in parsed:
+                for entity in entity_list:
+                    norm = self._normalize_entity(entity)
+                    if not norm or norm in seen_norm:
+                        continue
+                    all_entities.append(entity)
+                    seen_norm.add(norm)
+                    added += 1
+            deduped = self._deduplicate_entities(all_entities)
+            print(
+                f"[Seed] Added {added} new entities in batch {batch_index}. "
+                f"Unique after deduplication: {len(deduped)}."
+            )
+            batch_index += 1
+            reset_next = False
+            if added == 0 and not any(parsed):
+                break
+
+        trimmed = self._sample_to_target(deduped)
+        return self._finalize_entities(trimmed)
+
+    async def _request_entities(
+        self,
+        prompts: List[str],
+        identifiers: List[str],
+        *,
+        raw_save: str,
+        reset_files: bool,
+        **response_kwargs: Any,
+    ) -> pd.DataFrame:
+        kwargs = dict(response_kwargs)
+        kwargs.setdefault("model", self.cfg.model)
+        kwargs.setdefault("n_parallels", self.cfg.n_parallels)
+        kwargs.setdefault("use_dummy", self.cfg.use_dummy)
+        kwargs.setdefault("max_timeout", self.cfg.max_timeout)
+        kwargs.setdefault("reasoning_effort", self.cfg.reasoning_effort)
+        kwargs.setdefault("reasoning_summary", self.cfg.reasoning_summary)
+        kwargs.setdefault("json_mode", True)
+        kwargs.setdefault("save_path", raw_save)
+        kwargs.setdefault("reset_files", reset_files)
+        df_resp = await get_all_responses(
+            prompts=prompts,
+            identifiers=identifiers,
+            **kwargs,
+        )
+        if not isinstance(df_resp, pd.DataFrame):
+            raise RuntimeError("get_all_responses returned no DataFrame")
+        return df_resp
+
+    def _finalize_entities(self, entities: List[str]) -> pd.DataFrame:
         df = pd.DataFrame(
             {
-                "entity": trimmed,
-                "entity_id": [f"entity-{idx:05d}" for idx in range(len(trimmed))],
+                "entity": entities,
+                "entity_id": [f"entity-{idx:05d}" for idx in range(len(entities))],
             }
         )
         df["source_batch"] = df.index // max(self.cfg.entities_per_generation, 1)
-        df["source_identifier"] = ["seed" for _ in range(len(trimmed))]
+        df["source_identifier"] = ["seed" for _ in range(len(entities))]
         final_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
         df.to_csv(final_path, index=False)
         print(
@@ -232,6 +342,33 @@ class Seed:
         if len(seen_entities) <= cap:
             return list(seen_entities)
         return random.sample(list(seen_entities), cap)
+
+    def _deduplicate_entities(self, entities: Sequence[str]) -> List[str]:
+        unique: List[str] = []
+        seen: Set[str] = set()
+        for entity in entities:
+            text = str(entity).strip()
+            if not text:
+                continue
+            key = self._dedup_key(text)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(text)
+        return unique
+
+    def _sample_to_target(self, entities: List[str]) -> List[str]:
+        if len(entities) <= self.cfg.num_entities:
+            return entities[: self.cfg.num_entities]
+        rng = random.Random(self.cfg.deduplicate_sample_seed)
+        selected = set(rng.sample(entities, self.cfg.num_entities))
+        return [entity for entity in entities if entity in selected][: self.cfg.num_entities]
+
+    @staticmethod
+    def _dedup_key(text: str) -> str:
+        collapsed = Seed._normalize_entity(text)
+        collapsed = re.sub(r"[^a-z0-9]+", " ", collapsed)
+        return re.sub(r"\s+", " ", collapsed).strip()
 
     @staticmethod
     def _normalize_entity(text: str) -> str:
