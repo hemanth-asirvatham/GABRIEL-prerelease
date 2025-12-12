@@ -8,14 +8,7 @@ OpenAI Responses API with several improvements:
   tokens and requests remain per minute.
 * User‑friendly summary – before a long job starts, the module prints a
   summary showing the number of prompts, input words, remaining rate‑limit
-  capacity, usage tier qualifications, and an estimated cost.  It also
-  explains the purpose of the ``max_output_tokens`` parameter.
-* Respect for explicit ``max_output_tokens`` – the helper no longer
-  injects a default ceiling when the caller omits the parameter.  Earlier
-  versions applied a 2 500 token cap once the remaining minute budget
-  dipped below one million tokens, which confused users by silently
-  truncating long responses.  Callers who want a limit can still provide
-  one explicitly.
+  capacity, usage tier qualifications, and an estimated cost.
 * Improved rate‑limit gating – the token limiter now estimates the worst
   possible output length when the cutoff is unspecified by assuming
   the response could be as long as the input.  This avoids grossly
@@ -27,9 +20,7 @@ OpenAI Responses API with several improvements:
 
 The overall API surface remains compatible with the original file: the
 public functions ``get_response`` and ``get_all_responses`` still
-exist, but the argument ``max_tokens`` has been renamed to
-``max_output_tokens`` to match the Responses API.  A legacy alias
-``max_tokens`` is accepted for backward compatibility.
+exist.
 """
 
 from __future__ import annotations
@@ -174,12 +165,6 @@ def _get_client(base_url: Optional[str] = None) -> openai.AsyncOpenAI:
         _clients_async[key] = client
     return client
 
-# Default safety cutoff when token capacity is low
-# Historical default used as a conservative upper bound when rate limits were
-# not known.  We keep the constant so older call sites that import it continue
-# to function, but the helper no longer applies this ceiling automatically.
-DEFAULT_MAX_OUTPUT_TOKENS = 2500
-
 # Estimated output tokens per prompt used for cost estimation when no cutoff is specified.
 # When a user does not explicitly set ``max_output_tokens``, we assume that each response
 # will contain roughly this many tokens.  This value is used solely for estimating cost
@@ -191,12 +176,10 @@ ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 500
 RATE_LIMIT_HEADROOM = 0.85
 # Additional planning buffer applied when translating reported rate limits into budgets.
 PLANNING_RATE_LIMIT_BUFFER = 0.85
-# Buffer applied to the estimated tokens per call to avoid optimistic throughput estimates.
-TOKEN_ESTIMATE_BUFFER = 1.35
-# Cushion applied to the expected output tokens when planning budgets so we never assume perfectly
-# short responses for lower-tier accounts.
-OUTPUT_TOKEN_HEADROOM = 1.2
-TIMEOUT_BURST_ALERT_THRESHOLD = 50
+# Cushion applied to expected output tokens during initial planning. This headroom is relaxed to
+# ``OUTPUT_TOKEN_HEADROOM_STEADY`` after we accumulate real usage samples.
+OUTPUT_TOKEN_HEADROOM_INITIAL = 2.0
+OUTPUT_TOKEN_HEADROOM_STEADY = 1.0
 
 # ---------------------------------------------------------------------------
 # Helper dataclasses and token utilities
@@ -444,6 +427,7 @@ def _estimate_tokens_per_call(
     n: int,
     *,
     estimated_output_tokens_per_prompt: int = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
+    output_headroom: float = OUTPUT_TOKEN_HEADROOM_INITIAL,
 ) -> float:
     """Return a conservative token estimate per call for planning throughput."""
 
@@ -452,9 +436,9 @@ def _estimate_tokens_per_call(
         if expected_output_tokens is not None
         else estimated_output_tokens_per_prompt
     )
-    gating_output *= OUTPUT_TOKEN_HEADROOM
+    gating_output *= max(1.0, float(output_headroom))
     tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
-    return tokens_per_call * TOKEN_ESTIMATE_BUFFER
+    return tokens_per_call
 
 
 def _estimate_prompts_per_minute(
@@ -679,6 +663,7 @@ def _print_run_banner(
             max_output_tokens,
             n,
             estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
+            output_headroom=OUTPUT_TOKEN_HEADROOM_INITIAL,
         )
     if estimated_cost:
         token_usage = (
@@ -916,6 +901,7 @@ def _print_usage_overview(
             max_output_tokens,
             n,
             estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
+            output_headroom=OUTPUT_TOKEN_HEADROOM_INITIAL,
         )
         def _pf(val: Optional[str]) -> Optional[float]:
             try:
@@ -1055,28 +1041,6 @@ def _print_usage_overview(
         print(
             f"\nmax_output_tokens: {max_output_tokens} (safety cutoff; generation will stop if this is reached)"
         )
-
-
-def _decide_default_max_output_tokens(
-    user_specified: Optional[int],
-    rate_headers: Optional[Dict[str, str]] = None,
-    *,
-    base_url: Optional[str] = None,
-) -> Optional[int]:
-    """Return the caller supplied cutoff, or ``None`` if no preference.
-
-    Earlier revisions attempted to infer a sensible default by inspecting the
-    live rate‑limit headers.  That behaviour surprised users because the
-    helper would silently clamp outputs once the remaining budget dipped below
-    a hardcoded threshold.  The new policy is straightforward: when a caller
-    does not ask for a ceiling we honour that request and allow the model to
-    stream its full response.  The ``rate_headers`` and ``base_url`` arguments
-    remain for backwards compatibility and to support future heuristics, but
-    they are no longer consulted.
-    """
-
-    del rate_headers, base_url  # Unused; retained for backward compatibility.
-    return user_specified
 
 
 def _rate_limit_decrement(concurrency_cap: int) -> int:
@@ -1511,8 +1475,6 @@ async def get_response(
     model: str = "gpt-5-mini",
     n: int = 1,
     max_output_tokens: Optional[int] = None,
-    # legacy alias for backwards compatibility
-    max_tokens: Optional[int] = None,
     timeout: Optional[float] = None,
     temperature: float = 0.9,
     json_mode: bool = False,
@@ -1559,10 +1521,8 @@ async def get_response(
     n:
         Number of completions to request.  Each completion is retrieved in
         parallel.
-    max_output_tokens / max_tokens:
-        Optional cap on the length of each completion in tokens.  The
-        ``max_tokens`` alias is retained for backwards compatibility, but
-        ``max_output_tokens`` takes precedence when both are supplied.
+    max_output_tokens:
+        Optional cap on the length of each completion in tokens.
     timeout:
         Maximum time in seconds to wait for the API to respond.  ``None``
         disables client-side timeouts.
@@ -1768,7 +1728,7 @@ async def get_response(
                     raise
                 continue
     # Derive the effective cutoff
-    cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
+    cutoff = max_output_tokens
     # Build system message only for non‑o series
     system_instruction = (
         "Please provide a helpful response to this inquiry for purposes of academic research."
@@ -2709,8 +2669,6 @@ async def get_all_responses(
     model: str = "gpt-5-mini",
     n: int = 1,
     max_output_tokens: Optional[int] = None,
-    # legacy alias
-    max_tokens: Optional[int] = None,
     estimated_output_tokens_per_prompt: Optional[int] = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
     temperature: float = 0.9,
     json_mode: bool = False,
@@ -2749,10 +2707,6 @@ async def get_all_responses(
     timeout_burst_max_restarts: int = 3,
     background_mode: Optional[bool] = None,
     background_poll_interval: float = 2.0,
-    # Note: we no longer accept user‑supplied requests_per_minute, tokens_per_minute,
-    # dynamic_rate_limit, or rate_limit_factor parameters.  Concurrency is
-    # automatically determined from the OpenAI API’s rate‑limit headers and
-    # adjusted internally when encountering rate‑limit errors.
     cancel_existing_batch: bool = False,
     use_batch: bool = False,
     batch_completion_window: str = "24h",
@@ -2854,14 +2808,11 @@ async def get_all_responses(
     text, duration, token usage, warnings and error logs so tests can exercise
     cost reporting and failure handling paths deterministically.
 
-    The function remains backwards compatible with the original version, except
-    that the parameter ``max_tokens`` has been renamed to ``max_output_tokens``.
-    When both are provided, ``max_output_tokens`` takes precedence.  The former
-    ``use_web_search`` flag is still accepted but ``web_search`` should be used
-    going forward.  Additional web search options (allowed domains and user
-    location hints such as ``city``, ``country``, ``region``, ``timezone`` and
-    ``type`` – usually ``"approximate"``) can be supplied together via
-    ``web_search_filters``.  Per-identifier
+    The former ``use_web_search`` flag is still accepted but ``web_search``
+    should be used going forward.  Additional web search options (allowed
+    domains and user location hints such as ``city``, ``country``, ``region``,
+    ``timezone`` and ``type`` – usually ``"approximate"``) can be supplied
+    together via ``web_search_filters``.  Per-identifier
     overrides can be passed through ``prompt_web_search_filters`` where the
     mapping keys correspond to prompt identifiers and values follow the same
     schema as ``web_search_filters``.  These overrides are merged with the
@@ -3170,17 +3121,15 @@ async def get_all_responses(
         if manage_rate_limits
         else {}
     )
-    user_cutoff = max_output_tokens if max_output_tokens is not None else max_tokens
-    cutoff = (
-        _decide_default_max_output_tokens(user_cutoff, rate_headers, base_url=base_url)
-        if manage_rate_limits
-        else user_cutoff
-    )
+    cutoff = max_output_tokens
     get_response_kwargs.setdefault("max_output_tokens", cutoff)
     initial_estimated_output_tokens = (
         cutoff if cutoff is not None else estimated_output_tokens_per_prompt
     )
     planning_output_tokens = initial_estimated_output_tokens
+    output_headroom_live = OUTPUT_TOKEN_HEADROOM_INITIAL
+    output_headroom_reduced = False
+    output_headroom_confidence = max(5, int(token_sample_size))
     # Always load or initialise the CSV
     # Expand variables in save_path and ensure the parent directory exists.
     save_path = os.path.expandvars(os.path.expanduser(save_path))
@@ -3379,7 +3328,7 @@ async def get_all_responses(
     concurrency_cap = requested_n_parallels
     allowed_req_pm = max(1, requested_n_parallels)
     estimated_tokens_per_call = max(
-        1.0, (initial_estimated_output_tokens + 1) * max(1, n)
+        1.0, (planning_output_tokens * output_headroom_live + 1) * max(1, n)
     )
     allowed_tok_pm = int(max(1, requested_n_parallels * estimated_tokens_per_call))
     if not use_batch and manage_rate_limits:
@@ -3396,9 +3345,8 @@ async def get_all_responses(
                 sum(len(tokenizer.encode(p)) for p, _ in sample_for_tokens)
                 / max(1, len(sample_for_tokens))
             )
-            gating_output = planning_output_tokens * OUTPUT_TOKEN_HEADROOM
+            gating_output = planning_output_tokens * output_headroom_live
             tokens_per_call = max(1.0, (avg_input_tokens + gating_output) * max(1, n))
-            tokens_per_call *= TOKEN_ESTIMATE_BUFFER
 
             def _pf(val: Optional[str]) -> Optional[float]:
                 try:
@@ -4069,6 +4017,52 @@ async def get_all_responses(
     timeout_burst_cooldown = max(1.0, float(timeout_burst_cooldown))
     timeout_burst_max_restarts = max(0, int(timeout_burst_max_restarts))
 
+    def _maybe_reduce_output_headroom() -> bool:
+        """Lower output headroom after accumulating sufficient usage data."""
+
+        nonlocal output_headroom_live, output_headroom_reduced, estimated_output_tokens
+        nonlocal estimated_tokens_per_call, current_tokens_per_call, throughput_ceiling_ppm
+        nonlocal estimated_input_tokens_per_prompt
+        if output_headroom_reduced:
+            return False
+        if observed_usage_count < output_headroom_confidence:
+            return False
+        previous_headroom = output_headroom_live
+        output_headroom_live = OUTPUT_TOKEN_HEADROOM_STEADY
+        output_headroom_reduced = True
+        avg_output_observed = (
+            observed_output_tokens_total + observed_reasoning_tokens_total
+        ) / max(1, observed_usage_count)
+        base_output_estimate = (
+            avg_output_observed
+            if avg_output_observed > 0
+            else estimated_output_tokens / max(1.0, previous_headroom)
+        )
+        estimated_output_tokens = max(
+            1.0,
+            base_output_estimate * output_headroom_live,
+        )
+        estimated_tokens_per_call = max(
+            1.0,
+            (estimated_input_tokens_per_prompt + estimated_output_tokens) * max(1, n),
+        )
+        current_tokens_per_call = estimated_tokens_per_call
+        planned_ppm_live, _ = _planned_ppm_and_details(
+            allowed_req_pm if manage_rate_limits else None,
+            allowed_tok_pm if manage_rate_limits else None,
+            current_tokens_per_call,
+        )
+        if planned_ppm_live is not None:
+            throughput_ceiling_ppm = planned_ppm_live
+        msg = (
+            f"[token headroom] Lowered output headroom from {previous_headroom:.2f} "
+            f"to {output_headroom_live:.2f} after {observed_usage_count} usage samples."
+        )
+        if not quiet:
+            print(msg)
+        logger.info(msg)
+        return True
+
     def _effective_timeout_burst_threshold() -> int:
         parallel_workers = max(1, max(active_workers, concurrency_cap))
         return int(math.ceil(parallel_workers * _TIMEOUT_BURST_RATIO))
@@ -4238,7 +4232,8 @@ async def get_all_responses(
             timeout_text = f"timeouts={status.num_timeout_errors}/{denom}"
             if status_report_interval is not None and timeout_errors_since_last_status:
                 timeout_text += f" (+{timeout_errors_since_last_status} since last)"
-            if timeout_errors_since_last_status >= TIMEOUT_BURST_ALERT_THRESHOLD:
+            burst_alert_threshold = _effective_timeout_burst_threshold()
+            if timeout_errors_since_last_status >= burst_alert_threshold:
                 burst_msg = (
                     f"[timeouts] {timeout_errors_since_last_status} timeouts since last update; "
                     "consider reducing concurrency or checking network stability if this persists."
@@ -4280,11 +4275,13 @@ async def get_all_responses(
         nonlocal estimated_output_tokens, estimated_tokens_per_call, current_tokens_per_call
         nonlocal estimated_output_tokens_per_prompt_live, estimated_input_tokens_per_prompt
         nonlocal throughput_ceiling_ppm, estimate_update_done, last_estimate_refresh
+        nonlocal output_headroom_live, output_headroom_reduced
         now = time.time()
         if not force and (now - last_estimate_refresh) < estimate_refresh_cooldown:
             return False
         if observed_usage_count <= 0:
             return False
+        _maybe_reduce_output_headroom()
         avg_input = observed_input_tokens_total / max(1, observed_usage_count)
         avg_output = (
             (observed_output_tokens_total + observed_reasoning_tokens_total)
@@ -4295,11 +4292,10 @@ async def get_all_responses(
         estimated_input_tokens_per_prompt = max(1.0, avg_input)
         if avg_output > 0:
             estimated_output_tokens_per_prompt_live = max(1.0, avg_output)
-            estimated_output_tokens = max(
-                estimated_output_tokens, avg_output * OUTPUT_TOKEN_HEADROOM
-            )
+            estimated_output_tokens = max(1.0, avg_output * output_headroom_live)
         updated_tokens_per_call = max(
-            1.0, (estimated_input_tokens_per_prompt + estimated_output_tokens) * max(1, n)
+            1.0,
+            (estimated_input_tokens_per_prompt + estimated_output_tokens) * max(1, n),
         )
         estimated_tokens_per_call = updated_tokens_per_call
         current_tokens_per_call = updated_tokens_per_call
@@ -4686,6 +4682,7 @@ async def get_all_responses(
                     observed_output_tokens_total += float(total_output)
                     observed_reasoning_tokens_total += float(total_reasoning)
                     observed_usage_count += 1
+                    _maybe_reduce_output_headroom()
                 try:
                     if manage_rate_limits and len(usage_samples) >= token_sample_size:
                         avg_in = statistics.mean(u[0] for u in usage_samples)
@@ -4694,7 +4691,7 @@ async def get_all_responses(
                         observed_output = avg_out + avg_reason
                         if observed_output > 0:
                             estimated_output_tokens = max(
-                                estimated_output_tokens, observed_output * OUTPUT_TOKEN_HEADROOM
+                                1.0, observed_output * output_headroom_live
                             )
                         tokens_per_call_est = (
                             avg_in + max(estimated_output_tokens, observed_output)
@@ -5265,7 +5262,6 @@ async def get_all_responses(
             "model",
             "n",
             "max_output_tokens",
-            "max_tokens",
             "temperature",
             "json_mode",
             "expected_schema",
@@ -5295,7 +5291,6 @@ async def get_all_responses(
             model=model,
             n=n,
             max_output_tokens=max_output_tokens,
-            max_tokens=max_tokens,
             temperature=temperature,
             json_mode=json_mode,
             expected_schema=expected_schema,
