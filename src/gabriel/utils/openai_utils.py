@@ -4057,8 +4057,6 @@ async def get_all_responses(
             f"[token headroom] Lowered output headroom from {previous_headroom:.2f} "
             f"to {output_headroom_live:.2f} after refreshing token estimates."
         )
-        if not quiet:
-            print(msg)
         logger.info(msg)
         return True
 
@@ -4335,6 +4333,14 @@ async def get_all_responses(
         ]
         if cost_line:
             msg_lines.append("[token estimate] " + cost_line)
+            if planned_ppm_live is not None and planned_ppm_live > 0:
+                remaining_prompts = max(0, status.num_tasks_started - processed)
+                estimated_minutes = math.ceil(remaining_prompts / planned_ppm_live)
+                minimum_minutes = max(1, estimated_minutes)
+                msg_lines.append(
+                    "[token estimate] Updated time estimate: minimum of "
+                    f"{minimum_minutes} minute{'s' if minimum_minutes != 1 else ''}."
+                )
         if not quiet:
             for line in msg_lines:
                 print(line)
