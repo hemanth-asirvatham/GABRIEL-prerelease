@@ -105,50 +105,60 @@ class Seed:
         )
         raw_save = os.path.join(self.cfg.save_dir, "seed_raw_responses.csv")
         batch_index = 0
+        request_index = 0
         reset_next = reset_files
         while len(seen) < self.cfg.num_entities:
             remaining = self.cfg.num_entities - len(seen)
-            current_goal = min(batch_target, remaining)
-            current_goal = max(current_goal, self.cfg.entities_per_generation)
-            prompts, identifiers = self._build_prompts(
-                current_goal,
-                batch_index,
-                list(seen.values()),
-            )
-            if not prompts:
-                break
+            batch_goal = min(batch_target, remaining)
+            batch_goal = max(batch_goal, self.cfg.entities_per_generation)
+            target_count = min(self.cfg.num_entities, len(seen) + batch_goal)
+            batch_added = 0
+            while len(seen) < target_count:
+                remaining_in_batch = target_count - len(seen)
+                current_goal = max(remaining_in_batch, self.cfg.entities_per_generation)
+                prompts, identifiers = self._build_prompts(
+                    current_goal,
+                    request_index,
+                    list(seen.values()),
+                )
+                if not prompts:
+                    break
+                print(
+                    f"[Seed] Requesting {len(prompts)} prompts (batch {batch_index}, "
+                    f"targeting {current_goal} entities; batch target {batch_goal})."
+                )
+                df_resp = await self._request_entities(
+                    prompts,
+                    identifiers,
+                    raw_save=raw_save,
+                    reset_files=reset_next,
+                    **response_kwargs,
+                )
+                resp_lookup = dict(zip(df_resp.Identifier, df_resp.Response))
+                parsed = await asyncio.gather(
+                    *[
+                        self._parse_entities(resp_lookup.get(identifier, ""))
+                        for identifier in identifiers
+                    ]
+                )
+                added = 0
+                for entity_list in parsed:
+                    for entity in entity_list:
+                        norm = self._normalize_entity(entity)
+                        if not norm or norm in seen:
+                            continue
+                        seen[norm] = entity
+                        added += 1
+                batch_added += added
+                reset_next = False
+                request_index += 1
+                if added == 0 and not any(parsed):
+                    break
             print(
-                f"[Seed] Requesting {len(prompts)} prompts (batch {batch_index}, "
-                f"targeting {current_goal} entities)."
-            )
-            df_resp = await self._request_entities(
-                prompts,
-                identifiers,
-                raw_save=raw_save,
-                reset_files=reset_next,
-                **response_kwargs,
-            )
-            resp_lookup = dict(zip(df_resp.Identifier, df_resp.Response))
-            parsed = await asyncio.gather(
-                *[
-                    self._parse_entities(resp_lookup.get(identifier, ""))
-                    for identifier in identifiers
-                ]
-            )
-            added = 0
-            for entity_list in parsed:
-                for entity in entity_list:
-                    norm = self._normalize_entity(entity)
-                    if not norm or norm in seen:
-                        continue
-                    seen[norm] = entity
-                    added += 1
-            print(
-                f"[Seed] Added {added} new entities in batch {batch_index}. Total so far: {len(seen)}."
+                f"[Seed] Added {batch_added} new entities in batch {batch_index}. Total so far: {len(seen)}."
             )
             batch_index += 1
-            reset_next = False
-            if added == 0 and not any(parsed):
+            if batch_added == 0:
                 break
 
         ordered = [seen[norm] for norm in seen]
@@ -171,54 +181,73 @@ class Seed:
                 seen_norm.add(norm)
 
         deduped = self._deduplicate_entities(all_entities)
+        batch_target = max(
+            self.cfg.entities_per_generation,
+            math.ceil(self.cfg.num_entities * self.cfg.entity_batch_frac),
+        )
+        cycle_target = self.cfg.num_entities * 2
         raw_save = os.path.join(self.cfg.save_dir, "seed_raw_responses.csv")
         batch_index = 0
+        request_index = 0
         reset_next = reset_files
         while len(deduped) < self.cfg.num_entities:
-            remaining = self.cfg.num_entities - len(deduped)
-            current_goal = max(self.cfg.entities_per_generation, math.ceil(remaining * 2))
-            prompts, identifiers = self._build_prompts(
-                current_goal,
-                batch_index,
-                deduped,
-            )
-            if not prompts:
-                break
-            print(
-                f"[Seed] Requesting {len(prompts)} prompts (batch {batch_index}, "
-                f"targeting {current_goal} entities before deduplication)."
-            )
-            df_resp = await self._request_entities(
-                prompts,
-                identifiers,
-                raw_save=raw_save,
-                reset_files=reset_next,
-                **response_kwargs,
-            )
-            resp_lookup = dict(zip(df_resp.Identifier, df_resp.Response))
-            parsed = await asyncio.gather(
-                *[
-                    self._parse_entities(resp_lookup.get(identifier, ""))
-                    for identifier in identifiers
-                ]
-            )
-            added = 0
-            for entity_list in parsed:
-                for entity in entity_list:
-                    norm = self._normalize_entity(entity)
-                    if not norm or norm in seen_norm:
-                        continue
-                    all_entities.append(entity)
-                    seen_norm.add(norm)
-                    added += 1
+            while len(all_entities) < cycle_target:
+                remaining_in_cycle = cycle_target - len(all_entities)
+                current_goal = max(batch_target, remaining_in_cycle)
+                prompts, identifiers = self._build_prompts(
+                    current_goal,
+                    request_index,
+                    deduped,
+                )
+                if not prompts:
+                    break
+                print(
+                    f"[Seed] Requesting {len(prompts)} prompts (batch {batch_index}, "
+                    f"targeting {current_goal} entities before deduplication)."
+                )
+                df_resp = await self._request_entities(
+                    prompts,
+                    identifiers,
+                    raw_save=raw_save,
+                    reset_files=reset_next,
+                    **response_kwargs,
+                )
+                resp_lookup = dict(zip(df_resp.Identifier, df_resp.Response))
+                parsed = await asyncio.gather(
+                    *[
+                        self._parse_entities(resp_lookup.get(identifier, ""))
+                        for identifier in identifiers
+                    ]
+                )
+                added = 0
+                for entity_list in parsed:
+                    for entity in entity_list:
+                        norm = self._normalize_entity(entity)
+                        if not norm or norm in seen_norm:
+                            continue
+                        all_entities.append(entity)
+                        seen_norm.add(norm)
+                        added += 1
+                reset_next = False
+                request_index += 1
+                if added == 0 and not any(parsed):
+                    break
+
             deduped = self._deduplicate_entities(all_entities)
             print(
-                f"[Seed] Added {added} new entities in batch {batch_index}. "
-                f"Unique after deduplication: {len(deduped)}."
+                f"[Seed] Unique after deduplication: {len(deduped)}."
             )
+            if len(deduped) >= self.cfg.num_entities:
+                break
+
+            all_entities = list(deduped)
+            seen_norm = {
+                self._normalize_entity(entity)
+                for entity in all_entities
+                if self._normalize_entity(entity)
+            }
             batch_index += 1
-            reset_next = False
-            if added == 0 and not any(parsed):
+            if not all_entities:
                 break
 
         trimmed = self._sample_to_target(deduped)
