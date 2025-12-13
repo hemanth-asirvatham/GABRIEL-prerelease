@@ -413,6 +413,7 @@ class Seed:
             n_runs=4,
             use_dummy=self.cfg.use_dummy,
             max_timeout=self.cfg.max_timeout,
+            group_size=100,
         )
         dedup = Deduplicate(dedup_cfg)
         dedup_df = await dedup.run(
