@@ -181,16 +181,17 @@ class Seed:
                 seen_norm.add(norm)
 
         deduped = self._deduplicate_entities(all_entities)
+        raw_target = self.cfg.num_entities * 4
         batch_target = max(
             self.cfg.entities_per_generation,
-            math.ceil(self.cfg.num_entities * self.cfg.entity_batch_frac),
+            math.ceil(raw_target * self.cfg.entity_batch_frac),
         )
-        cycle_target = self.cfg.num_entities * 2
         raw_save = os.path.join(self.cfg.save_dir, "seed_raw_responses.csv")
         batch_index = 0
         request_index = 0
         reset_next = reset_files
         while len(deduped) < self.cfg.num_entities:
+            cycle_target = max(raw_target, len(all_entities))
             while len(all_entities) < cycle_target:
                 remaining_in_cycle = cycle_target - len(all_entities)
                 current_goal = max(batch_target, remaining_in_cycle)
