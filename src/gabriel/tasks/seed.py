@@ -28,7 +28,7 @@ class SeedConfig:
     n_parallels: int = 400
     num_entities: int = 1000
     entities_per_generation: int = 50
-    entity_batch_frac: float = 0.2
+    entity_batch_frac: float = 0.25
     existing_entities_cap: int = 100
     use_dummy: bool = False
     deduplicate: bool = False
@@ -194,7 +194,8 @@ class Seed:
             cycle_target = max(raw_target, len(all_entities))
             while len(all_entities) < cycle_target:
                 remaining_in_cycle = cycle_target - len(all_entities)
-                current_goal = max(batch_target, remaining_in_cycle)
+                current_goal = min(batch_target, remaining_in_cycle)
+                current_goal = max(current_goal, self.cfg.entities_per_generation)
                 prompts, identifiers = self._build_prompts(
                     current_goal,
                     request_index,

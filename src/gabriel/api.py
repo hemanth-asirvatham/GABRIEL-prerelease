@@ -301,7 +301,7 @@ async def seed(
     n_parallels: int = 650,
     num_entities: int = 1000,
     entities_per_generation: int = 50,
-    entity_batch_frac: float = 0.2,
+    entity_batch_frac: float = 0.25,
     existing_entities_cap: int = 100,
     use_dummy: bool = False,
     deduplicate: bool = False,
