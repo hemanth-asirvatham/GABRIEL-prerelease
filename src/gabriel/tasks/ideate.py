@@ -311,7 +311,7 @@ class Ideate:
             model=self.cfg.model,
             n_parallels=self.cfg.n_parallels,
             num_entities=self.cfg.seed_num_entities or self.cfg.n_ideas,
-            entities_per_generation=self.cfg.seed_entities_per_generation or 10,
+            entities_per_generation=self.cfg.seed_entities_per_generation or 20,
             entity_batch_frac=self.cfg.seed_entity_batch_frac or 0.2,
             existing_entities_cap=self.cfg.seed_existing_entities_cap or 100,
             use_dummy=self.cfg.use_dummy,
