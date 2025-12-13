@@ -438,8 +438,18 @@ class Discover:
             for lab in labels:
                 actual_col = f"{lab}_actual"
                 inverted_col = f"{lab}_inverted"
-                actual_true = classify_result[actual_col].fillna(False).sum()
-                inverted_true = classify_result[inverted_col].fillna(False).sum()
+                actual_true = (
+                    classify_result[actual_col]
+                    .fillna(False)
+                    .infer_objects(copy=False)
+                    .sum()
+                )
+                inverted_true = (
+                    classify_result[inverted_col]
+                    .fillna(False)
+                    .infer_objects(copy=False)
+                    .sum()
+                )
                 total = classify_result[[actual_col, inverted_col]].notna().any(axis=1).sum()
                 actual_pct = (actual_true / total * 100) if total else None
                 inverted_pct = (inverted_true / total * 100) if total else None

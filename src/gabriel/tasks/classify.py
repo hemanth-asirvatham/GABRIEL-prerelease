@@ -466,7 +466,7 @@ class Classify:
         def _min_freq(s: pd.Series) -> Optional[bool]:
             if s.notna().sum() == 0:
                 return None
-            true_count = s.fillna(False).sum()
+            true_count = s.fillna(False).infer_objects(copy=False).sum()
             prop = true_count / self.cfg.n_runs
             return prop >= self.cfg.min_frequency
 
