@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import pandas as pd
 
 from gabriel.core.prompt_template import PromptTemplate, resolve_template
+from gabriel.tasks.deduplicate import Deduplicate, DeduplicateConfig
 from gabriel.utils import safest_json
 from gabriel.utils.openai_utils import get_all_responses
 from gabriel.utils.logging import announce_prompt_rendering
@@ -24,8 +25,8 @@ class SeedConfig:
     instructions: str
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "seed_entities.csv"
-    model: str = "o3-mini"
-    n_parallels: int = 400
+    model: str = "gpt-5.2"
+    n_parallels: int = 650
     num_entities: int = 1000
     entities_per_generation: int = 50
     entity_batch_frac: float = 0.25
@@ -180,7 +181,14 @@ class Seed:
             if norm:
                 seen_norm.add(norm)
 
-        deduped = self._deduplicate_entities(all_entities)
+        dedup_cycle = 0
+        deduped = await self._deduplicate_entities(
+            all_entities,
+            cycle_index=dedup_cycle,
+            reset_files=reset_files,
+            response_kwargs=response_kwargs,
+        )
+        dedup_cycle += 1
         raw_target = self.cfg.num_entities * 4
         batch_target = max(
             self.cfg.entities_per_generation,
@@ -235,7 +243,13 @@ class Seed:
                 if added == 0 and not any(parsed):
                     break
 
-            deduped = self._deduplicate_entities(all_entities)
+            deduped = await self._deduplicate_entities(
+                all_entities,
+                cycle_index=dedup_cycle,
+                reset_files=False,
+                response_kwargs=response_kwargs,
+            )
+            dedup_cycle += 1
             print(
                 f"[Seed] Unique after deduplication: {len(deduped)}."
             )
@@ -374,19 +388,68 @@ class Seed:
             return list(seen_entities)
         return random.sample(list(seen_entities), cap)
 
-    def _deduplicate_entities(self, entities: Sequence[str]) -> List[str]:
-        unique: List[str] = []
-        seen: Set[str] = set()
+    async def _deduplicate_entities(
+        self,
+        entities: Sequence[str],
+        *,
+        cycle_index: int,
+        reset_files: bool,
+        response_kwargs: Dict[str, Any],
+    ) -> List[str]:
+        cleaned: List[str] = []
         for entity in entities:
             text = str(entity).strip()
-            if not text:
+            if text:
+                cleaned.append(text)
+        if not cleaned:
+            return []
+
+        df = pd.DataFrame({"entity": cleaned})
+        dedup_cfg = DeduplicateConfig(
+            save_dir=os.path.join(self.cfg.save_dir, "seed_deduplicate"),
+            file_name=f"seed_deduplicate_cycle{cycle_index}.csv",
+            model=self.cfg.model,
+            n_parallels=self.cfg.n_parallels,
+            n_runs=4,
+            use_dummy=self.cfg.use_dummy,
+            max_timeout=self.cfg.max_timeout,
+        )
+        dedup = Deduplicate(dedup_cfg)
+        dedup_df = await dedup.run(
+            df,
+            column_name="entity",
+            reset_files=reset_files,
+            **self._filter_dedup_response_kwargs(response_kwargs),
+        )
+        mapped_col = (
+            "mapped_entity_final"
+            if "mapped_entity_final" in dedup_df.columns
+            else "mapped_entity"
+        )
+        unique: List[str] = []
+        seen: Set[str] = set()
+        for val in dedup_df[mapped_col]:
+            text = str(val).strip()
+            if not text or text in seen:
                 continue
-            key = self._dedup_key(text)
-            if not key or key in seen:
-                continue
-            seen.add(key)
+            seen.add(text)
             unique.append(text)
         return unique
+
+    @staticmethod
+    def _filter_dedup_response_kwargs(response_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        blocked = {
+            "model",
+            "n_parallels",
+            "save_path",
+            "use_dummy",
+            "max_timeout",
+            "json_mode",
+            "reset_files",
+            "prompts",
+            "identifiers",
+        }
+        return {key: value for key, value in response_kwargs.items() if key not in blocked}
 
     def _sample_to_target(self, entities: List[str]) -> List[str]:
         if len(entities) <= self.cfg.num_entities:
@@ -394,12 +457,6 @@ class Seed:
         rng = random.Random(self.cfg.deduplicate_sample_seed)
         selected = set(rng.sample(entities, self.cfg.num_entities))
         return [entity for entity in entities if entity in selected][: self.cfg.num_entities]
-
-    @staticmethod
-    def _dedup_key(text: str) -> str:
-        collapsed = Seed._normalize_entity(text)
-        collapsed = re.sub(r"[^a-z0-9]+", " ", collapsed)
-        return re.sub(r"\s+", " ", collapsed).strip()
 
     @staticmethod
     def _normalize_entity(text: str) -> str:
