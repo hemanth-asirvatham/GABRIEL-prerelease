@@ -4,6 +4,8 @@
 
 📓 **Tutorial notebook** (start here!): https://colab.research.google.com/drive/1RMUeAWACpViqiUMlPMMwPTKyGU-OX756?usp=sharing — also available as `tutorial_notebook.ipynb` in this repo if you’d like to download and run it locally.
 
+You can install the GABRIEL Python library with `pip install openai-gabriel` and then `import gabriel`.
+
 ## Table of contents
 
 - [Why GABRIEL?](#why-gabriel)
