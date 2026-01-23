@@ -84,6 +84,7 @@ class MapMaker:
         # choose save directory
         if save_dir is None:
             save_dir = os.path.join(os.getcwd(), "maps")
+        save_dir = os.path.expandvars(os.path.expanduser(save_dir))
         os.makedirs(save_dir, exist_ok=True)
         self.save_dir = save_dir
 
