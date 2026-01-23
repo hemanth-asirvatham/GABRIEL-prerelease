@@ -225,7 +225,8 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
     assert regression.diff_regression is not None
     diff_col = regression.debiased_columns["diff"]
     twostep_col = regression.debiased_columns["twostep"]
-    expected_diff = results_df["bias_score"] - results_df["bias_score (bias_score stripped 100%)"]
+    stripped_measure_col = "bias_score (stripped)"
+    expected_diff = results_df["bias_score"] - results_df[stripped_measure_col]
     pdt.assert_series_equal(
         results_df[diff_col],
         expected_diff,
@@ -344,14 +345,15 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     assert regression.strip_percentage is None
     assert regression.diff_regression is not None
     diff_col = regression.debiased_columns["diff"]
-    expected_diff = results_df["bias_score"] - results_df["bias_score (bias_score stripped (paraphrase))"]
+    stripped_measure_col = "bias_score (stripped paraphrase)"
+    expected_diff = results_df["bias_score"] - results_df[stripped_measure_col]
     pdt.assert_series_equal(
         results_df[diff_col],
         expected_diff,
         check_names=False,
     )
     assert pytest.approx(regression.mean_stripped) == results_df[
-        "bias_score (bias_score stripped (paraphrase))"
+        stripped_measure_col
     ].mean()
 
     metadata = result.metadata
@@ -451,9 +453,7 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
 
     results_df = result.results
     assert variant_col in results_df.columns
-    measurement_variant = (
-        f"{cfg.measurement_attribute} ({cfg.removal_attribute} stripped 100%)"
-    )
+    measurement_variant = f"{cfg.measurement_attribute} (stripped)"
     assert measurement_variant in results_df.columns
     regression = result.regression["stripped_100pct"]
     diff_col = regression.debiased_columns["diff"]
@@ -465,3 +465,21 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
     )
     assert result.metadata["config"]["removal_attribute"] == "bias_flag"
     assert result.metadata["config"]["measurement_attribute"] == "bias_score"
+
+
+def test_debias_pipeline_uses_first_attribute_when_multiple_requested(capsys, tmp_path):
+    cfg = DebiasConfig(
+        mode="rate",
+        measurement_attribute="second",
+        attributes={"first": "desc", "second": "desc"},
+        signal_dictionary={"first": "remove"},
+        removal_method="codify",
+        save_dir=str(tmp_path),
+        strip_percentages=[100],
+        run_name="first_attr_notice",
+        verbose=True,
+    )
+    DebiasPipeline(cfg)
+    output = capsys.readouterr().out
+    assert "Multiple measurement attributes supplied" in output
+    assert cfg.measurement_attribute == "first"

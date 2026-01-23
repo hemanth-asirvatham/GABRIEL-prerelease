@@ -321,18 +321,31 @@ class DebiasPipeline:
         self.cfg.signal_dictionary = dict(self.cfg.signal_dictionary or {})
         if not self.cfg.signal_dictionary:
             raise ValueError("signal_dictionary must describe the signal to remove")
+        attr_keys = list(self.cfg.attributes.keys())
+        first_attr = attr_keys[0]
         measurement_attr = self.cfg.measurement_attribute
-        if measurement_attr is None:
-            measurement_attr = next(iter(self.cfg.attributes))
-            if self.cfg.verbose:
-                print(
-                    "[Debias] measurement_attribute not provided; "
-                    f"defaulting to '{measurement_attr}'."
-                )
-        elif measurement_attr not in self.cfg.attributes:
+        if measurement_attr is not None and measurement_attr not in self.cfg.attributes:
             raise ValueError(
                 f"Measurement attribute '{measurement_attr}' must be a key in attributes"
             )
+        if measurement_attr is None:
+            measurement_attr = first_attr
+            if self.cfg.verbose:
+                msg = (
+                    "[Debias] measurement_attribute not provided; "
+                    f"defaulting to '{measurement_attr}'."
+                )
+                if len(attr_keys) > 1:
+                    msg += " Debiasing will use the first attribute provided."
+                print(msg)
+        elif len(attr_keys) > 1 and measurement_attr != first_attr:
+            if self.cfg.verbose:
+                print(
+                    "[Debias] Multiple measurement attributes supplied; debiasing "
+                    f"will use the first attribute '{first_attr}' and ignore the "
+                    f"requested '{measurement_attr}'."
+                )
+            measurement_attr = first_attr
         self.cfg.measurement_attribute = measurement_attr
 
         removal_attr = self.cfg.removal_attribute
@@ -413,6 +426,12 @@ class DebiasPipeline:
             print(f"[Debias] Running debiasing pipeline on {len(df_master)} rows.")
 
         attr_keys = list(self.cfg.attributes.keys())
+        if self.cfg.verbose and len(attr_keys) > 1:
+            print(
+                "[Debias] Multiple attributes detected; debiasing will focus on "
+                f"'{self.cfg.measurement_attribute}' while measuring all attributes "
+                "on both raw and stripped text."
+            )
 
         if self.cfg.verbose:
             print("[Debias] Measuring baseline signals...")
@@ -442,6 +461,10 @@ class DebiasPipeline:
         if variant_info and self.cfg.verbose:
             print("[Debias] Measuring stripped variants...")
 
+        variant_count = len(variant_info)
+        for info in variant_info.values():
+            info["label_suffix"] = self._variant_label_suffix(info, variant_count)
+
         disable_progress = not (self.cfg.verbose and bool(variant_info))
         for key in tqdm(list(variant_info.keys()), desc="Variants", disable=disable_progress):
             info = variant_info[key]
@@ -460,7 +483,7 @@ class DebiasPipeline:
                 measure_df,
                 attr_keys,
                 variant_key=key,
-                display_name=info["display"],
+                display_name=info["label_suffix"],
             )
             info["measurement_columns"] = column_map
 
@@ -475,6 +498,7 @@ class DebiasPipeline:
                 df_master,
                 info=info,
                 save_label=key,
+                label_suffix=info["label_suffix"],
             )
             summary = self._run_debiasing(
                 df_master,
@@ -484,6 +508,7 @@ class DebiasPipeline:
                 variant_key=key,
                 display_name=info["display"],
                 strip_percentage=info.get("strip_percentage"),
+                label_suffix=info["label_suffix"],
             )
             regression_info[key] = summary
 
@@ -625,6 +650,7 @@ class DebiasPipeline:
         *,
         info: Dict[str, Any],
         save_label: str,
+        label_suffix: str,
     ) -> Optional[str]:
         attrs = self._remaining_signal_attributes()
         if not attrs:
@@ -647,14 +673,27 @@ class DebiasPipeline:
 
         measurement_attr = self.cfg.remaining_signal_attribute
         assert measurement_attr is not None
+        prevalence_label = f"prevalence of {measurement_attr} ({label_suffix})"
         column_map = self._attach_measurement(
             df_master,
             remaining_df,
             [measurement_attr],
             variant_key=f"{save_label}_remaining_signal",
-            display_name=f"{info['display']} remaining signal",
+            display_name=prevalence_label,
         )
         return column_map.get(measurement_attr)
+
+    # ------------------------------------------------------------------
+    def _variant_label_suffix(self, info: Dict[str, Any], variant_count: int) -> str:
+        pct = info.get("strip_percentage")
+        display = str(info.get("display", "stripped"))
+        if pct is None:
+            if "paraphrase" in display.lower():
+                return "stripped paraphrase"
+            return "stripped"
+        if pct == 100 and variant_count == 1:
+            return "stripped"
+        return f"stripped {pct}%"
 
     async def _prepare_codify_variants(
         self,
@@ -828,6 +867,7 @@ class DebiasPipeline:
         variant_key: str,
         display_name: str,
         strip_percentage: Optional[int],
+        label_suffix: str,
     ) -> DebiasRegressionResult:
         cols = [original_column, stripped_column]
         if remaining_signal_column:
@@ -875,6 +915,8 @@ class DebiasPipeline:
 
         diff_col = f"{measurement_attr}__debiased_diff_{variant_key}"
         df.loc[reg_df.index, diff_col] = y_series - s_series
+        pretty_diff_col = f"{measurement_attr} (raw - {label_suffix})"
+        df.loc[reg_df.index, pretty_diff_col] = df.loc[reg_df.index, diff_col]
 
         mean_pct_diff, mean_abs_pct_diff = self._avg_pct_diff(
             y_series,
@@ -895,6 +937,11 @@ class DebiasPipeline:
         )
 
         twostep_col = f"{measurement_attr}__debiased_twostep_{variant_key}"
+        pretty_twostep_col = (
+            f"{measurement_attr} (debiased)"
+            if label_suffix == "stripped"
+            else f"{measurement_attr} (debiased, {label_suffix})"
+        )
         stage1_reg: Optional[Dict[str, Any]] = None
         delta: Optional[float] = None
         if remaining_signal_column and remaining_signal_column in df.columns:
@@ -912,6 +959,7 @@ class DebiasPipeline:
                     remaining_signal_column,
                 )
                 df.loc[valid_idx, twostep_col] = y_vals - s_vals + delta * r_vals
+                df.loc[valid_idx, pretty_twostep_col] = df.loc[valid_idx, twostep_col]
                 mean_pct_two, mean_abs_pct_two = self._avg_pct_diff(
                     y_vals,
                     df.loc[valid_idx, twostep_col],
@@ -952,8 +1000,8 @@ class DebiasPipeline:
             stage1_regression=stage1_reg,
             stage1_delta=delta,
             debiased_columns={
-                "diff": diff_col,
-                "twostep": twostep_col,
+                "diff": pretty_diff_col,
+                "twostep": pretty_twostep_col,
                 "remaining_signal": remaining_signal_column or "",
             },
         )
