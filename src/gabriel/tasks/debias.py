@@ -788,12 +788,12 @@ class DebiasPipeline:
     # ------------------------------------------------------------------
     def _build_paraphrase_instructions(self) -> str:
         lines = [
-            "Rewrite the passage so that every reference to the following signals is removed while preserving all other content:",
+            "Rewrite the passage so that every reference to the following signal(s) is removed while preserving all other content:",
         ]
         for key, desc in self.cfg.signal_dictionary.items():
             lines.append(f"- {key}: {desc}")
         lines.append(
-            "Keep the remaining wording, ordering, and style identical unless necessary for grammatical correctness."
+            "Keep the remaining content identical. Be exhaustive: the final output must have absolutely no content which references, mentions, manifests, or alludes to the aformentioned signal(s). All such content must be stripped from the text; ensure nothing at all relevant remains. When in doubt, remove it. The stripping must be perfect; don't output anything related to / manifesting the signal(s). Your output is the original text, with everything else unchanged, but all this content completely and entirely removed."
         )
         return "\n".join(lines)
 
