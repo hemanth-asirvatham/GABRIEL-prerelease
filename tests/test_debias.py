@@ -139,6 +139,8 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
         },
         signal_dictionary={"bias_score": "Mentions of the token BIAS."},
         removal_method="codify",
+        remaining_signal_attribute="remaining_signal",
+        remaining_signal_description="Residual signal prevalence",
         save_dir=str(tmp_path),
         strip_percentages=[100],
         run_name="codify_pipeline",
@@ -186,6 +188,12 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
             },
             index=index,
         ),
+        ("rate", "stripped_100pct_remaining_signal", variant_col): pd.DataFrame(
+            {
+                "remaining_signal": [0.0, 1.0, 2.0, 3.0],
+            },
+            index=index,
+        ),
     }
 
     async def fake_run_measurement(
@@ -212,17 +220,18 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
     assert variant_col in results_df.columns
     assert all("BIAS" not in val for val in results_df[variant_col])
 
-    residual_col = "bias_score__residual_stripped_100pct"
-    debiased_col = "bias_score__debiased_stripped_100pct"
-    pdt.assert_series_equal(
-        results_df[residual_col],
-        results_df[debiased_col],
-        check_names=False,
-    )
-
     regression = result.regression["stripped_100pct"]
     assert regression.strip_percentage == 100
-    assert regression.regression is not None
+    assert regression.diff_regression is not None
+    diff_col = regression.debiased_columns["diff"]
+    twostep_col = regression.debiased_columns["twostep"]
+    expected_diff = results_df["bias_score"] - results_df["bias_score (bias_score stripped 100%)"]
+    pdt.assert_series_equal(
+        results_df[diff_col],
+        expected_diff,
+        check_names=False,
+    )
+    assert results_df[twostep_col].notna().all()
     assert pytest.approx(regression.mean_original) == results_df["bias_score"].mean()
 
     metadata = result.metadata
@@ -251,6 +260,8 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
         },
         signal_dictionary={"bias_score": "References to the token BIAS."},
         removal_method="paraphrase",
+        remaining_signal_attribute="remaining_signal",
+        remaining_signal_description="Residual signal prevalence",
         save_dir=str(tmp_path),
         run_name="paraphrase_pipeline",
         verbose=False,
@@ -297,6 +308,12 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
             },
             index=index,
         ),
+        ("rate", "paraphrase_remaining_signal", variant_col): pd.DataFrame(
+            {
+                "remaining_signal": [0.0, 0.5, 1.0, 1.5],
+            },
+            index=index,
+        ),
     }
 
     async def fake_run_measurement(
@@ -323,17 +340,16 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     assert variant_col in results_df.columns
     assert all("BIAS" not in val for val in results_df[variant_col])
 
-    residual_col = "bias_score__residual_paraphrase"
-    debiased_col = "bias_score__debiased_paraphrase"
-    pdt.assert_series_equal(
-        results_df[residual_col],
-        results_df[debiased_col],
-        check_names=False,
-    )
-
     regression = result.regression["paraphrase"]
     assert regression.strip_percentage is None
-    assert regression.regression is not None
+    assert regression.diff_regression is not None
+    diff_col = regression.debiased_columns["diff"]
+    expected_diff = results_df["bias_score"] - results_df["bias_score (bias_score stripped (paraphrase))"]
+    pdt.assert_series_equal(
+        results_df[diff_col],
+        expected_diff,
+        check_names=False,
+    )
     assert pytest.approx(regression.mean_stripped) == results_df[
         "bias_score (bias_score stripped (paraphrase))"
     ].mean()
@@ -439,11 +455,12 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
         f"{cfg.measurement_attribute} ({cfg.removal_attribute} stripped 100%)"
     )
     assert measurement_variant in results_df.columns
-    residual_col = "bias_score__residual_stripped_100pct"
-    debiased_col = "bias_score__debiased_stripped_100pct"
+    regression = result.regression["stripped_100pct"]
+    diff_col = regression.debiased_columns["diff"]
+    expected_diff = results_df[cfg.measurement_attribute] - results_df[measurement_variant]
     pdt.assert_series_equal(
-        results_df[residual_col],
-        results_df[debiased_col],
+        results_df[diff_col],
+        expected_diff,
         check_names=False,
     )
     assert result.metadata["config"]["removal_attribute"] == "bias_flag"
