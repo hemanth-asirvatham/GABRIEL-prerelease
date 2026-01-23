@@ -8,8 +8,9 @@ import random
 import re
 import warnings
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -103,6 +104,91 @@ except Exception:  # pragma: no cover - fallback exercised when statsmodels abse
 else:  # pragma: no cover - executed when statsmodels dependency is available
     fit_ols = _fit_ols
 
+
+def _fit_ols_fallback(
+    y: np.ndarray,
+    X: np.ndarray,
+    *,
+    robust: bool = True,  # noqa: ARG001 - signature parity
+    varnames: Optional[List[str]] = None,  # noqa: ARG001
+) -> Dict[str, Any]:
+    """Minimal OLS routine used when statsmodels-backed fitting is unavailable."""
+
+    y_arr = np.asarray(y, dtype=float)
+    X_arr = np.asarray(X, dtype=float)
+    if y_arr.ndim != 1:
+        y_arr = y_arr.reshape(-1)
+    if X_arr.ndim != 2:
+        raise ValueError("Design matrix must be two-dimensional")
+
+    beta, _, _, _ = np.linalg.lstsq(X_arr, y_arr, rcond=None)
+    resid = y_arr - X_arr @ beta
+    n, k_plus1 = X_arr.shape
+    df_resid = n - k_plus1
+
+    XtX = X_arr.T @ X_arr
+    try:
+        XtX_inv = np.linalg.inv(XtX)
+    except np.linalg.LinAlgError:
+        XtX_inv = np.linalg.pinv(XtX)
+
+    if df_resid > 0:
+        sigma2 = float(resid @ resid) / df_resid
+        cov = sigma2 * XtX_inv
+        se = np.sqrt(np.diag(cov))
+        rse = float(np.sqrt(sigma2))
+    else:
+        sigma2 = 0.0
+        se = np.full(beta.shape, np.nan)
+        rse = np.nan
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_vals = beta / se
+    p_vals = np.full(beta.shape, np.nan)
+
+    mean_y = float(y_arr.mean()) if n else 0.0
+    ss_tot = float(np.sum((y_arr - mean_y) ** 2))
+    ss_res = float(np.sum(resid ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot else 0.0
+    adj_r2 = 1.0 - (1.0 - r2) * (n - 1) / df_resid if df_resid > 0 else np.nan
+
+    return {
+        "coef": np.asarray(beta),
+        "se": np.asarray(se),
+        "t": np.asarray(t_vals),
+        "p": np.asarray(p_vals),
+        "r2": float(r2),
+        "adj_r2": float(adj_r2),
+        "n": int(n),
+        "k": int(k_plus1 - 1),
+        "rse": rse,
+        "F": np.nan,
+        "resid": np.asarray(resid),
+        "varnames": varnames,
+        "sm_results": None,
+    }
+
+
+def _safe_fit_ols(
+    y: np.ndarray,
+    X: np.ndarray,
+    *,
+    robust: bool,
+    varnames: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Attempt statsmodels-backed fitting, falling back to NumPy OLS when needed."""
+
+    try:
+        return fit_ols(y, X, robust=robust, varnames=varnames)
+    except ImportError:
+        if robust:
+            warnings.warn(
+                "statsmodels is unavailable; falling back to non-robust OLS for debiasing diagnostics.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return _fit_ols_fallback(y, X, robust=False, varnames=varnames)
+
 DEFAULT_SAVE_DIR = os.path.expanduser("~/Documents/runs")
 RemovalMethod = Literal["codify", "paraphrase"]
 MeasurementMode = Literal["rate", "classify", "extract", "rank"]
@@ -118,7 +204,12 @@ class DebiasRegressionResult:
     correlation: Optional[float]
     mean_original: Optional[float]
     mean_stripped: Optional[float]
-    regression: Optional[Dict[str, Any]] = None
+    attenuation_pct: Optional[float] = None
+    diff_regression: Optional[Dict[str, Any]] = None
+    twostep_regression: Optional[Dict[str, Any]] = None
+    stage1_regression: Optional[Dict[str, Any]] = None
+    stage1_delta: Optional[float] = None
+    debiased_columns: Dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         """Return a JSON serialisable representation of the result."""
@@ -139,7 +230,12 @@ class DebiasRegressionResult:
             "correlation": _convert(self.correlation),
             "mean_original": _convert(self.mean_original),
             "mean_stripped": _convert(self.mean_stripped),
-            "regression": _convert(self.regression),
+            "attenuation_pct": _convert(self.attenuation_pct),
+            "diff_regression": _convert(self.diff_regression),
+            "twostep_regression": _convert(self.twostep_regression),
+            "stage1_regression": _convert(self.stage1_regression),
+            "stage1_delta": _convert(self.stage1_delta),
+            "debiased_columns": _convert(self.debiased_columns),
         }
 
 
@@ -153,6 +249,8 @@ class DebiasConfig:
     attributes: Dict[str, str] = field(default_factory=dict)
     signal_dictionary: Dict[str, str] = field(default_factory=dict)
     removal_method: RemovalMethod = "codify"
+    remaining_signal_attribute: Optional[str] = None
+    remaining_signal_description: Optional[str] = None
     save_dir: str = DEFAULT_SAVE_DIR
     run_name: Optional[str] = None
     strip_percentages: Optional[List[int]] = None
@@ -261,6 +359,11 @@ class DebiasPipeline:
         if self.cfg.removal_method not in {"codify", "paraphrase"}:
             raise ValueError("removal_method must be 'codify' or 'paraphrase'")
 
+        if self.cfg.remaining_signal_attribute and not self.cfg.remaining_signal_description:
+            raise ValueError(
+                "remaining_signal_description must be provided when remaining_signal_attribute is set"
+            )
+
         if self.cfg.categories_to_strip is None:
             if self.cfg.removal_method == "codify":
                 self.cfg.categories_to_strip = [self.cfg.removal_attribute]
@@ -368,10 +471,16 @@ class DebiasPipeline:
             )
             if not stripped_column:
                 continue
-            summary = self._run_regression(
+            remaining_signal_column = await self._measure_remaining_signal(
+                df_master,
+                info=info,
+                save_label=key,
+            )
+            summary = self._run_debiasing(
                 df_master,
                 original_column=self.cfg.measurement_attribute,
                 stripped_column=stripped_column,
+                remaining_signal_column=remaining_signal_column,
                 variant_key=key,
                 display_name=info["display"],
                 strip_percentage=info.get("strip_percentage"),
@@ -500,6 +609,52 @@ class DebiasPipeline:
             df_master[target_name] = measurement_df[attr].reindex(df_master.index)
             column_map[attr] = target_name
         return column_map
+
+    # ------------------------------------------------------------------
+    def _remaining_signal_attributes(self) -> Dict[str, str]:
+        if not self.cfg.remaining_signal_attribute:
+            return {}
+        return {
+            self.cfg.remaining_signal_attribute: str(self.cfg.remaining_signal_description)
+        }
+
+    # ------------------------------------------------------------------
+    async def _measure_remaining_signal(
+        self,
+        df_master: pd.DataFrame,
+        *,
+        info: Dict[str, Any],
+        save_label: str,
+    ) -> Optional[str]:
+        attrs = self._remaining_signal_attributes()
+        if not attrs:
+            return None
+        if self.cfg.verbose:
+            print(
+                "[Debias] Measuring remaining-signal prevalence on "
+                f"variant '{info['display']}'."
+            )
+        remaining_df = await self._run_measurement(
+            df_master,
+            column_name=info["text_column"],
+            mode=self.cfg.mode,
+            save_label=f"{save_label}_remaining_signal",
+            attributes=attrs,
+            template_path=self.cfg.template_path,
+            extra_kwargs=self.cfg.measurement_kwargs,
+            default_model=self.cfg.model,
+        )
+
+        measurement_attr = self.cfg.remaining_signal_attribute
+        assert measurement_attr is not None
+        column_map = self._attach_measurement(
+            df_master,
+            remaining_df,
+            [measurement_attr],
+            variant_key=f"{save_label}_remaining_signal",
+            display_name=f"{info['display']} remaining signal",
+        )
+        return column_map.get(measurement_attr)
 
     async def _prepare_codify_variants(
         self,
@@ -663,28 +818,27 @@ class DebiasPipeline:
         return self._normalise_ws(cleaned)
 
     # ------------------------------------------------------------------
-    def _run_regression(
+    def _run_debiasing(
         self,
         df: pd.DataFrame,
         original_column: str,
         stripped_column: str,
         *,
+        remaining_signal_column: Optional[str],
         variant_key: str,
         display_name: str,
         strip_percentage: Optional[int],
     ) -> DebiasRegressionResult:
         cols = [original_column, stripped_column]
+        if remaining_signal_column:
+            cols.append(remaining_signal_column)
         measurement_attr = self.cfg.measurement_attribute
-        rename_map = {
-            original_column: f"{measurement_attr} (original)",
-            stripped_column: f"{measurement_attr} ({display_name})",
-        }
         reg_df = df[cols].apply(pd.to_numeric, errors="coerce")
-        reg_df = reg_df.dropna()
+        reg_df = reg_df.dropna(subset=[original_column, stripped_column])
         if len(reg_df) < 3:
             if self.cfg.verbose:
                 print(
-                    f"[Debias] Not enough observations for regression on variant '{display_name}'."
+                    f"[Debias] Not enough observations for debiasing on variant '{display_name}'."
                 )
             return DebiasRegressionResult(
                 variant=variant_key,
@@ -694,9 +848,11 @@ class DebiasPipeline:
                 mean_original=None,
                 mean_stripped=None,
             )
-        y = reg_df[original_column].values
-        x = reg_df[stripped_column].values
-        if np.allclose(np.var(x), 0.0):
+
+        y_series = reg_df[original_column]
+        s_series = reg_df[stripped_column]
+
+        if np.allclose(np.var(s_series.values), 0.0):
             if self.cfg.verbose:
                 print(
                     f"[Debias] Stripped column has no variation for variant '{display_name}'."
@@ -706,41 +862,271 @@ class DebiasPipeline:
                 display_name=display_name,
                 strip_percentage=strip_percentage,
                 correlation=None,
-                mean_original=float(reg_df[original_column].mean()),
-                mean_stripped=float(reg_df[stripped_column].mean()),
+                mean_original=float(y_series.mean()),
+                mean_stripped=float(s_series.mean()),
             )
-        X = np.column_stack([np.ones(len(reg_df)), x])
-        reg_res = fit_ols(
-            y,
-            X,
-            robust=self.cfg.robust_regression,
-            varnames=["Intercept", rename_map[stripped_column]],
+
+        attenuation_pct = self._attenuation_pct(y_series, s_series)
+        if self.cfg.verbose and attenuation_pct is not None:
+            print(
+                "[Debias] Mean attenuation from original to stripped "
+                f"for '{display_name}': {attenuation_pct:.2f}%"
+            )
+
+        diff_col = f"{measurement_attr}__debiased_diff_{variant_key}"
+        df.loc[reg_df.index, diff_col] = y_series - s_series
+
+        mean_pct_diff, mean_abs_pct_diff = self._avg_pct_diff(
+            y_series,
+            df.loc[reg_df.index, diff_col],
         )
         if self.cfg.verbose:
-            self._print_regression_table(
-                reg_res,
-                rename_map,
-                stripped_column,
-                title=f"Regression ({display_name})",
+            print(
+                "[Debias] Simple difference debiasing percent change "
+                f"(signed / absolute): {mean_pct_diff:.2f}% / {mean_abs_pct_diff:.2f}%"
             )
-        resid = pd.Series(
-            reg_res["resid"],
-            index=reg_df.index,
-            name=f"{measurement_attr}__residual_{variant_key}",
+
+        diff_reg = self._regress_against_original(
+            df,
+            original_column=original_column,
+            debiased_column=diff_col,
+            title=f"Debiasing regression: original ~ (y - stripped) [{display_name}]",
+            plot_filename=f"{variant_key}_diff_vs_original.png",
         )
-        df.loc[resid.index, resid.name] = resid
-        df.loc[resid.index, f"{measurement_attr}__debiased_{variant_key}"] = resid
-        correlation = float(reg_df[original_column].corr(reg_df[stripped_column]))
+
+        twostep_col = f"{measurement_attr}__debiased_twostep_{variant_key}"
+        stage1_reg: Optional[Dict[str, Any]] = None
+        delta: Optional[float] = None
+        if remaining_signal_column and remaining_signal_column in df.columns:
+            stage1_reg, delta = self._stage1_remaining_signal_regression(
+                df,
+                stripped_column=stripped_column,
+                remaining_signal_column=remaining_signal_column,
+                display_name=display_name,
+            )
+            if delta is not None:
+                valid_idx, y_vals, s_vals, r_vals = self._aligned_series(
+                    df,
+                    original_column,
+                    stripped_column,
+                    remaining_signal_column,
+                )
+                df.loc[valid_idx, twostep_col] = y_vals - s_vals + delta * r_vals
+                mean_pct_two, mean_abs_pct_two = self._avg_pct_diff(
+                    y_vals,
+                    df.loc[valid_idx, twostep_col],
+                )
+                if self.cfg.verbose:
+                    print(
+                        "[Debias] Two-step debiasing percent change "
+                        f"(signed / absolute): {mean_pct_two:.2f}% / {mean_abs_pct_two:.2f}%"
+                    )
+        else:
+            if self.cfg.verbose and self.cfg.remaining_signal_attribute:
+                print(
+                    "[Debias] Remaining-signal attribute configured but no remaining-signal "
+                    f"column was available for variant '{display_name}'."
+                )
+
+        twostep_reg: Optional[Dict[str, Any]] = None
+        if twostep_col in df.columns and df[twostep_col].notna().sum() >= 3:
+            twostep_reg = self._regress_against_original(
+                df,
+                original_column=original_column,
+                debiased_column=twostep_col,
+                title=f"Debiasing regression: original ~ two-step [{display_name}]",
+                plot_filename=f"{variant_key}_twostep_vs_original.png",
+            )
+
+        correlation = float(y_series.corr(s_series))
         summary = DebiasRegressionResult(
             variant=variant_key,
             display_name=display_name,
             strip_percentage=strip_percentage,
             correlation=correlation,
-            mean_original=float(reg_df[original_column].mean()),
-            mean_stripped=float(reg_df[stripped_column].mean()),
-            regression=self._regression_dict(reg_res, ["Intercept", rename_map[stripped_column]]),
+            mean_original=float(y_series.mean()),
+            mean_stripped=float(s_series.mean()),
+            attenuation_pct=attenuation_pct,
+            diff_regression=diff_reg,
+            twostep_regression=twostep_reg,
+            stage1_regression=stage1_reg,
+            stage1_delta=delta,
+            debiased_columns={
+                "diff": diff_col,
+                "twostep": twostep_col,
+                "remaining_signal": remaining_signal_column or "",
+            },
         )
         return summary
+
+    # ------------------------------------------------------------------
+    def _aligned_series(
+        self,
+        df: pd.DataFrame,
+        original_column: str,
+        stripped_column: str,
+        remaining_signal_column: str,
+    ) -> Tuple[pd.Index, pd.Series, pd.Series, pd.Series]:
+        tmp = df[[original_column, stripped_column, remaining_signal_column]].apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+        tmp = tmp.dropna()
+        return (
+            tmp.index,
+            tmp[original_column],
+            tmp[stripped_column],
+            tmp[remaining_signal_column],
+        )
+
+    # ------------------------------------------------------------------
+    def _attenuation_pct(
+        self,
+        original: pd.Series,
+        stripped: pd.Series,
+    ) -> Optional[float]:
+        mean_original = float(pd.to_numeric(original, errors="coerce").mean())
+        mean_stripped = float(pd.to_numeric(stripped, errors="coerce").mean())
+        if np.isclose(mean_original, 0.0):
+            return None
+        return float((mean_original - mean_stripped) / mean_original * 100.0)
+
+    # ------------------------------------------------------------------
+    def _avg_pct_diff(
+        self,
+        raw: pd.Series,
+        debiased: pd.Series,
+    ) -> Tuple[float, float]:
+        raw_num = pd.to_numeric(raw, errors="coerce")
+        deb_num = pd.to_numeric(debiased, errors="coerce")
+        pct = (deb_num - raw_num) / raw_num * 100.0
+        pct = pct.replace([np.inf, -np.inf], np.nan)
+        pct = pct[raw_num != 0]
+        return float(pct.mean()), float(pct.abs().mean())
+
+    # ------------------------------------------------------------------
+    def _stage1_remaining_signal_regression(
+        self,
+        df: pd.DataFrame,
+        *,
+        stripped_column: str,
+        remaining_signal_column: str,
+        display_name: str,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+        stage1_df = df[[stripped_column, remaining_signal_column]].apply(
+            pd.to_numeric,
+            errors="coerce",
+        ).dropna()
+        if len(stage1_df) < 3:
+            if self.cfg.verbose:
+                print(
+                    "[Debias] Not enough observations for remaining-signal regression "
+                    f"on variant '{display_name}'."
+                )
+            return None, None
+
+        r_vals = stage1_df[remaining_signal_column].values
+        if np.allclose(np.var(r_vals), 0.0):
+            if self.cfg.verbose:
+                print(
+                    "[Debias] Remaining-signal proxy has no variation for "
+                    f"variant '{display_name}'."
+                )
+            return None, None
+
+        s_vals = stage1_df[stripped_column].values
+        X1 = np.column_stack([np.ones(len(stage1_df)), r_vals])
+        reg = _safe_fit_ols(
+            s_vals,
+            X1,
+            robust=self.cfg.robust_regression,
+            varnames=["Intercept", remaining_signal_column],
+        )
+        if self.cfg.verbose:
+            self._print_generic_regression_table(
+                reg,
+                names=["Intercept", remaining_signal_column],
+                title=f"Stage-1 regression: stripped ~ remaining signal [{display_name}]",
+            )
+        delta = float(reg["coef"][1])
+        return self._regression_dict(reg, ["Intercept", remaining_signal_column]), delta
+
+    # ------------------------------------------------------------------
+    def _regress_against_original(
+        self,
+        df: pd.DataFrame,
+        *,
+        original_column: str,
+        debiased_column: str,
+        title: str,
+        plot_filename: str,
+    ) -> Dict[str, Any]:
+        reg_df = df[[original_column, debiased_column]].apply(
+            pd.to_numeric,
+            errors="coerce",
+        ).dropna()
+        if len(reg_df) < 3:
+            return {}
+        y_vals = reg_df[original_column].values
+        x_vals = reg_df[debiased_column].values
+        X = np.column_stack([np.ones(len(reg_df)), x_vals])
+        reg_res = _safe_fit_ols(
+            y_vals,
+            X,
+            robust=self.cfg.robust_regression,
+            varnames=["Intercept", debiased_column],
+        )
+        if self.cfg.verbose:
+            self._print_generic_regression_table(
+                reg_res,
+                names=["Intercept", debiased_column],
+                title=title,
+            )
+        self._save_scatter_with_fit(
+            reg_df,
+            x_col=debiased_column,
+            y_col=original_column,
+            reg_res=reg_res,
+            filename=plot_filename,
+            title=title,
+        )
+        return self._regression_dict(reg_res, ["Intercept", debiased_column]) or {}
+
+    # ------------------------------------------------------------------
+    def _save_scatter_with_fit(
+        self,
+        df: pd.DataFrame,
+        *,
+        x_col: str,
+        y_col: str,
+        reg_res: Dict[str, Any],
+        filename: str,
+        title: str,
+    ) -> Optional[str]:
+        if df.empty:
+            return None
+        x_vals = df[x_col].values.astype(float)
+        y_vals = df[y_col].values.astype(float)
+        beta0, beta1 = reg_res["coef"][0], reg_res["coef"][1]
+        x_line = np.linspace(float(np.min(x_vals)), float(np.max(x_vals)), 200)
+        y_line = beta0 + beta1 * x_line
+
+        fig, ax = plt.subplots(figsize=(7, 5), dpi=200)
+        ax.scatter(x_vals, y_vals, alpha=0.35, edgecolor="none")
+        ax.plot(x_line, y_line, color="black", linewidth=2, label="OLS fit")
+        ax.set_title(title)
+        ax.set_xlabel(x_col)
+        ax.set_ylabel(y_col)
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.2)
+        fig.tight_layout()
+
+        plot_path = os.path.join(self.run_dir, filename)
+        fig.savefig(plot_path)
+        plt.close(fig)
+        if self.cfg.verbose:
+            print(f"[Debias] Saved regression plot to {plot_path}")
+        return plot_path
 
     # ------------------------------------------------------------------
     def _print_regression_table(
@@ -751,6 +1137,29 @@ class DebiasPipeline:
         title: str,
     ) -> None:
         names = ["Intercept", rename_map[stripped_column]]
+        table = pd.DataFrame(
+            {
+                "coef": result["coef"],
+                "se": result["se"],
+                "t": result["t"],
+                "p": result["p"],
+            },
+            index=names,
+        )
+        print(f"\n{title}")
+        print(table.round(6).to_string())
+        print(
+            f"R^2 = {result['r2']:.4f}, adj. R^2 = {result['adj_r2']:.4f}, n = {result['n']}"
+        )
+
+    # ------------------------------------------------------------------
+    def _print_generic_regression_table(
+        self,
+        result: Dict[str, Any],
+        *,
+        names: List[str],
+        title: str,
+    ) -> None:
         table = pd.DataFrame(
             {
                 "coef": result["coef"],
