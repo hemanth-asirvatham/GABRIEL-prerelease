@@ -1912,7 +1912,7 @@ async def debias(
     removal_attribute: Optional[str] = None,
     signal_dictionary: Dict[str, str],
     attributes: Optional[Dict[str, str]] = None,
-    removal_method: RemovalMethod = "codify",
+    removal_method: RemovalMethod = "paraphrase",
     save_dir: str = os.path.expanduser("~/Documents/runs"),
     run_name: Optional[str] = None,
     strip_percentages: Optional[List[int]] = None,
@@ -1922,8 +1922,9 @@ async def debias(
     n_parallels: int = 650,
     measurement_kwargs: Optional[Dict[str, Any]] = None,
     removal_kwargs: Optional[Dict[str, Any]] = None,
+    remaining_signal: bool = True,
     max_words_per_call: Optional[int] = 1000,
-    n_rounds: Optional[int] = 3,
+    n_rounds: Optional[int] = 1,
     use_dummy: bool = False,
     robust_regression: bool = True,
     random_seed: int = 12345,
@@ -1931,7 +1932,7 @@ async def debias(
     reset_files: bool = False,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
     get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
-) -> DebiasResult:
+) -> pd.DataFrame:
     """Post-process measurements to remove inference bias.
 
     Example Use
@@ -1974,6 +1975,9 @@ async def debias(
         Maximum concurrent API calls.
     measurement_kwargs, removal_kwargs:
         Fine-grained overrides for the measurement and removal tasks.
+    remaining_signal:
+        When ``True`` (default) measure a remaining-signal prevalence attribute on
+        the stripped text and use it in the two-step debiasing regression.
     max_words_per_call, n_rounds:
         Convenience passthroughs for the removal stage. ``max_words_per_call``
         configures the codify task's chunk size, while ``n_rounds`` controls the
@@ -2000,9 +2004,8 @@ async def debias(
 
     Returns
     -------
-    DebiasResult
-        Structured output containing measured bias, debiased DataFrame, and
-        supporting diagnostics.
+    pandas.DataFrame
+        Debiased results with raw, stripped, and debiased columns appended.
     """
 
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
@@ -2049,13 +2052,15 @@ async def debias(
         n_parallels=n_parallels,
         measurement_kwargs=measurement_kwargs,
         removal_kwargs=removal_kwargs,
+        remaining_signal=remaining_signal,
         use_dummy=use_dummy,
         robust_regression=robust_regression,
         random_seed=random_seed,
         verbose=verbose,
     )
     pipeline = DebiasPipeline(cfg)
-    return await pipeline.run(df, column_name, reset_files=reset_files)
+    result = await pipeline.run(df, column_name, reset_files=reset_files)
+    return result.results
 
 
 async def whatever(

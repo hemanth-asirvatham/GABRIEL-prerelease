@@ -22,6 +22,7 @@ def test_prepare_codify_variants_strips_text(monkeypatch, tmp_path):
         attributes={"bias_score": "desc"},
         signal_dictionary={"bias_score": "remove"},
         removal_method="codify",
+        remaining_signal=False,
         save_dir=str(tmp_path),
         strip_percentages=[100],
         run_name="unit_codify",
@@ -171,7 +172,7 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Codify, "run", fake_codify_run)
 
-    variant_col = f"text ({cfg.removal_attribute} stripped 100%)"
+    variant_col = "text (stripped)"
     index = _range_index(len(df))
     measurement_map = {
         ("rate", "original", "text"): pd.DataFrame(
@@ -280,9 +281,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
         **kwargs,
     ) -> pd.DataFrame:
         idx = df_in["__debias_row_id"].astype(int).tolist()
-        revised_name = self.cfg.revised_column_name or (
-            f"{column_name} ({cfg.removal_attribute} stripped paraphrase)"
-        )
+        revised_name = self.cfg.revised_column_name or f"{column_name} (stripped)"
         revised = [str(text).replace("BIAS", "").strip() for text in df_in[column_name]]
         out = pd.DataFrame({revised_name: revised})
         out.index = pd.Index(
@@ -293,7 +292,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Paraphrase, "run", fake_paraphrase_run)
 
-    variant_col = f"text ({cfg.removal_attribute} stripped paraphrase)"
+    variant_col = "text (stripped)"
     index = _range_index(len(df))
     measurement_map = {
         ("rate", "original", "text"): pd.DataFrame(
@@ -347,7 +346,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     assert regression.strip_percentage is None
     assert regression.diff_regression is not None
     diff_col = regression.debiased_columns["diff"]
-    stripped_measure_col = "bias_score (stripped paraphrase)"
+    stripped_measure_col = "bias_score (stripped)"
     expected_diff = results_df["bias_score"] - results_df[stripped_measure_col]
     pdt.assert_series_equal(
         results_df[diff_col],
@@ -381,6 +380,7 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
             "alternate_flag": "Secondary flag to leave untouched.",
         },
         removal_method="codify",
+        remaining_signal=False,
         save_dir=str(tmp_path),
         strip_percentages=[100],
         run_name="distinct_attrs_pipeline",
@@ -416,7 +416,7 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Codify, "run", fake_codify_run)
 
-    variant_col = f"text ({cfg.removal_attribute} stripped 100%)"
+    variant_col = "text (stripped)"
     index = _range_index(len(df))
     measurement_map = {
         ("rate", "original", "text"): pd.DataFrame(
@@ -470,7 +470,7 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
     assert result.metadata["config"]["measurement_attribute"] == "bias_score"
 
 
-def test_debias_pipeline_uses_first_attribute_when_multiple_requested(capsys, tmp_path):
+def test_debias_pipeline_respects_requested_measurement_attribute(capsys, tmp_path):
     cfg = DebiasConfig(
         mode="rate",
         measurement_attribute="second",
@@ -484,5 +484,5 @@ def test_debias_pipeline_uses_first_attribute_when_multiple_requested(capsys, tm
     )
     DebiasPipeline(cfg)
     output = capsys.readouterr().out
-    assert "Multiple measurement attributes supplied" in output
-    assert cfg.measurement_attribute == "first"
+    assert "Multiple measurement attributes supplied" not in output
+    assert cfg.measurement_attribute == "second"
