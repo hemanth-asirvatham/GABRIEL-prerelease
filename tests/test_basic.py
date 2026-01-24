@@ -1532,3 +1532,50 @@ def test_paraphrase_api(tmp_path):
         )
     )
     assert "txt_revised_1" in df_multi.columns and "txt_revised_2" in df_multi.columns
+
+
+def test_paraphrase_n_rounds_not_forwarded(monkeypatch, tmp_path):
+    captured = {}
+
+    async def fake_get_all_responses(*, prompts, identifiers, **kwargs):
+        captured["kwargs"] = dict(kwargs)
+        return pd.DataFrame({"Identifier": identifiers, "Response": prompts})
+
+    monkeypatch.setattr("gabriel.tasks.paraphrase.get_all_responses", fake_get_all_responses)
+
+    data = pd.DataFrame({"txt": ["hello"]})
+    df = asyncio.run(
+        gabriel.paraphrase(
+            data,
+            "txt",
+            instructions="reword",
+            save_dir=str(tmp_path / "para_rounds"),
+            n_rounds=1,
+        )
+    )
+
+    assert "n_rounds" not in captured["kwargs"]
+    assert df["txt_revised_approved"].tolist() == [True]
+
+
+def test_paraphrase_approval_column_recursive(monkeypatch, tmp_path):
+    async def fake_recursive_validate(self, original_texts, resp_map, approval_map, *, reset_files, max_rounds):
+        for idx in range(len(original_texts)):
+            resp_map[(idx, 0)] = f"approved {idx}"
+            approval_map[(idx, 0)] = (idx % 2 == 0)
+
+    monkeypatch.setattr("gabriel.tasks.paraphrase.Paraphrase._recursive_validate", fake_recursive_validate)
+
+    data = pd.DataFrame({"txt": ["a", "b"]})
+    df = asyncio.run(
+        gabriel.paraphrase(
+            data,
+            "txt",
+            instructions="reword",
+            save_dir=str(tmp_path / "para_recursive"),
+            n_rounds=2,
+        )
+    )
+
+    assert df["txt_revised"].tolist() == ["approved 0", "approved 1"]
+    assert df["txt_revised_approved"].tolist() == [True, False]

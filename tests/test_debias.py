@@ -54,7 +54,7 @@ def test_prepare_codify_variants_strips_text(monkeypatch, tmp_path):
 
     df_local = df.copy()
     df_local.index = _range_index(len(df_local))
-    variants = asyncio.run(pipeline._prepare_codify_variants(df_local, "text"))
+    variants = asyncio.run(pipeline._prepare_codify_variants(df_local, "text", reset_files=False))
 
     assert "stripped_100pct" in variants
     variant_col = variants["stripped_100pct"]["text_column"]
@@ -96,7 +96,7 @@ def test_prepare_paraphrase_variant_builds_instructions(monkeypatch, tmp_path):
 
     df_local = df.copy()
     df_local.index = _range_index(len(df_local))
-    variants = asyncio.run(pipeline._prepare_paraphrase_variant(df_local, "text"))
+    variants = asyncio.run(pipeline._prepare_paraphrase_variant(df_local, "text", reset_files=False))
 
     assert "paraphrase" in variants
     variant_col = variants["paraphrase"]["text_column"]
@@ -207,6 +207,7 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
         template_path,
         extra_kwargs,
         default_model,
+        reset_files: bool,
     ) -> pd.DataFrame:
         key = (mode, save_label, column_name)
         assert key in measurement_map, key
@@ -328,6 +329,7 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
         template_path,
         extra_kwargs,
         default_model,
+        reset_files: bool,
     ) -> pd.DataFrame:
         key = (mode, save_label, column_name)
         assert key in measurement_map, key
@@ -442,6 +444,7 @@ def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
         template_path,
         extra_kwargs,
         default_model,
+        reset_files: bool,
     ) -> pd.DataFrame:
         key = (mode, save_label, column_name)
         assert key in measurement_map, key
