@@ -1001,7 +1001,7 @@ async def codify(
     modality: str = "text",
     json_mode: bool = True,
     max_timeout: Optional[float] = None,
-    n_rounds: int = 2,
+    n_rounds: int = 1,
     completion_classifier_instructions: Optional[str] = None,
     template_path: Optional[str] = None,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,

@@ -372,11 +372,9 @@ class DebiasPipeline:
             attr_name = (self.cfg.remaining_signal_attribute or "").strip()
             if not attr_name:
                 default_attr = f"prevalence of {self.cfg.removal_attribute}"
-                signal_desc = self.cfg.signal_dictionary.get(self.cfg.removal_attribute, "signal-related content")
                 default_desc = (
-                    "How prevalent is content related to the stripped signal in the provided text? "
-                    "Assess the remaining prevalence of the signal after stripping. "
-                    f"Signal definition: {signal_desc}"
+                    "Prevalence of any direct mentions or allusions to concepts related to "
+                    f"{self.cfg.removal_attribute} anywhere in the text."
                 )
                 self.cfg.remaining_signal_attribute = default_attr
                 self.cfg.remaining_signal_description = default_desc
@@ -705,6 +703,16 @@ class DebiasPipeline:
         attrs = self._remaining_signal_attributes()
         if not attrs:
             return None
+        measurement_attr = self.cfg.remaining_signal_attribute
+        assert measurement_attr is not None
+        target_column = f"{measurement_attr} ({label_suffix})"
+        if target_column in df_master.columns:
+            if self.cfg.verbose:
+                print(
+                    "[Debias] Using existing remaining-signal column: "
+                    f"{target_column}"
+                )
+            return target_column
         if self.cfg.verbose:
             print(
                 "[Debias] Measuring remaining-signal prevalence on "
@@ -713,7 +721,7 @@ class DebiasPipeline:
         remaining_df = await self._run_measurement(
             df_master,
             column_name=info["text_column"],
-            mode=self.cfg.mode,
+            mode="rate",
             save_label=f"{save_label}_remaining_signal",
             attributes=attrs,
             template_path=self.cfg.template_path,
@@ -721,18 +729,14 @@ class DebiasPipeline:
             default_model=self.cfg.model,
             reset_files=reset_files,
         )
-
-        measurement_attr = self.cfg.remaining_signal_attribute
-        assert measurement_attr is not None
-        prevalence_label = f"{measurement_attr} ({label_suffix})"
         column_map = self._attach_measurement(
             df_master,
             remaining_df,
             [measurement_attr],
             variant_key=f"{save_label}_remaining_signal",
-            display_name=prevalence_label,
+            display_name=label_suffix,
         )
-        return column_map.get(measurement_attr)
+        return column_map.get(measurement_attr, target_column)
 
     # ------------------------------------------------------------------
     def _variant_label_suffix(self, info: Dict[str, Any], variant_count: int) -> str:
@@ -1233,18 +1237,19 @@ class DebiasPipeline:
                 names=["Intercept", debiased_column],
                 title=title,
             )
-        self._save_scatter_with_fit(
+        self._save_binned_scatter_with_fit(
             reg_df,
             x_col=debiased_column,
             y_col=original_column,
             reg_res=reg_res,
             filename=plot_filename,
             title=title,
+            bins=20,
         )
         return self._regression_dict(reg_res, ["Intercept", debiased_column]) or {}
 
     # ------------------------------------------------------------------
-    def _save_scatter_with_fit(
+    def _save_binned_scatter_with_fit(
         self,
         df: pd.DataFrame,
         *,
@@ -1253,17 +1258,48 @@ class DebiasPipeline:
         reg_res: Dict[str, Any],
         filename: str,
         title: str,
+        bins: int,
     ) -> Optional[str]:
         if df.empty:
             return None
-        x_vals = df[x_col].values.astype(float)
-        y_vals = df[y_col].values.astype(float)
+        data = df[[x_col, y_col]].dropna().copy()
+        if data.empty:
+            return None
+        data[x_col] = pd.to_numeric(data[x_col], errors="coerce")
+        data[y_col] = pd.to_numeric(data[y_col], errors="coerce")
+        data = data.dropna()
+        if data.empty:
+            return None
+
+        n_bins = max(1, min(int(bins), len(data)))
+        data["_bin"] = pd.qcut(data[x_col], q=n_bins, duplicates="drop")
+        grp = data.groupby("_bin", observed=True)
+        xm = grp[x_col].mean()
+        ym = grp[y_col].mean()
+        counts = grp[y_col].count().astype(float)
+        std = grp[y_col].std(ddof=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            yerr = std / np.sqrt(counts)
+        yerr = yerr.fillna(0.0)
+
+        x_vals = data[x_col].values.astype(float)
         beta0, beta1 = reg_res["coef"][0], reg_res["coef"][1]
         x_line = np.linspace(float(np.min(x_vals)), float(np.max(x_vals)), 200)
         y_line = beta0 + beta1 * x_line
 
         fig, ax = plt.subplots(figsize=(7, 5), dpi=200)
-        ax.scatter(x_vals, y_vals, alpha=0.35, edgecolor="none")
+        colours = plt.cm.get_cmap("rainbow")(np.linspace(0, 1, len(xm)))
+        ax.errorbar(
+            xm,
+            ym,
+            yerr=yerr,
+            fmt="o",
+            color="black",
+            ecolor="black",
+            capsize=3,
+            markersize=6,
+        )
+        ax.scatter(xm, ym, c=colours, s=50, zorder=3)
         ax.plot(x_line, y_line, color="black", linewidth=2, label="OLS fit")
         ax.set_title(title)
         ax.set_xlabel(x_col)
