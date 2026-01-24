@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import random
 import re
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -59,11 +61,16 @@ class ParaphraseConfig:
     reasoning_effort: Optional[str] = None
     # Optional reasoning summary passed through to the LLM helper.
     reasoning_summary: Optional[str] = None
-    # New feature: enable recursive validation of paraphrases.  When set
-    # to ``True``, every generated paraphrase will be fed into a
-    # classifier to verify that the instructions were followed.  Any
-    # paraphrases that fail this check will be regenerated until they pass.
-    recursive_validation: bool = False
+    # Maximum number of paraphrase/validation rounds to run.  A value of
+    # ``1`` preserves the historical behaviour of a single paraphrase
+    # generation pass with no recursive validation.  Values greater than
+    # one enable recursive validation with an upper bound on the number of
+    # cycles.
+    n_rounds: int = 1
+    # Deprecated flag kept for backwards compatibility.  When set to
+    # ``True`` and ``n_rounds`` is left at its default, it will be coerced
+    # to ``2``.
+    recursive_validation: Optional[bool] = None
     # When greater than one, multiple paraphrases are generated for
     # each passage in the very first round of generation.  If at least
     # one candidate passes the validation check, that candidate will be
@@ -86,6 +93,25 @@ class ParaphraseConfig:
     # over from the original each time.  The option only has effect
     # when ``recursive_validation`` is enabled.
     use_modified_source: bool = False
+
+    def __post_init__(self) -> None:
+        try:
+            rounds = int(self.n_rounds)
+        except (TypeError, ValueError):
+            rounds = 1
+        if rounds < 1:
+            rounds = 1
+
+        if self.recursive_validation is not None:
+            warnings.warn(
+                "recursive_validation is deprecated; use n_rounds instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if self.recursive_validation and rounds <= 1:
+                rounds = 2
+
+        self.n_rounds = rounds
 
 
 class Paraphrase:
@@ -139,11 +165,28 @@ class Paraphrase:
 
         announce_prompt_rendering("Paraphrase", len(texts) * n)
 
-        # When recursive validation is disabled, follow the original
-        # behaviour: generate a single paraphrase per requested
-        # revision and skip classification.  Otherwise, defer
-        # generation and validation to the recursive routine.
-        if not self.cfg.recursive_validation:
+        # Resolve the number of recursive validation rounds to run.  This
+        # value is consumed here (and not forwarded to
+        # ``get_all_responses``) to avoid unexpected keyword errors.
+        requested_rounds = kwargs.pop("n_rounds", self.cfg.n_rounds)
+        try:
+            max_rounds = int(requested_rounds)
+        except (TypeError, ValueError):
+            max_rounds = self.cfg.n_rounds
+        if max_rounds < 1:
+            max_rounds = 1
+
+        # Track whether each revision ultimately received validation
+        # approval.  In the non-recursive case every output is treated as
+        # approved.
+        approval_map: Dict[Tuple[int, int], bool] = {}
+
+        # When recursive validation is disabled (or limited to a single
+        # round), follow the original behaviour: generate a single
+        # paraphrase per requested revision and skip classification.
+        # Otherwise, defer generation and validation to the recursive
+        # routine.
+        if max_rounds <= 1:
             prompts: List[str] = []
             identifiers: List[str] = []
             for idx, text in enumerate(texts):
@@ -175,19 +218,35 @@ class Paraphrase:
                     row = int(m.group(1))
                     rev = int(m.group(2)) - 1
                     resp_map[(row, rev)] = main
+                    approval_map[(row, rev)] = True
         else:
-            # Initialise an empty response map.  The recursive
-            # validation routine will populate this map with one
-            # validated paraphrase per (row, revision) key.
+            # Initialise an empty response map.  The recursive validation
+            # routine will populate this map with one paraphrase per
+            # (row, revision) key and record whether it passed
+            # validation.
             resp_map: Dict[Tuple[int, int], str] = {}
-            await self._recursive_validate(texts, resp_map, reset_files)
+            await self._recursive_validate(
+                texts,
+                resp_map,
+                approval_map,
+                reset_files=reset_files,
+                max_rounds=max_rounds,
+            )
 
         # Assemble the final columns.  When multiple revisions are
         # requested, each revision will occupy its own column with a
         # numeric suffix.
         col_names = [base_col] if n == 1 else [f"{base_col}_{i}" for i in range(1, n + 1)]
+        approval_cols = (
+            [f"{base_col}_approved"]
+            if n == 1
+            else [f"{col}_approved" for col in col_names]
+        )
         for j, col in enumerate(col_names):
             df_proc[col] = [resp_map.get((i, j), "") for i in range(len(df_proc))]
+            df_proc[approval_cols[j]] = [
+                bool(approval_map.get((i, j), True)) for i in range(len(df_proc))
+            ]
 
         # Persist the cleaned and validated DataFrame to disk.  This file
         # excludes metadata columns such as ``Identifier`` or ``Response``
@@ -203,7 +262,10 @@ class Paraphrase:
         self,
         original_texts: List[str],
         resp_map: Dict[Tuple[int, int], str],
+        approval_map: Dict[Tuple[int, int], bool],
+        *,
         reset_files: bool = False,
+        max_rounds: int,
     ) -> None:
         """
         Generate and validate paraphrases for each passage using a
@@ -271,8 +333,9 @@ class Paraphrase:
         classifier = Classify(classify_cfg)
 
         # Continue looping until there are no passages left to validate
-        # or until no new prompts can be generated.
-        while to_check:
+        # or until we hit the round limit.
+        last_candidate_map: Dict[Tuple[int, int], List[str]] = {}
+        while to_check and round_number < max_rounds:
             # Determine how many candidate paraphrases to generate per
             # passage for this round.  The first round uses
             # ``n_initial_candidates``; later rounds use
@@ -354,6 +417,8 @@ class Paraphrase:
                     row_i = int(m.group(1))
                     rev_i = int(m.group(2)) - 1
                     candidate_map.setdefault((row_i, rev_i), []).append(text)
+
+            last_candidate_map = candidate_map
 
             # Build classification prompts for every candidate across all
             # keys.  We keep a parallel list of (row, revision, candidate
@@ -439,6 +504,7 @@ class Paraphrase:
                 # Update the response map with the chosen paraphrase.
                 if chosen_text is not None:
                     resp_map[(row_idx, rev_idx)] = chosen_text
+                    approval_map[(row_idx, rev_idx)] = passed_flag
                     # If the candidate did not pass validation, schedule
                     # another round.
                     if not passed_flag:
@@ -452,3 +518,14 @@ class Paraphrase:
             # Prepare for the next round.
             to_check = next_to_check
             round_number += 1
+
+        # If we exited because we hit the round limit, ensure all
+        # remaining keys are assigned a paraphrase and marked as not
+        # approved.  When candidates were produced in the last round, we
+        # randomly choose one of them as the final fallback.
+        if to_check:
+            for key in to_check:
+                candidates = last_candidate_map.get(key, [])
+                if candidates:
+                    resp_map[key] = random.choice(candidates)
+                approval_map[key] = False

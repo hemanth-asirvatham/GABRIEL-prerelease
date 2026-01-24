@@ -414,7 +414,13 @@ class DebiasPipeline:
         self.cfg.removal_kwargs = dict(self.cfg.removal_kwargs or {})
 
     # ------------------------------------------------------------------
-    async def run(self, df: pd.DataFrame, column_name: str) -> DebiasResult:
+    async def run(
+        self,
+        df: pd.DataFrame,
+        column_name: str,
+        *,
+        reset_files: bool = False,
+    ) -> DebiasResult:
         if column_name not in df.columns:
             raise ValueError(f"Column '{column_name}' not found in DataFrame")
 
@@ -444,6 +450,7 @@ class DebiasPipeline:
             template_path=self.cfg.template_path,
             extra_kwargs=self.cfg.measurement_kwargs,
             default_model=self.cfg.model,
+            reset_files=reset_files,
         )
         self._attach_measurement(
             df_master,
@@ -454,9 +461,13 @@ class DebiasPipeline:
         )
 
         if self.cfg.removal_method == "codify":
-            variant_info = await self._prepare_codify_variants(df_master, column_name)
+            variant_info = await self._prepare_codify_variants(
+                df_master, column_name, reset_files=reset_files
+            )
         else:
-            variant_info = await self._prepare_paraphrase_variant(df_master, column_name)
+            variant_info = await self._prepare_paraphrase_variant(
+                df_master, column_name, reset_files=reset_files
+            )
 
         if variant_info and self.cfg.verbose:
             print("[Debias] Measuring stripped variants...")
@@ -477,6 +488,7 @@ class DebiasPipeline:
                 template_path=self.cfg.template_path,
                 extra_kwargs=self.cfg.measurement_kwargs,
                 default_model=self.cfg.model,
+                reset_files=reset_files,
             )
             column_map = self._attach_measurement(
                 df_master,
@@ -499,6 +511,7 @@ class DebiasPipeline:
                 info=info,
                 save_label=key,
                 label_suffix=info["label_suffix"],
+                reset_files=reset_files,
             )
             summary = self._run_debiasing(
                 df_master,
@@ -546,11 +559,12 @@ class DebiasPipeline:
         template_path: Optional[str],
         extra_kwargs: Optional[Dict[str, Any]],
         default_model: str,
+        reset_files: bool,
     ) -> pd.DataFrame:
         kwargs = dict(extra_kwargs or {})
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, save_label))
         os.makedirs(save_dir, exist_ok=True)
-        reset_files = bool(kwargs.pop("reset_files", False))
+        reset_files_local = bool(kwargs.pop("reset_files", False)) or bool(reset_files)
         df_reset = df.reset_index()
         if mode == "rate":
             cfg = RateConfig(
@@ -562,7 +576,7 @@ class DebiasPipeline:
                 **kwargs,
             )
             runner = Rate(cfg, template_path=template_path)
-            result = await runner.run(df_reset, column_name, reset_files=reset_files)
+            result = await runner.run(df_reset, column_name, reset_files=reset_files_local)
         elif mode == "classify":
             cfg = ClassifyConfig(
                 labels=attributes or {},
@@ -573,7 +587,7 @@ class DebiasPipeline:
                 **kwargs,
             )
             runner = Classify(cfg, template_path=template_path)
-            result = await runner.run(df_reset, column_name, reset_files=reset_files)
+            result = await runner.run(df_reset, column_name, reset_files=reset_files_local)
         elif mode == "extract":
             cfg = ExtractConfig(
                 attributes=attributes or {},
@@ -584,7 +598,7 @@ class DebiasPipeline:
                 **kwargs,
             )
             runner = Extract(cfg, template_path=template_path)
-            result = await runner.run(df_reset, column_name, reset_files=reset_files)
+            result = await runner.run(df_reset, column_name, reset_files=reset_files_local)
         elif mode == "rank":
             cfg = RankConfig(
                 attributes=attributes or {},
@@ -599,7 +613,7 @@ class DebiasPipeline:
                 df_reset,
                 column_name,
                 id_column="__debias_row_id",
-                reset_files=reset_files,
+                reset_files=reset_files_local,
             )
         else:  # pragma: no cover - defensive
             raise ValueError(f"Unsupported mode: {mode}")
@@ -651,6 +665,7 @@ class DebiasPipeline:
         info: Dict[str, Any],
         save_label: str,
         label_suffix: str,
+        reset_files: bool,
     ) -> Optional[str]:
         attrs = self._remaining_signal_attributes()
         if not attrs:
@@ -669,6 +684,7 @@ class DebiasPipeline:
             template_path=self.cfg.template_path,
             extra_kwargs=self.cfg.measurement_kwargs,
             default_model=self.cfg.model,
+            reset_files=reset_files,
         )
 
         measurement_attr = self.cfg.remaining_signal_attribute
@@ -699,6 +715,8 @@ class DebiasPipeline:
         self,
         df: pd.DataFrame,
         column_name: str,
+        *,
+        reset_files: bool,
     ) -> Dict[str, Dict[str, Any]]:
         kwargs = dict(self.cfg.removal_kwargs or {})
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, "codify"))
@@ -717,6 +735,7 @@ class DebiasPipeline:
             column_name,
             categories=self.cfg.signal_dictionary,
             additional_instructions=additional_instructions,
+            reset_files=reset_files,
         )
         variants: Dict[str, Dict[str, Any]] = {}
         categories = self.cfg.categories_to_strip or []
@@ -747,6 +766,8 @@ class DebiasPipeline:
         self,
         df: pd.DataFrame,
         column_name: str,
+        *,
+        reset_files: bool,
     ) -> Dict[str, Dict[str, Any]]:
         kwargs = dict(self.cfg.removal_kwargs or {})
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, "paraphrase"))
@@ -775,7 +796,12 @@ class DebiasPipeline:
             **kwargs,
         )
         runner = Paraphrase(cfg)
-        paraphrased = await runner.run(df.reset_index(), column_name, **response_kwargs)
+        paraphrased = await runner.run(
+            df.reset_index(),
+            column_name,
+            reset_files=reset_files,
+            **response_kwargs,
+        )
         df[revised_name] = paraphrased[revised_name].reindex(df.index)
         return {
             "paraphrase": {

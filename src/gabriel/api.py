@@ -1123,7 +1123,8 @@ async def paraphrase(
     reset_files: bool = False,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
-    recursive_validation: bool = False,
+    n_rounds: int = 1,
+    recursive_validation: Optional[bool] = None,
     n_initial_candidates: int = 1,
     n_validation_candidates: int = 5,
     use_modified_source: bool = False,
@@ -1168,8 +1169,10 @@ async def paraphrase(
         When ``True`` regenerate outputs even if files already exist.
     reasoning_effort, reasoning_summary:
         Optional OpenAI reasoning controls.
+    n_rounds:
+        Maximum number of paraphrase/validation cycles. ``1`` disables recursion.
     recursive_validation:
-        When ``True`` run a secondary validation stage on generated paraphrases.
+        Deprecated boolean flag retained for compatibility; prefer ``n_rounds``.
     n_initial_candidates, n_validation_candidates:
         Control the number of candidates in generation and validation phases.
     use_modified_source:
@@ -1212,6 +1215,7 @@ async def paraphrase(
         use_dummy=use_dummy,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        n_rounds=n_rounds,
         recursive_validation=recursive_validation,
         n_initial_candidates=n_initial_candidates,
         n_validation_candidates=n_validation_candidates,
@@ -1924,6 +1928,7 @@ async def debias(
     robust_regression: bool = True,
     random_seed: int = 12345,
     verbose: bool = True,
+    reset_files: bool = False,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
     get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
 ) -> DebiasResult:
@@ -1982,6 +1987,8 @@ async def debias(
         Seed for deterministic behaviour in sampling-heavy steps.
     verbose:
         When ``True`` print notices about inferred defaults and progress.
+    reset_files:
+        When ``True`` propagate reset behaviour to all measurement and removal stages.
     response_fn:
         Optional callable forwarded to :func:`gabriel.utils.openai_utils.get_all_responses`
         that replaces the per-prompt model invocation. Ignored when
@@ -2007,6 +2014,10 @@ async def debias(
     if get_all_responses_fn is not None:
         measurement_kwargs.setdefault("get_all_responses_fn", get_all_responses_fn)
         removal_kwargs.setdefault("get_all_responses_fn", get_all_responses_fn)
+
+    if reset_files:
+        measurement_kwargs.setdefault("reset_files", True)
+        removal_kwargs.setdefault("reset_files", True)
 
     if removal_method == "codify" and max_words_per_call is not None:
         removal_kwargs.setdefault("max_words_per_call", max_words_per_call)
@@ -2044,7 +2055,7 @@ async def debias(
         verbose=verbose,
     )
     pipeline = DebiasPipeline(cfg)
-    return await pipeline.run(df, column_name)
+    return await pipeline.run(df, column_name, reset_files=reset_files)
 
 
 async def whatever(
