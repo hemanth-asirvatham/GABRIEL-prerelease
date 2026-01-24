@@ -248,7 +248,8 @@ class DebiasConfig:
     removal_attribute: Optional[str] = None
     attributes: Dict[str, str] = field(default_factory=dict)
     signal_dictionary: Dict[str, str] = field(default_factory=dict)
-    removal_method: RemovalMethod = "codify"
+    removal_method: RemovalMethod = "paraphrase"
+    remaining_signal: bool = True
     remaining_signal_attribute: Optional[str] = None
     remaining_signal_description: Optional[str] = None
     save_dir: str = DEFAULT_SAVE_DIR
@@ -338,14 +339,6 @@ class DebiasPipeline:
                 if len(attr_keys) > 1:
                     msg += " Debiasing will use the first attribute provided."
                 print(msg)
-        elif len(attr_keys) > 1 and measurement_attr != first_attr:
-            if self.cfg.verbose:
-                print(
-                    "[Debias] Multiple measurement attributes supplied; debiasing "
-                    f"will use the first attribute '{first_attr}' and ignore the "
-                    f"requested '{measurement_attr}'."
-                )
-            measurement_attr = first_attr
         self.cfg.measurement_attribute = measurement_attr
 
         removal_attr = self.cfg.removal_attribute
@@ -372,10 +365,30 @@ class DebiasPipeline:
         if self.cfg.removal_method not in {"codify", "paraphrase"}:
             raise ValueError("removal_method must be 'codify' or 'paraphrase'")
 
-        if self.cfg.remaining_signal_attribute and not self.cfg.remaining_signal_description:
-            raise ValueError(
-                "remaining_signal_description must be provided when remaining_signal_attribute is set"
-            )
+        if not bool(self.cfg.remaining_signal):
+            self.cfg.remaining_signal_attribute = None
+            self.cfg.remaining_signal_description = None
+        else:
+            attr_name = (self.cfg.remaining_signal_attribute or "").strip()
+            if not attr_name:
+                default_attr = f"prevalence of {self.cfg.removal_attribute}"
+                signal_desc = self.cfg.signal_dictionary.get(self.cfg.removal_attribute, "signal-related content")
+                default_desc = (
+                    "How prevalent is content related to the stripped signal in the provided text? "
+                    "Assess the remaining prevalence of the signal after stripping. "
+                    f"Signal definition: {signal_desc}"
+                )
+                self.cfg.remaining_signal_attribute = default_attr
+                self.cfg.remaining_signal_description = default_desc
+                if self.cfg.verbose:
+                    print(
+                        "[Debias] remaining_signal_attribute not provided; "
+                        f"defaulting to '{default_attr}'."
+                    )
+            elif not self.cfg.remaining_signal_description:
+                raise ValueError(
+                    "remaining_signal_description must be provided when remaining_signal_attribute is set"
+                )
 
         if self.cfg.categories_to_strip is None:
             if self.cfg.removal_method == "codify":
@@ -439,26 +452,41 @@ class DebiasPipeline:
                 "on both raw and stripped text."
             )
 
-        if self.cfg.verbose:
-            print("[Debias] Measuring baseline signals...")
-        base_measure = await self._run_measurement(
-            df_master,
-            column_name=column_name,
-            mode=self.cfg.mode,
-            save_label="original",
-            attributes=self.cfg.attributes,
-            template_path=self.cfg.template_path,
-            extra_kwargs=self.cfg.measurement_kwargs,
-            default_model=self.cfg.model,
-            reset_files=reset_files,
-        )
-        self._attach_measurement(
-            df_master,
-            base_measure,
-            attr_keys,
-            variant_key="original",
-            display_name="original",
-        )
+        existing_raw_attrs = [attr for attr in attr_keys if attr in df_master.columns]
+        missing_raw_attrs = [attr for attr in attr_keys if attr not in df_master.columns]
+
+        if existing_raw_attrs and self.cfg.verbose:
+            print(
+                "[Debias] Using existing raw measurement columns: "
+                + ", ".join(existing_raw_attrs)
+            )
+
+        if missing_raw_attrs:
+            if self.cfg.verbose:
+                print(
+                    "[Debias] Measuring baseline signals for missing attributes: "
+                    + ", ".join(missing_raw_attrs)
+                )
+            base_measure = await self._run_measurement(
+                df_master,
+                column_name=column_name,
+                mode=self.cfg.mode,
+                save_label="original",
+                attributes={k: self.cfg.attributes[k] for k in missing_raw_attrs},
+                template_path=self.cfg.template_path,
+                extra_kwargs=self.cfg.measurement_kwargs,
+                default_model=self.cfg.model,
+                reset_files=reset_files,
+            )
+            self._attach_measurement(
+                df_master,
+                base_measure,
+                missing_raw_attrs,
+                variant_key="original",
+                display_name="original",
+            )
+        elif self.cfg.verbose:
+            print("[Debias] All raw measurement attributes already exist; skipping baseline rating step.")
 
         if self.cfg.removal_method == "codify":
             variant_info = await self._prepare_codify_variants(
@@ -498,6 +526,13 @@ class DebiasPipeline:
                 display_name=info["label_suffix"],
             )
             info["measurement_columns"] = column_map
+            self._print_average_attenuation(
+                df_master,
+                attr_keys,
+                column_map,
+                label_suffix=info["label_suffix"],
+                display_name=info["display"],
+            )
 
         regression_info: Dict[str, DebiasRegressionResult] = {}
         for key, info in variant_info.items():
@@ -689,7 +724,7 @@ class DebiasPipeline:
 
         measurement_attr = self.cfg.remaining_signal_attribute
         assert measurement_attr is not None
-        prevalence_label = f"prevalence of {measurement_attr} ({label_suffix})"
+        prevalence_label = f"{measurement_attr} ({label_suffix})"
         column_map = self._attach_measurement(
             df_master,
             remaining_df,
@@ -702,10 +737,7 @@ class DebiasPipeline:
     # ------------------------------------------------------------------
     def _variant_label_suffix(self, info: Dict[str, Any], variant_count: int) -> str:
         pct = info.get("strip_percentage")
-        display = str(info.get("display", "stripped"))
         if pct is None:
-            if "paraphrase" in display.lower():
-                return "stripped paraphrase"
             return "stripped"
         if pct == 100 and variant_count == 1:
             return "stripped"
@@ -743,8 +775,10 @@ class DebiasPipeline:
             if pct <= 0:
                 continue
             key = f"stripped_{pct:03d}pct"
-            display = f"{self.cfg.removal_attribute} stripped {pct}%"
-            new_col = f"{column_name} ({display})"
+            stripped_base = f"{column_name} (stripped)"
+            single_full_strip = len(self.cfg.strip_percentages or []) == 1 and pct == 100
+            display = "stripped" if single_full_strip else f"stripped {pct}%"
+            new_col = stripped_base if single_full_strip else f"{column_name} ({display})"
             df[new_col] = [
                 self._strip_passages(
                     original_text=str(df.at[idx, column_name]),
@@ -772,7 +806,7 @@ class DebiasPipeline:
         kwargs = dict(self.cfg.removal_kwargs or {})
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, "paraphrase"))
         os.makedirs(save_dir, exist_ok=True)
-        revised_name = f"{column_name} ({self.cfg.removal_attribute} stripped paraphrase)"
+        revised_name = f"{column_name} (stripped)"
         instructions = kwargs.pop("instructions", None) or self._build_paraphrase_instructions()
         response_kwargs: Dict[str, Any] = {}
         if "n_rounds" in kwargs:
@@ -806,7 +840,7 @@ class DebiasPipeline:
         return {
             "paraphrase": {
                 "text_column": revised_name,
-                "display": f"{self.cfg.removal_attribute} stripped (paraphrase)",
+                "display": "stripped",
                 "strip_percentage": None,
             }
         }
@@ -939,10 +973,13 @@ class DebiasPipeline:
                 f"for '{display_name}': {attenuation_pct:.2f}%"
             )
 
-        diff_col = f"{measurement_attr}__debiased_diff_{variant_key}"
+        diff_col = (
+            f"{measurement_attr} (raw - stripped)"
+            if label_suffix == "stripped"
+            else f"{measurement_attr} (raw - {label_suffix})"
+        )
         df.loc[reg_df.index, diff_col] = y_series - s_series
-        pretty_diff_col = f"{measurement_attr} (raw - {label_suffix})"
-        df.loc[reg_df.index, pretty_diff_col] = df.loc[reg_df.index, diff_col]
+        pretty_diff_col = diff_col
 
         mean_pct_diff, mean_abs_pct_diff = self._avg_pct_diff(
             y_series,
@@ -962,12 +999,12 @@ class DebiasPipeline:
             plot_filename=f"{variant_key}_diff_vs_original.png",
         )
 
-        twostep_col = f"{measurement_attr}__debiased_twostep_{variant_key}"
-        pretty_twostep_col = (
+        twostep_col = (
             f"{measurement_attr} (debiased)"
             if label_suffix == "stripped"
             else f"{measurement_attr} (debiased, {label_suffix})"
         )
+        pretty_twostep_col = twostep_col
         stage1_reg: Optional[Dict[str, Any]] = None
         delta: Optional[float] = None
         if remaining_signal_column and remaining_signal_column in df.columns:
@@ -1051,6 +1088,46 @@ class DebiasPipeline:
             tmp[original_column],
             tmp[stripped_column],
             tmp[remaining_signal_column],
+        )
+
+    # ------------------------------------------------------------------
+    def _print_average_attenuation(
+        self,
+        df: pd.DataFrame,
+        attributes: List[str],
+        column_map: Dict[str, str],
+        *,
+        label_suffix: str,
+        display_name: str,
+    ) -> None:
+        if not self.cfg.verbose:
+            return
+        attenuations: List[float] = []
+        for attr in attributes:
+            stripped_col = column_map.get(attr)
+            if not stripped_col or attr not in df.columns:
+                continue
+            raw_series = pd.to_numeric(df[attr], errors="coerce")
+            stripped_series = pd.to_numeric(df[stripped_col], errors="coerce")
+            tmp = pd.concat([raw_series, stripped_series], axis=1).dropna()
+            if tmp.empty:
+                continue
+            raw_mean = float(tmp.iloc[:, 0].mean())
+            stripped_mean = float(tmp.iloc[:, 1].mean())
+            if np.isclose(raw_mean, 0.0):
+                continue
+            pct = (stripped_mean - raw_mean) / raw_mean * 100.0
+            attenuations.append(float(pct))
+        if not attenuations:
+            print(
+                "[Debias] Unable to compute average percent attenuation from raw to stripped "
+                f"for variant '{display_name}'."
+            )
+            return
+        avg_pct = float(np.mean(attenuations))
+        print(
+            "[Debias] Average percent attenuation from raw to "
+            f"'{label_suffix}' across measurement attributes: {avg_pct:.2f}%"
         )
 
     # ------------------------------------------------------------------
