@@ -595,10 +595,17 @@ class DebiasPipeline:
         reset_files: bool,
     ) -> pd.DataFrame:
         kwargs = dict(extra_kwargs or {})
+        response_fn = kwargs.pop("response_fn", None)
+        get_all_responses_fn = kwargs.pop("get_all_responses_fn", None)
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, save_label))
         os.makedirs(save_dir, exist_ok=True)
         reset_files_local = bool(kwargs.pop("reset_files", False)) or bool(reset_files)
-        df_reset = df.reset_index()
+        df_reset = df[[column_name]].reset_index()
+        run_kwargs: Dict[str, Any] = {}
+        if response_fn is not None:
+            run_kwargs["response_fn"] = response_fn
+        if get_all_responses_fn is not None:
+            run_kwargs["get_all_responses_fn"] = get_all_responses_fn
         if mode == "rate":
             cfg = RateConfig(
                 attributes=attributes or {},
@@ -609,7 +616,12 @@ class DebiasPipeline:
                 **kwargs,
             )
             runner = Rate(cfg, template_path=template_path)
-            result = await runner.run(df_reset, column_name, reset_files=reset_files_local)
+            result = await runner.run(
+                df_reset,
+                column_name,
+                reset_files=reset_files_local,
+                **run_kwargs,
+            )
         elif mode == "classify":
             cfg = ClassifyConfig(
                 labels=attributes or {},
@@ -620,7 +632,12 @@ class DebiasPipeline:
                 **kwargs,
             )
             runner = Classify(cfg, template_path=template_path)
-            result = await runner.run(df_reset, column_name, reset_files=reset_files_local)
+            result = await runner.run(
+                df_reset,
+                column_name,
+                reset_files=reset_files_local,
+                **run_kwargs,
+            )
         elif mode == "extract":
             cfg = ExtractConfig(
                 attributes=attributes or {},
@@ -631,7 +648,12 @@ class DebiasPipeline:
                 **kwargs,
             )
             runner = Extract(cfg, template_path=template_path)
-            result = await runner.run(df_reset, column_name, reset_files=reset_files_local)
+            result = await runner.run(
+                df_reset,
+                column_name,
+                reset_files=reset_files_local,
+                **run_kwargs,
+            )
         elif mode == "rank":
             cfg = RankConfig(
                 attributes=attributes or {},
@@ -647,6 +669,7 @@ class DebiasPipeline:
                 column_name,
                 id_column="__debias_row_id",
                 reset_files=reset_files_local,
+                **run_kwargs,
             )
         else:  # pragma: no cover - defensive
             raise ValueError(f"Unsupported mode: {mode}")
@@ -755,9 +778,17 @@ class DebiasPipeline:
         reset_files: bool,
     ) -> Dict[str, Dict[str, Any]]:
         kwargs = dict(self.cfg.removal_kwargs or {})
+        reset_files_local = bool(kwargs.pop("reset_files", False)) or bool(reset_files)
+        response_fn = kwargs.pop("response_fn", None)
+        get_all_responses_fn = kwargs.pop("get_all_responses_fn", None)
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, "codify"))
         os.makedirs(save_dir, exist_ok=True)
         additional_instructions = kwargs.pop("additional_instructions", "")
+        run_kwargs: Dict[str, Any] = {}
+        if response_fn is not None:
+            run_kwargs["response_fn"] = response_fn
+        if get_all_responses_fn is not None:
+            run_kwargs["get_all_responses_fn"] = get_all_responses_fn
         cfg = CodifyConfig(
             save_dir=save_dir,
             model=kwargs.pop("model", self.cfg.model),
@@ -771,7 +802,8 @@ class DebiasPipeline:
             column_name,
             categories=self.cfg.signal_dictionary,
             additional_instructions=additional_instructions,
-            reset_files=reset_files,
+            reset_files=reset_files_local,
+            **run_kwargs,
         )
         variants: Dict[str, Dict[str, Any]] = {}
         categories = self.cfg.categories_to_strip or []
@@ -808,11 +840,19 @@ class DebiasPipeline:
         reset_files: bool,
     ) -> Dict[str, Dict[str, Any]]:
         kwargs = dict(self.cfg.removal_kwargs or {})
+        reset_files_local = bool(kwargs.pop("reset_files", False)) or bool(reset_files)
+        response_fn = kwargs.pop("response_fn", None)
+        get_all_responses_fn = kwargs.pop("get_all_responses_fn", None)
         save_dir = kwargs.pop("save_dir", os.path.join(self.run_dir, "paraphrase"))
         os.makedirs(save_dir, exist_ok=True)
         revised_name = f"{column_name} (stripped)"
         instructions = kwargs.pop("instructions", None) or self._build_paraphrase_instructions()
         response_kwargs: Dict[str, Any] = {}
+        run_kwargs: Dict[str, Any] = {}
+        if response_fn is not None:
+            run_kwargs["response_fn"] = response_fn
+        if get_all_responses_fn is not None:
+            run_kwargs["get_all_responses_fn"] = get_all_responses_fn
         if "n_rounds" in kwargs:
             response_kwargs["n_rounds"] = kwargs.pop("n_rounds")
         if "completion_max_rounds" in kwargs and "n_rounds" not in response_kwargs:
@@ -838,7 +878,8 @@ class DebiasPipeline:
         paraphrased = await runner.run(
             df.reset_index(),
             column_name,
-            reset_files=reset_files,
+            reset_files=reset_files_local,
+            **run_kwargs,
             **response_kwargs,
         )
         df[revised_name] = paraphrased[revised_name].reindex(df.index)
@@ -1383,8 +1424,26 @@ class DebiasPipeline:
 
     # ------------------------------------------------------------------
     def _serialise_config(self) -> Dict[str, Any]:
+        def _convert(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: _convert(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple, set)):
+                return [_convert(v) for v in value]
+            if isinstance(value, np.generic):
+                return value.item()
+            if callable(value):
+                name = getattr(value, "__name__", None)
+                return name or repr(value)
+            try:
+                json.dumps(value)
+                return value
+            except TypeError:
+                return repr(value)
+
         cfg_dict = asdict(self.cfg)
         cfg_dict["save_dir"] = os.path.expandvars(os.path.expanduser(self.cfg.save_dir))
+        cfg_dict["measurement_kwargs"] = _convert(self.cfg.measurement_kwargs)
+        cfg_dict["removal_kwargs"] = _convert(self.cfg.removal_kwargs)
         return cfg_dict
 
     # ------------------------------------------------------------------
