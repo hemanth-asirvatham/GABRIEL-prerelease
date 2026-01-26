@@ -248,7 +248,7 @@ class DebiasConfig:
     removal_attribute: Optional[str] = None
     attributes: Dict[str, str] = field(default_factory=dict)
     signal_dictionary: Dict[str, str] = field(default_factory=dict)
-    removal_method: RemovalMethod = "paraphrase"
+    removal_method: RemovalMethod = "codify"
     remaining_signal: bool = True
     remaining_signal_attribute: Optional[str] = None
     remaining_signal_description: Optional[str] = None
@@ -789,6 +789,7 @@ class DebiasPipeline:
             run_kwargs["response_fn"] = response_fn
         if get_all_responses_fn is not None:
             run_kwargs["get_all_responses_fn"] = get_all_responses_fn
+        kwargs.setdefault("n_rounds", 3)
         cfg = CodifyConfig(
             save_dir=save_dir,
             model=kwargs.pop("model", self.cfg.model),
@@ -864,7 +865,7 @@ class DebiasPipeline:
             )
             if replacement is not None:
                 response_kwargs["n_rounds"] = replacement
-        response_kwargs.setdefault("n_rounds", 1)
+        response_kwargs.setdefault("n_rounds", 3)
         cfg = ParaphraseConfig(
             instructions=instructions,
             revised_column_name=revised_name,

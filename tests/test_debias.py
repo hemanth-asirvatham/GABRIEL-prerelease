@@ -464,7 +464,7 @@ def test_debias_paraphrase_defaults_and_prevalence(monkeypatch, tmp_path):
 
     # Ensure the default paraphrase n_rounds is enforced.
     assert captured["paraphrase_kwargs"] is not None
-    assert captured["paraphrase_kwargs"].get("n_rounds") == 1
+    assert captured["paraphrase_kwargs"].get("n_rounds") == 3
 
     # Ensure baseline measurements were skipped and remaining-signal was run separately.
     save_labels = [call[1] for call in captured["calls"]]

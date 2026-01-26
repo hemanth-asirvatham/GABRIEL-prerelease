@@ -1001,7 +1001,7 @@ async def codify(
     modality: str = "text",
     json_mode: bool = True,
     max_timeout: Optional[float] = None,
-    n_rounds: int = 1,
+    n_rounds: int = 2,
     completion_classifier_instructions: Optional[str] = None,
     template_path: Optional[str] = None,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
@@ -1912,7 +1912,7 @@ async def debias(
     removal_attribute: Optional[str] = None,
     signal_dictionary: Dict[str, str],
     attributes: Optional[Dict[str, str]] = None,
-    removal_method: RemovalMethod = "paraphrase",
+    removal_method: RemovalMethod = "codify",
     save_dir: str = os.path.expanduser("~/Documents/runs"),
     run_name: Optional[str] = None,
     strip_percentages: Optional[List[int]] = None,
@@ -1924,7 +1924,7 @@ async def debias(
     removal_kwargs: Optional[Dict[str, Any]] = None,
     remaining_signal: bool = True,
     max_words_per_call: Optional[int] = 1000,
-    n_rounds: Optional[int] = 1,
+    n_rounds: Optional[int] = 3,
     use_dummy: bool = False,
     robust_regression: bool = True,
     random_seed: int = 12345,
@@ -1982,7 +1982,7 @@ async def debias(
         Convenience passthroughs for the removal stage. ``max_words_per_call``
         configures the codify task's chunk size, while ``n_rounds`` controls the
         number of completion passes run by codify and any downstream
-        paraphrasing steps.
+        paraphrasing steps. Defaults to 3 when not explicitly provided.
     use_dummy:
         If ``True`` run deterministic offline debiasing.
     robust_regression:
