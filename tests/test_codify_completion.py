@@ -104,3 +104,47 @@ def test_consolidate_snippets_handles_non_string_excerpts(tmp_path):
     snippets = codify.consolidate_snippets("Plain text", chunk_results, "cat")
 
     assert snippets == []
+
+
+def test_completion_loop_accumulates_snippets_across_rounds(monkeypatch, tmp_path):
+    cfg = CodifyConfig(save_dir=str(tmp_path), n_rounds=3)
+    codify = Codify(cfg)
+
+    aggregated = {0: {"cat": []}}
+    original_texts = ["Example text"]
+    raw_values = ["Example text"]
+    categories = {"cat": "Example"}
+
+    async def fake_classify(
+        self,
+        aggregated,
+        original_texts,
+        categories,
+        additional_instructions,
+        iteration,
+        reset_files,
+        **kwargs,
+    ):
+        # Flag the same category on both completion iterations so that
+        # we can verify snippets from each round are preserved.
+        return {0: {"cat"}} if iteration in {0, 1} else {}
+
+    async def fake_gather(self, row_texts, **kwargs):
+        iteration = int(kwargs.get("iteration", -1))
+        return {idx: {"cat": [f"snippet-round-{iteration}"]} for idx in row_texts}
+
+    monkeypatch.setattr(Codify, "_classify_remaining", fake_classify)
+    monkeypatch.setattr(Codify, "_gather_iteration", fake_gather)
+
+    result = asyncio.run(
+        codify._completion_loop(
+            aggregated,
+            original_texts,
+            raw_values,
+            categories,
+            additional_instructions=None,
+            reset_files=False,
+        )
+    )
+
+    assert result[0]["cat"] == ["snippet-round-1", "snippet-round-2"]
