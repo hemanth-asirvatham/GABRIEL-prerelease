@@ -44,7 +44,7 @@ class CodifyConfig:
     modality: str = "text"
     json_mode: bool = True
     max_timeout: Optional[float] = None
-    n_rounds: int = 1  # Total Codify passes including the initial run; set to 1 to skip completion sweeps
+    n_rounds: int = 2  # Total Codify passes including the initial run; set to 1 to skip completion sweeps
     completion_classifier_instructions: Optional[str] = None
     completion_max_rounds: InitVar[Optional[int]] = None
 
