@@ -441,8 +441,10 @@ class Codify:
             if category in payload and isinstance(payload[category], list):
                 for item in payload[category]:
                     if isinstance(item, dict):
-                        beginning = item.get("beginning excerpt", "")
-                        ending = item.get("ending excerpt", "")
+                        beginning_raw = item.get("beginning excerpt", "")
+                        ending_raw = item.get("ending excerpt", "")
+                        beginning = "" if beginning_raw is None else str(beginning_raw)
+                        ending = "" if ending_raw is None else str(ending_raw)
                         if beginning:
                             all_excerpts.append((beginning, ending))
                             chunk_texts.append(chunk_result.chunk_text)

@@ -1,6 +1,6 @@
 import asyncio
 
-from gabriel.tasks.codify import Codify, CodifyConfig
+from gabriel.tasks.codify import ChunkResult, Codify, CodifyConfig
 
 
 def test_completion_loop_respects_round_limit(monkeypatch, tmp_path):
@@ -87,3 +87,20 @@ def test_completion_loop_skips_when_single_round(monkeypatch, tmp_path):
     )
 
     assert result == aggregated
+
+
+def test_consolidate_snippets_handles_non_string_excerpts(tmp_path):
+    cfg = CodifyConfig(save_dir=str(tmp_path), n_rounds=1)
+    codify = Codify(cfg)
+
+    chunk_results = [
+        ChunkResult(
+            identifier="row-0-chunk-0",
+            chunk_text="No numeric snippets here.",
+            data={"cat": [{"beginning excerpt": 123, "ending excerpt": None}]},
+        )
+    ]
+
+    snippets = codify.consolidate_snippets("Plain text", chunk_results, "cat")
+
+    assert snippets == []
