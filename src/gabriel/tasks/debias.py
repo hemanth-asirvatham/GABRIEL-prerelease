@@ -824,6 +824,7 @@ class DebiasPipeline:
             )
             if replacement is not None:
                 response_kwargs["n_rounds"] = replacement
+        response_kwargs.setdefault("n_rounds", 1)
         cfg = ParaphraseConfig(
             instructions=instructions,
             revised_column_name=revised_name,
