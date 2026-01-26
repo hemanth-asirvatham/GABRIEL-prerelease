@@ -1042,7 +1042,7 @@ class DebiasPipeline:
             df,
             original_column=original_column,
             debiased_column=diff_col,
-            title=f"Debiasing regression: original ~ (y - stripped) [{display_name}]",
+            title="original ~ (original - stripped)",
             plot_filename=f"{variant_key}_diff_vs_original.png",
         )
 
@@ -1092,7 +1092,7 @@ class DebiasPipeline:
                 df,
                 original_column=original_column,
                 debiased_column=twostep_col,
-                title=f"Debiasing regression: original ~ two-step [{display_name}]",
+                title="original ~ debiased (two-step)",
                 plot_filename=f"{variant_key}_twostep_vs_original.png",
             )
 
@@ -1327,10 +1327,14 @@ class DebiasPipeline:
 
         x_vals = data[x_col].values.astype(float)
         beta0, beta1 = reg_res["coef"][0], reg_res["coef"][1]
-        x_line = np.linspace(float(np.min(x_vals)), float(np.max(x_vals)), 200)
+        x_min = max(0.0, float(np.min(x_vals)))
+        x_max = float(np.max(x_vals))
+        if x_max < x_min:
+            x_max = x_min
+        x_line = np.linspace(x_min, x_max, 200)
         y_line = beta0 + beta1 * x_line
 
-        fig, ax = plt.subplots(figsize=(7, 5), dpi=200)
+        fig, ax = plt.subplots(figsize=(7, 5), dpi=400)
         colours = plt.cm.get_cmap("rainbow")(np.linspace(0, 1, len(xm)))
         ax.errorbar(
             xm,
@@ -1347,6 +1351,8 @@ class DebiasPipeline:
         ax.set_title(title)
         ax.set_xlabel(x_col)
         ax.set_ylabel(y_col)
+        ax.set_xlim(left=0.0)
+        ax.set_ylim(bottom=0.0)
         ax.legend(loc="best")
         ax.grid(True, alpha=0.2)
         fig.tight_layout()
