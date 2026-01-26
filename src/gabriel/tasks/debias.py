@@ -1327,10 +1327,12 @@ class DebiasPipeline:
 
         x_vals = data[x_col].values.astype(float)
         beta0, beta1 = reg_res["coef"][0], reg_res["coef"][1]
-        x_min = max(0.0, float(np.min(x_vals)))
+        x_min = float(np.min(x_vals))
         x_max = float(np.max(x_vals))
-        if x_max < x_min:
-            x_max = x_min
+        if x_max == x_min:
+            pad = 1.0 if x_max == 0 else 0.05 * abs(x_max)
+            x_min -= pad
+            x_max += pad
         x_line = np.linspace(x_min, x_max, 200)
         y_line = beta0 + beta1 * x_line
 
@@ -1351,8 +1353,7 @@ class DebiasPipeline:
         ax.set_title(title)
         ax.set_xlabel(x_col)
         ax.set_ylabel(y_col)
-        ax.set_xlim(left=0.0)
-        ax.set_ylim(bottom=0.0)
+        ax.margins(x=0.05, y=0.05)
         ax.legend(loc="best")
         ax.grid(True, alpha=0.2)
         fig.tight_layout()
