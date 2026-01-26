@@ -364,6 +364,119 @@ def test_debias_pipeline_paraphrase_flow(monkeypatch, tmp_path):
     assert "bias_score" in captured["instructions"]
 
 
+def test_debias_paraphrase_defaults_and_prevalence(monkeypatch, tmp_path):
+    df = pd.DataFrame(
+        {
+            "text": [
+                "Row0 SIGNAL overview",
+                "Row1 SIGNAL snapshot",
+                "Row2 SIGNAL digest",
+            ],
+            # Raw measurement columns already exist and should be reused.
+            "bias_score": [10.0, 20.0, 30.0],
+            "context_score": [1.0, 2.0, 3.0],
+        }
+    )
+    cfg = DebiasConfig(
+        mode="rate",
+        measurement_attribute="bias_score",
+        attributes={
+            "bias_score": "Bias intensity",
+            "context_score": "Context attribute",
+        },
+        signal_dictionary={
+            "signal_main": "Mentions of the token SIGNAL.",
+            "signal_other": "A secondary signal.",
+        },
+        removal_method="paraphrase",
+        save_dir=str(tmp_path),
+        run_name="paraphrase_defaults",
+        verbose=False,
+    )
+    pipeline = DebiasPipeline(cfg)
+
+    # The remaining-signal attribute should default to the removal attribute
+    # (the first key from signal_dictionary when measurement_attribute is absent).
+    assert cfg.removal_attribute == "signal_main"
+    assert cfg.remaining_signal_attribute == "prevalence of signal_main"
+
+    captured: dict[str, object] = {"paraphrase_kwargs": None, "calls": []}
+
+    async def fake_paraphrase_run(
+        self,
+        df_in: pd.DataFrame,
+        column_name: str,
+        *,
+        reset_files: bool = False,
+        **kwargs,
+    ) -> pd.DataFrame:
+        captured["paraphrase_kwargs"] = dict(kwargs)
+        idx = df_in["__debias_row_id"].astype(int).tolist()
+        revised_name = self.cfg.revised_column_name or f"{column_name} (stripped)"
+        revised = [str(text).replace("SIGNAL", "").strip() for text in df_in[column_name]]
+        out = pd.DataFrame({revised_name: revised})
+        out.index = pd.Index(idx, name="__debias_row_id")
+        return out
+
+    monkeypatch.setattr(Paraphrase, "run", fake_paraphrase_run)
+
+    variant_col = "text (stripped)"
+    index = _range_index(len(df))
+    measurement_map = {
+        # Baseline measurements should not be recomputed because raw columns exist.
+        ("rate", "paraphrase", variant_col): pd.DataFrame(
+            {
+                "bias_score": [1.0, 2.0, 3.0],
+                "context_score": [0.5, 1.0, 1.5],
+            },
+            index=index,
+        ),
+        ("rate", "paraphrase_remaining_signal", variant_col): pd.DataFrame(
+            {
+                "prevalence of signal_main": [0.0, 1.0, 2.0],
+            },
+            index=index,
+        ),
+    }
+
+    async def fake_run_measurement(
+        self,
+        df_in: pd.DataFrame,
+        *,
+        column_name: str,
+        mode: str,
+        save_label: str,
+        attributes,
+        template_path,
+        extra_kwargs,
+        default_model,
+        reset_files: bool,
+    ) -> pd.DataFrame:
+        captured["calls"].append((mode, save_label, column_name, tuple(attributes or {})))
+        key = (mode, save_label, column_name)
+        assert key in measurement_map, key
+        return measurement_map[key].copy()
+
+    monkeypatch.setattr(DebiasPipeline, "_run_measurement", fake_run_measurement)
+
+    result = asyncio.run(pipeline.run(df, "text"))
+    results_df = result.results
+
+    # Ensure the default paraphrase n_rounds is enforced.
+    assert captured["paraphrase_kwargs"] is not None
+    assert captured["paraphrase_kwargs"].get("n_rounds") == 1
+
+    # Ensure baseline measurements were skipped and remaining-signal was run separately.
+    save_labels = [call[1] for call in captured["calls"]]
+    assert "original" not in save_labels
+    assert "paraphrase_remaining_signal" in save_labels
+
+    # Stripped and remaining-signal columns should use the simple (stripped) suffix.
+    assert "bias_score (stripped)" in results_df.columns
+    assert "context_score (stripped)" in results_df.columns
+    assert "prevalence of signal_main (stripped)" in results_df.columns
+
+
 def test_debias_pipeline_supports_distinct_attributes(monkeypatch, tmp_path):
     texts = [
         "Row0 FLAG narrative",
