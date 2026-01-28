@@ -1197,11 +1197,6 @@ async def paraphrase(
     """
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
-    if "use_web_search" in cfg_kwargs and "web_search" not in cfg_kwargs:
-        cfg_kwargs["web_search"] = cfg_kwargs.pop("use_web_search")
-    else:
-        cfg_kwargs.pop("use_web_search", None)
-
     cfg = ParaphraseConfig(
         instructions=instructions,
         revised_column_name=revised_column_name,
@@ -2169,10 +2164,6 @@ async def whatever(
         web_search = kwargs.pop("web_search")
     else:
         kwargs.pop("web_search", None)
-
-    legacy_use_web_search = kwargs.pop("use_web_search", None)
-    if web_search is None and legacy_use_web_search is not None:
-        web_search = bool(legacy_use_web_search)
 
     if web_search_filters is None and "web_search_filters" in kwargs:
         web_search_filters = kwargs.pop("web_search_filters")

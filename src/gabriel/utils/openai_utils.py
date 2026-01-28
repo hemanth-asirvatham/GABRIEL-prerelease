@@ -83,6 +83,10 @@ _ESTIMATION_SAMPLE_SIZE = 5000
 
 _TIMEOUT_BURST_RATIO = 1.25
 
+DEFAULT_SYSTEM_INSTRUCTION = (
+    "Please provide a helpful response to this inquiry for purposes of academic research."
+)
+
 # Try to import requests/httpx for rate‑limit introspection
 try:
     import requests  # type: ignore
@@ -265,6 +269,40 @@ def _get_tokenizer(model_name: str) -> tiktoken.Encoding:
                 return [0] * max(1, _approx_tokens(text))
 
         return _ApproxEncoder()
+
+
+def _uses_legacy_system_instruction(model_name: str) -> bool:
+    """Return True when the model expects legacy system-message prompts."""
+
+    lowered = (model_name or "").lower()
+    return lowered.startswith("gpt-3") or lowered.startswith("gpt-4")
+
+
+def _is_audio_model(model_name: str) -> bool:
+    """Return True when the model name indicates audio support."""
+
+    return "audio" in (model_name or "").lower()
+
+
+def _has_media_payloads(
+    prompt_images: Optional[Dict[str, List[str]]],
+    prompt_audio: Optional[Dict[str, List[Dict[str, str]]]],
+    prompt_pdfs: Optional[Dict[str, List[Dict[str, str]]]],
+    identifiers: Iterable[Any],
+) -> bool:
+    """Return True when any prompt includes image/audio/pdf payloads."""
+
+    if not (prompt_images or prompt_audio or prompt_pdfs):
+        return False
+    for ident in identifiers:
+        key = str(ident)
+        if prompt_images and prompt_images.get(key):
+            return True
+        if prompt_audio and prompt_audio.get(key):
+            return True
+        if prompt_pdfs and prompt_pdfs.get(key):
+            return True
+    return False
 
 # Usage tiers with qualifications and monthly limits for printing
 TIER_INFO = [
@@ -545,7 +583,7 @@ def _format_throughput_plan(
     )
     if at_ultimate_parallel_cap:
         lines.append(
-            f"Rate currently limited by n_parallels = {ultimate_parallel_cap}. Increase n_parallels for faster runs, if your machine allows."
+            f"Rate currently limited by n_parallels = {ultimate_parallel_cap}. Increase n_parallels for faster runs, if your machine allows. If running into API / timeout errors, consider reducing n_parallels."
         )
     elif limiter:
         lines.append(
@@ -1329,7 +1367,6 @@ def _build_params(
     model: str,
     input_data: List[Dict[str, Any]],
     max_output_tokens: Optional[int],
-    system_instruction: str,
     temperature: float,
     tools: Optional[List[dict]] = None,
     tool_choice: Optional[dict] = None,
@@ -1362,11 +1399,9 @@ def _build_params(
     max_output_tokens:
         Soft cap on the number of tokens the model may generate.  When ``None``
         the parameter is omitted and the model's server-side default applies.
-    system_instruction:
-        The system prompt used for non ``o``/``gpt-5`` models.  Included here so
-        callers can pre-render it alongside the messages.
     temperature:
-        Sampling temperature controlling randomness for models that honour it.
+        Sampling temperature controlling randomness for legacy models that
+        honour it.
     tools, tool_choice:
         Optional tool specifications following the Responses API schema.
     web_search:
@@ -1388,8 +1423,8 @@ def _build_params(
     expected_schema:
         Optional JSON schema supplied when ``json_mode`` is requested.
     reasoning_effort, reasoning_summary:
-        Additional settings for ``o``/``gpt-5`` models controlling hidden
-        reasoning tokens and optional summaries.
+        Additional settings for modern models controlling hidden reasoning
+        tokens and optional summaries.
     include:
         Optional list (or comma-separated string) of ``include`` fields to
         request from the Responses API. When ``web_search`` is enabled, the
@@ -1435,11 +1470,9 @@ def _build_params(
         params["tools"] = all_tools
     if tool_choice is not None:
         params["tool_choice"] = tool_choice
-    # For o‑series and gpt-5 models, reasoning settings control hidden reasoning
-    # tokens and optional summaries. gpt-5 models also ignore the ``temperature``
-    # parameter, so we drop it and warn if a custom value was provided. Other
-    # models retain temperature-based randomness.
-    if model.startswith("o") or model.startswith("gpt-5"):
+    if _uses_legacy_system_instruction(model):
+        params["temperature"] = temperature
+    else:
         reasoning: Dict[str, Any] = {}
         if reasoning_effort is not None:
             reasoning["effort"] = reasoning_effort
@@ -1447,12 +1480,10 @@ def _build_params(
             reasoning["summary"] = reasoning_summary
         if reasoning:
             params["reasoning"] = reasoning
-        if model.startswith("gpt-5") and temperature != 0.9:
+        if temperature != 0.9:
             logger.warning(
                 f"Model {model} does not support temperature; ignoring provided value."
             )
-    else:
-        params["temperature"] = temperature
     include_values = _normalise_include_values(include)
     extra_include = _normalise_include_values(extra.pop("include", None))
     include_values.extend([val for val in extra_include if val not in include_values])
@@ -1528,7 +1559,7 @@ async def get_response(
         Maximum time in seconds to wait for the API to respond.  ``None``
         disables client-side timeouts.
     temperature:
-        Randomness control for non ``gpt-5`` models.
+        Randomness control for legacy models that accept it.
     json_mode, expected_schema:
         When ``json_mode`` is ``True`` the model is instructed to output JSON.
         ``expected_schema`` may provide a JSON schema to validate against.
@@ -1547,7 +1578,7 @@ async def get_response(
         automatically (without duplicating caller-provided values) so sources
         are available in the returned payloads.
     reasoning_effort, reasoning_summary:
-        Additional reasoning controls for ``o`` and ``gpt-5`` models.
+        Additional reasoning controls for modern models.
     use_dummy:
         If ``True`` return deterministic dummy responses instead of calling the
         external API.
@@ -1730,14 +1761,15 @@ async def get_response(
                 continue
     # Derive the effective cutoff
     cutoff = max_output_tokens
-    # Build system message only for non‑o series
-    system_instruction = (
-        "Please provide a helpful response to this inquiry for purposes of academic research."
-    )
+    system_instruction = DEFAULT_SYSTEM_INSTRUCTION
+    legacy_system_instruction = _uses_legacy_system_instruction(model)
     if audio:
-        logger.info(
-            "Audio inputs require models gpt-4o-audio-preview, gpt-4o-mini-audio-preview, or gpt-audio"
-        )
+        audio_model = _is_audio_model(model)
+        if not audio_model:
+            logger.warning(
+                "Audio inputs detected but model '%s' does not include 'audio' in its name; the API may reject the request.",
+                model,
+            )
         contents: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         if pdfs:
             logger.warning("PDF inputs are ignored for audio-only requests.")
@@ -1753,15 +1785,15 @@ async def get_response(
             contents.append({"type": "input_audio", "input_audio": a})
         messages = [{"role": "user", "content": contents}]
         # ``chat.completions`` infers the output modality from the request
-        # content.  ``gpt-audio`` requires explicitly requesting text output
-        # via ``modalities``; other models default to text when omitted.
+        # content.  Audio-capable models may require explicitly requesting
+        # text output via ``modalities`` so we default to text when possible.
         params_chat: Dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
         }
-        if model == "gpt-audio":
-            params_chat["modalities"] = ["text"]
+        if audio_model:
+            params_chat.setdefault("modalities", ["text"])
         if tools is not None:
             params_chat["tools"] = tools
         if tool_choice is not None:
@@ -1841,7 +1873,7 @@ async def get_response(
                     contents.append(file_payload)
             input_data = (
                 [{"role": "user", "content": contents}]
-                if model.startswith("o") or model.startswith("gpt-5")
+                if not legacy_system_instruction
                 else [
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": contents},
@@ -1850,7 +1882,7 @@ async def get_response(
         else:
             input_data = (
                 [{"role": "user", "content": prompt}]
-                if model.startswith("o") or model.startswith("gpt-5")
+                if not legacy_system_instruction
                 else [
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt},
@@ -1861,7 +1893,6 @@ async def get_response(
             model=model,
             input_data=input_data,
             max_output_tokens=cutoff,
-            system_instruction=system_instruction,
             temperature=temperature,
             tools=tools,
             tool_choice=tool_choice,
@@ -2717,8 +2748,9 @@ async def get_all_responses(
     # will be adjusted downward based on your API rate limits and
     # average prompt length.  See `_print_usage_overview` for more
     # details on how the concurrency cap is calculated.  When web
-    # search is enabled the helper automatically lowers this ceiling to
-    # half of the requested value to avoid overwhelming the search tool.
+    # search or media inputs are enabled the helper automatically lowers
+    # this ceiling to half of the requested value to avoid overwhelming
+    # the API or tool backends.
     n_parallels: int = 650,
     max_retries: int = 3,
     timeout_factor: float = 2.5,
@@ -2791,13 +2823,14 @@ async def get_all_responses(
     ``timeout_burst_window`` seconds.
 
     Because every prompt that uses web search fans out into additional tool
-    calls, the helper automatically lowers the requested ``n_parallels`` to half
-    of its original value whenever ``web_search`` is enabled.  This guard
-    reduces the chance of exhausting the search tool’s own quotas and keeps the
-    Responses API from being flooded with the much longer prompts that web
-    search produces.  You can still request a smaller value manually if needed,
-    and the message printed at the start of each run explains the adjustment so
-    it can be revisited in the future if the limitation becomes unnecessary.
+    calls, and because media inputs (images/audio/PDFs) are heavier, the helper
+    automatically lowers the requested ``n_parallels`` to half of its original
+    value whenever web search or media payloads are detected.  This guard
+    reduces the chance of exhausting tool quotas and keeps the Responses API
+    from being flooded with longer prompts.  You can still request a smaller
+    value manually if needed, and the message printed at the start of each run
+    explains the adjustment so it can be revisited in the future if the
+    limitation becomes unnecessary.
 
     Long‑running jobs can also emit periodic status updates.  The
     ``status_report_interval`` parameter controls how frequently the helper
@@ -2830,16 +2863,15 @@ async def get_all_responses(
     text, duration, token usage, warnings and error logs so tests can exercise
     cost reporting and failure handling paths deterministically.
 
-    The former ``use_web_search`` flag is still accepted but ``web_search``
-    should be used going forward.  Additional web search options (allowed
-    domains and user location hints such as ``city``, ``country``, ``region``,
-    ``timezone`` and ``type`` – usually ``"approximate"``) can be supplied
-    together via ``web_search_filters``.  Per-identifier
-    overrides can be passed through ``prompt_web_search_filters`` where the
-    mapping keys correspond to prompt identifiers and values follow the same
-    schema as ``web_search_filters``.  These overrides are merged with the
-    global filters before each request, enabling DataFrame-driven location hints
-    without hand-crafting separate dictionaries.
+    Additional web search options (allowed domains and user location hints such
+    as ``city``, ``country``, ``region``, ``timezone`` and ``type`` – usually
+    ``"approximate"``) can be supplied together via ``web_search_filters``.
+    Per-identifier overrides can be passed through
+    ``prompt_web_search_filters`` where the mapping keys correspond to prompt
+    identifiers and values follow the same schema as ``web_search_filters``.
+    These overrides are merged with the global filters before each request,
+    enabling DataFrame-driven location hints without hand-crafting separate
+    dictionaries.
 
     To bypass the built-in orchestration entirely, supply ``get_all_responses_fn``.
     This callable is invoked at the start of the function and receives as many
@@ -3054,16 +3086,6 @@ async def get_all_responses(
     if quiet:
         status_report_interval = None
     base_url = base_url or os.getenv("OPENAI_BASE_URL")
-    # ``use_web_search`` was the original parameter name; ``web_search`` is the
-    # preferred modern spelling.  If both are supplied we favour ``web_search``
-    # but emit a warning for awareness.
-    legacy_use_web_search = get_response_kwargs.pop("use_web_search", None)
-    if web_search is None and legacy_use_web_search is not None:
-        web_search = bool(legacy_use_web_search)
-    elif legacy_use_web_search is not None and bool(legacy_use_web_search) != web_search:
-        logger.warning(
-            "`use_web_search` is deprecated; please use `web_search` instead."
-        )
     if web_search_filters and not web_search and not get_response_kwargs.get("web_search", False):
         logger.debug(
             "web_search_filters were supplied but web_search is disabled; filters will be ignored."
@@ -3113,6 +3135,9 @@ async def get_all_responses(
     get_response_kwargs.setdefault("background_poll_interval", background_poll_interval)
     base_web_search_filters = get_response_kwargs.get("web_search_filters")
     web_search_active = bool(get_response_kwargs.get("web_search"))
+    media_active = _has_media_payloads(
+        prompt_images, prompt_audio, prompt_pdfs, identifiers
+    )
     web_search_warning_text: Optional[str] = None
     web_search_parallel_note: Optional[str] = None
     if web_search_active:
@@ -3121,16 +3146,23 @@ async def get_all_responses(
             "so actual costs may be significantly higher. Reduce `n_parallels` manually if tool errors occur."
         )
         logger.warning(web_search_warning_text)
-    if web_search_active and not use_batch:
-        reduced = max(1, int(math.ceil(requested_n_parallels * 0.5)))
-        if reduced < requested_n_parallels:
-            requested_n_parallels = reduced
-            web_search_parallel_note = (
-                f"Web search mode automatically capped parallel workers at {requested_n_parallels} "
-                f"(requested {user_requested_n_parallels}) to reduce load on the search tool. "
-                "This safeguard helps avoid rate-limit and tool errors and may be relaxed in the future."
-            )
-            logger.info(web_search_parallel_note)
+    if not use_batch:
+        reduction_reasons: List[str] = []
+        if web_search_active:
+            reduction_reasons.append("web search")
+        if media_active:
+            reduction_reasons.append("media inputs (image/audio/pdf)")
+        if reduction_reasons:
+            reduced = max(1, int(math.ceil(requested_n_parallels * 0.5)))
+            if reduced < requested_n_parallels:
+                requested_n_parallels = reduced
+                reasons = " and ".join(reduction_reasons)
+                web_search_parallel_note = (
+                    f"{reasons.capitalize()} detected; automatically capped parallel workers at {requested_n_parallels} "
+                    f"(requested {user_requested_n_parallels}). You can increase n_parallels for faster runs, "
+                    "or decrease further if running into API errors."
+                )
+                logger.info(web_search_parallel_note)
     web_search_warning_displayed = False
     web_search_note_displayed = False
     # Decide default cutoff once per job using cached rate headers
@@ -3567,6 +3599,8 @@ async def get_all_responses(
             for prompt, ident in todo_pairs:
                 imgs = prompt_images.get(str(ident)) if prompt_images else None
                 pdfs = prompt_pdfs.get(str(ident)) if prompt_pdfs else None
+                model_name = get_response_kwargs.get("model", "gpt-5-mini")
+                legacy_system_instruction = _uses_legacy_system_instruction(model_name)
                 if imgs or pdfs:
                     contents: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
                     if imgs:
@@ -3592,14 +3626,11 @@ async def get_all_responses(
                             contents.append(payload)
                     input_data = (
                         [{"role": "user", "content": contents}]
-                        if (
-                            m := get_response_kwargs.get("model", "gpt-5-mini")
-                        ).startswith("o")
-                        or m.startswith("gpt-5")
+                        if not legacy_system_instruction
                         else [
                             {
                                 "role": "system",
-                                "content": "Please provide a helpful response to this inquiry for purposes of academic research.",
+                                "content": DEFAULT_SYSTEM_INSTRUCTION,
                             },
                             {"role": "user", "content": contents},
                         ]
@@ -3607,14 +3638,11 @@ async def get_all_responses(
                 else:
                     input_data = (
                         [{"role": "user", "content": prompt}]
-                        if (
-                            m := get_response_kwargs.get("model", "gpt-5-mini")
-                        ).startswith("o")
-                        or m.startswith("gpt-5")
+                        if not legacy_system_instruction
                         else [
                             {
                                 "role": "system",
-                                "content": "Please provide a helpful response to this inquiry for purposes of academic research.",
+                                "content": DEFAULT_SYSTEM_INSTRUCTION,
                             },
                             {"role": "user", "content": prompt},
                         ]
@@ -3628,10 +3656,9 @@ async def get_all_responses(
                     base_web_search_filters, per_prompt_filters
                 )
                 body = _build_params(
-                    model=get_response_kwargs.get("model", "gpt-5-mini"),
+                    model=model_name,
                     input_data=input_data,
                     max_output_tokens=cutoff,
-                    system_instruction="Please provide a helpful response to this inquiry for purposes of academic research.",
                     temperature=get_response_kwargs.get("temperature", 0.9),
                     tools=get_response_kwargs.get("tools"),
                     tool_choice=get_response_kwargs.get("tool_choice"),
