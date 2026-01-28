@@ -45,8 +45,7 @@ Output JSON only, in following format:
 }
 
 Usually whole content is just one unified entity, so fill only first entity section with all attributes for whole content (no other entity sections).
-But if clearly multiple separate relevant entities within content (e.g. catalog with multiple product listings): each product gets its own entity section; all attributes separately extracted for each product.
-Name each entity with a concise and informative identifying title.
+But if input clearly contains multiple relevant distinct entities (e.g. catalog with several product listings), output one top-level entry per entity. Use a short, informative identifier as each entity’s key, and place that entity’s unique extracted attributes inside its nested dictionary.
 
 Attributes you are extracting info on are: {{ attributes.keys() | shuffled }}
 Assess EVERY attribute; use "unknown" if needed but no drops. Use these attribute names verbatim, with absolutely no modification.
