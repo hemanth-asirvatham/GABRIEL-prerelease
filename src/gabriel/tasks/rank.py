@@ -970,22 +970,6 @@ class Rank:
                                 pdfs.extend(pa)
                         if pdfs:
                             pair_pdfs[sha8] = pdfs
-                    if pdfs_by_id:
-                        pdfs: List[Dict[str, str]] = []
-                        pa = pdfs_by_id.get(id_a, [])
-                        pb = pdfs_by_id.get(id_b, [])
-                        if circle_first_flag:
-                            if pa:
-                                pdfs.extend(pa)
-                            if pb:
-                                pdfs.extend(pb)
-                        else:
-                            if pb:
-                                pdfs.extend(pb)
-                            if pa:
-                                pdfs.extend(pa)
-                        if pdfs:
-                            pair_pdfs[sha8] = pdfs
             if not prompts:
                 continue
             resp_df = await get_all_responses(
@@ -993,7 +977,6 @@ class Rank:
                 identifiers=ids,
                 prompt_images=pair_images or None,
                 prompt_audio=pair_audio or None,
-                prompt_pdfs=pair_pdfs or None,
                 prompt_pdfs=pair_pdfs or None,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
