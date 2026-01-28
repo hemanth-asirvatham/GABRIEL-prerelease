@@ -8,6 +8,8 @@ Read entire text content carefully—start, middle, end. Do not skim; comprehend
 Carefully consider and analyze the provided image content. Comprehend it fully, both big picture and relevant subtleties.
 {% elif modality == "audio" %}
 Carefully consider and analyze the provided audio content. Comprehend it fully, both big picture and relevant subtleties. Pay close attention to both the content as well as the tone/style of the audio, and the sonic qualities of the content's presentation.
+{% elif modality == "pdf" %}
+Carefully consider and analyze the provided PDF content. Comprehend it fully, both big picture and relevant subtleties across the entire document.
 {% elif modality == "entity" %}
 Entity: {{ text }}
 Use your prodigious internal knowledge on the item/entity "{{ text }}".
@@ -66,6 +68,16 @@ Be very clear in your mind that "circle" is the first audio recording and "squar
 Two audio files are provided. **SQUARE = first audio recording. CIRCLE = second audio recording.** Comprehend both fully (content, style, tone, sonic qualities).
 Again, "circle" references the second, later audio entry; "square" references the first, earlier audio entry.
 Be very clear in your mind that "square" is the first audio recording and "circle" is the second audio recording.
+{% endif %}
+{% elif modality == "pdf" %}
+{% if circle_first %}
+Two PDFs are provided. **CIRCLE = first PDF. SQUARE = second PDF.** Comprehend both fully (overall content + fine detail).
+Again, "square" references the second, later PDF entry; "circle" references the first, earlier PDF entry.
+Be very clear in your mind that "circle" is the first PDF and "square" is the second PDF.
+{% else %}
+Two PDFs are provided. **SQUARE = first PDF. CIRCLE = second PDF.** Comprehend both fully (overall content + fine detail).
+Again, "circle" references the second, later PDF entry; "square" references the first, earlier PDF entry.
+Be very clear in your mind that "square" is the first PDF and "circle" is the second PDF.
 {% endif %}
 {% elif modality == "entity" %}
 {% if circle_first %}

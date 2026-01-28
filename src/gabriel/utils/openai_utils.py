@@ -1492,6 +1492,7 @@ async def get_response(
     verbose: bool = True,
     images: Optional[List[str]] = None,
     audio: Optional[List[Dict[str, str]]] = None,
+    pdfs: Optional[List[Dict[str, str]]] = None,
     return_raw: bool = False,
     logging_level: Optional[Union[str, int]] = None,
     background_mode: Optional[bool] = None,
@@ -1556,7 +1557,7 @@ async def get_response(
         used.
     verbose:
         When set, progress information is printed via the module logger.
-    images, audio:
+    images, audio, pdfs:
         Lists of base64-encoded media to include alongside the text prompt.
     return_raw:
         If ``True`` the raw SDK response objects are returned alongside the
@@ -1738,6 +1739,8 @@ async def get_response(
             "Audio inputs require models gpt-4o-audio-preview, gpt-4o-mini-audio-preview, or gpt-audio"
         )
         contents: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        if pdfs:
+            logger.warning("PDF inputs are ignored for audio-only requests.")
         if images:
             for img in images:
                 img_url = (
@@ -1809,15 +1812,33 @@ async def get_response(
             return texts, duration, raw
         return texts, duration
     else:
-        if images:
+        if images or pdfs:
             contents: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-            for img in images:
-                img_url = (
-                    img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
-                )
-                contents.append(
-                    {"type": "input_image", "image_url": img_url}
-                )
+            if images:
+                for img in images:
+                    img_url = (
+                        img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
+                    )
+                    contents.append(
+                        {"type": "input_image", "image_url": img_url}
+                    )
+            if pdfs:
+                for pdf in pdfs:
+                    file_data = pdf.get("file_data")
+                    file_url = pdf.get("file_url")
+                    filename = pdf.get("filename")
+                    if file_data and not str(file_data).startswith("data:"):
+                        file_data = f"data:application/pdf;base64,{file_data}"
+                    file_payload: Dict[str, Any] = {"type": "input_file"}
+                    if filename:
+                        file_payload["filename"] = filename
+                    if file_data:
+                        file_payload["file_data"] = file_data
+                    elif file_url:
+                        file_payload["file_url"] = file_url
+                    else:
+                        continue
+                    contents.append(file_payload)
             input_data = (
                 [{"role": "user", "content": contents}]
                 if model.startswith("o") or model.startswith("gpt-5")
@@ -2664,6 +2685,7 @@ async def get_all_responses(
     identifiers: Optional[List[str]] = None,
     prompt_images: Optional[Dict[str, List[str]]] = None,
     prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
+    prompt_pdfs: Optional[Dict[str, List[Dict[str, str]]]] = None,
     prompt_web_search_filters: Optional[Dict[str, Dict[str, Any]]] = None,
     *,
     model: str = "gpt-5-mini",
@@ -3544,11 +3566,30 @@ async def get_all_responses(
             tasks: List[Dict[str, Any]] = []
             for prompt, ident in todo_pairs:
                 imgs = prompt_images.get(str(ident)) if prompt_images else None
-                if imgs:
+                pdfs = prompt_pdfs.get(str(ident)) if prompt_pdfs else None
+                if imgs or pdfs:
                     contents: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-                    for img in imgs:
-                        img_url = img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
-                        contents.append({"type": "input_image", "image_url": img_url})
+                    if imgs:
+                        for img in imgs:
+                            img_url = img if str(img).startswith("data:") else f"data:image/jpeg;base64,{img}"
+                            contents.append({"type": "input_image", "image_url": img_url})
+                    if pdfs:
+                        for pdf in pdfs:
+                            file_data = pdf.get("file_data")
+                            file_url = pdf.get("file_url")
+                            filename = pdf.get("filename")
+                            if file_data and not str(file_data).startswith("data:"):
+                                file_data = f"data:application/pdf;base64,{file_data}"
+                            payload: Dict[str, Any] = {"type": "input_file"}
+                            if filename:
+                                payload["filename"] = filename
+                            if file_data:
+                                payload["file_data"] = file_data
+                            elif file_url:
+                                payload["file_url"] = file_url
+                            else:
+                                continue
+                            contents.append(payload)
                     input_data = (
                         [{"role": "user", "content": contents}]
                         if (
@@ -4565,6 +4606,7 @@ async def get_all_responses(
                     call_timeout = min(call_timeout, max_timeout_val)
                 images_payload = prompt_images.get(str(ident)) if prompt_images else None
                 audio_payload = prompt_audio.get(str(ident)) if prompt_audio else None
+                pdf_payload = prompt_pdfs.get(str(ident)) if prompt_pdfs else None
                 call_kwargs = dict(get_response_kwargs)
                 per_prompt_filters = (
                     prompt_web_search_filters.get(str(ident))
@@ -4582,6 +4624,8 @@ async def get_all_responses(
                     call_kwargs["images"] = images_payload
                 if audio_payload is not None:
                     call_kwargs["audio"] = audio_payload
+                if pdf_payload is not None:
+                    call_kwargs["pdfs"] = pdf_payload
                 call_kwargs.update(
                     {
                         "n": n,

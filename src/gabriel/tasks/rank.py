@@ -64,6 +64,8 @@ from gabriel.utils import (
     safest_json,
     load_image_inputs,
     load_audio_inputs,
+    load_pdf_inputs,
+    warn_if_modality_mismatch,
 )
 from gabriel.utils.logging import announce_prompt_rendering
 from .rate import Rate, RateConfig
@@ -889,6 +891,8 @@ class Rank:
             ids: List[str] = []
             pair_images: Dict[str, List[str]] = {}
             pair_audio: Dict[str, List[Dict[str, str]]] = {}
+            pair_pdfs: Dict[str, List[Dict[str, str]]] = {}
+            pair_pdfs: Dict[str, List[Dict[str, str]]] = {}
             meta_map: Dict[str, Tuple[int, int, str, str]] = {}
             id_to_circle_first: Dict[str, bool] = {}
             for batch_idx, batch in enumerate(attr_batches):
@@ -950,6 +954,38 @@ class Rank:
                                 auds.extend(aa)
                         if auds:
                             pair_audio[sha8] = auds
+                    if pdfs_by_id:
+                        pdfs: List[Dict[str, str]] = []
+                        pa = pdfs_by_id.get(id_a, [])
+                        pb = pdfs_by_id.get(id_b, [])
+                        if circle_first_flag:
+                            if pa:
+                                pdfs.extend(pa)
+                            if pb:
+                                pdfs.extend(pb)
+                        else:
+                            if pb:
+                                pdfs.extend(pb)
+                            if pa:
+                                pdfs.extend(pa)
+                        if pdfs:
+                            pair_pdfs[sha8] = pdfs
+                    if pdfs_by_id:
+                        pdfs: List[Dict[str, str]] = []
+                        pa = pdfs_by_id.get(id_a, [])
+                        pb = pdfs_by_id.get(id_b, [])
+                        if circle_first_flag:
+                            if pa:
+                                pdfs.extend(pa)
+                            if pb:
+                                pdfs.extend(pb)
+                        else:
+                            if pb:
+                                pdfs.extend(pb)
+                            if pa:
+                                pdfs.extend(pa)
+                        if pdfs:
+                            pair_pdfs[sha8] = pdfs
             if not prompts:
                 continue
             resp_df = await get_all_responses(
@@ -957,6 +993,8 @@ class Rank:
                 identifiers=ids,
                 prompt_images=pair_images or None,
                 prompt_audio=pair_audio or None,
+                prompt_pdfs=pair_pdfs or None,
+                prompt_pdfs=pair_pdfs or None,
                 n_parallels=self.cfg.n_parallels,
                 model=self.cfg.model,
                 json_mode=self.cfg.modality != "audio",
@@ -1426,6 +1464,7 @@ class Rank:
             )
 
         df_proc = df.reset_index(drop=True).copy()
+        warn_if_modality_mismatch(df_proc[column_name].tolist(), self.cfg.modality, column_name=column_name)
         if id_column is not None:
             if id_column not in df_proc.columns:
                 raise ValueError(f"id_column '{id_column}' not found in DataFrame")
@@ -1491,7 +1530,7 @@ class Rank:
                     pass
             start_round = last_completed + 1
         # extract contents and build lookup
-        if self.cfg.modality in {"image", "audio"}:
+        if self.cfg.modality in {"image", "audio", "pdf"}:
             texts = list(zip(df_proc["_id"], ["" for _ in df_proc[column_name]]))
         else:
             texts = list(zip(df_proc["_id"], df_proc[column_name].astype(str)))
@@ -1500,6 +1539,7 @@ class Rank:
 
         images_by_id: Dict[str, List[str]] = {}
         audio_by_id: Dict[str, List[Dict[str, str]]] = {}
+        pdfs_by_id: Dict[str, List[Dict[str, str]]] = {}
         if self.cfg.modality == "image":
             for rid, imgs in zip(df_proc["_id"], df_proc[column_name]):
                 encoded = load_image_inputs(imgs)
@@ -1510,6 +1550,11 @@ class Rank:
                 encoded = load_audio_inputs(auds)
                 if encoded:
                     audio_by_id[rid] = encoded
+        elif self.cfg.modality == "pdf":
+            for rid, pdfs in zip(df_proc["_id"], df_proc[column_name]):
+                encoded = load_pdf_inputs(pdfs)
+                if encoded:
+                    pdfs_by_id[rid] = encoded
         # derive list of attributes
         if isinstance(self.cfg.attributes, dict):
             attr_keys = list(self.cfg.attributes.keys())

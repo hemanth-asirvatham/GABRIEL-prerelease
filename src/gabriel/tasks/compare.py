@@ -16,6 +16,8 @@ from ..utils import (
     safest_json,
     load_image_inputs,
     load_audio_inputs,
+    load_pdf_inputs,
+    warn_if_modality_mismatch,
 )
 from ..utils.logging import announce_prompt_rendering
 
@@ -89,6 +91,9 @@ class Compare:
         squares = df_proc[square_column_name].tolist()
         pairs = list(zip(circles, squares))
 
+        warn_if_modality_mismatch(circles, self.cfg.modality, column_name=circle_column_name)
+        warn_if_modality_mismatch(squares, self.cfg.modality, column_name=square_column_name)
+
         prompts: List[str] = []
         ids: List[str] = []
         id_to_circle_first: Dict[str, bool] = {}
@@ -126,6 +131,7 @@ class Compare:
 
         prompt_images: Optional[Dict[str, List[str]]] = None
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
+        prompt_pdfs: Optional[Dict[str, List[Dict[str, str]]]] = None
         if self.cfg.modality == "image":
             tmp: Dict[str, List[str]] = {}
             for ident, (circle, square) in zip(ids, pairs):
@@ -164,6 +170,25 @@ class Compare:
                 if auds:
                     tmp_a[ident] = auds
             prompt_audio = tmp_a or None
+        elif self.cfg.modality == "pdf":
+            tmp_p: Dict[str, List[Dict[str, str]]] = {}
+            for ident, (circle, square) in zip(ids, pairs):
+                pdfs: List[Dict[str, str]] = []
+                circle_pdfs = load_pdf_inputs(circle)
+                square_pdfs = load_pdf_inputs(square)
+                if id_to_circle_first.get(ident, False):
+                    if circle_pdfs:
+                        pdfs.extend(circle_pdfs)
+                    if square_pdfs:
+                        pdfs.extend(square_pdfs)
+                else:
+                    if square_pdfs:
+                        pdfs.extend(square_pdfs)
+                    if circle_pdfs:
+                        pdfs.extend(circle_pdfs)
+                if pdfs:
+                    tmp_p[ident] = pdfs
+            prompt_pdfs = tmp_p or None
 
         csv_path = os.path.join(self.cfg.save_dir, self.cfg.file_name)
 
@@ -174,6 +199,7 @@ class Compare:
             identifiers=ids,
             prompt_images=prompt_images,
             prompt_audio=prompt_audio,
+            prompt_pdfs=prompt_pdfs,
             n_parallels=self.cfg.n_parallels,
             model=self.cfg.model,
             save_path=csv_path,

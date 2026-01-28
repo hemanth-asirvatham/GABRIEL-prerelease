@@ -17,12 +17,14 @@ from ..utils import (
     letters_only,
     load_audio_inputs,
     load_image_inputs,
+    load_pdf_inputs,
     normalize_text_aggressive,
     normalize_text_generous,
     normalize_whitespace,
     robust_find_improved,
     safe_json,
     strict_find,
+    warn_if_modality_mismatch,
 )
 from ..utils.logging import announce_prompt_rendering
 
@@ -656,6 +658,7 @@ class Codify:
         requests: List[PromptRequest] = []
         prompt_images: Dict[str, List[str]] = {}
         prompt_audio: Dict[str, List[Dict[str, str]]] = {}
+        prompt_pdfs: Dict[str, List[Dict[str, str]]] = {}
         pending_requests: List[Dict[str, Any]] = []
 
         if not dynamic_mode and categories:
@@ -681,6 +684,11 @@ class Codify:
                 if self.cfg.modality == "audio"
                 else None
             )
+            pdf_inputs = (
+                load_pdf_inputs(raw_values[row_idx])
+                if self.cfg.modality == "pdf"
+                else None
+            )
 
             for chunk_idx, chunk in enumerate(chunks):
                 if dynamic_mode:
@@ -693,6 +701,7 @@ class Codify:
                             "batch_categories": None,
                             "images": images,
                             "audio": audio_inputs,
+                            "pdfs": pdf_inputs,
                         }
                     )
                 else:
@@ -707,11 +716,12 @@ class Codify:
                                 "identifier": identifier,
                                 "chunk": chunk,
                                 "row_index": row_idx,
-                                "batch_categories": batch_categories,
-                                "images": images,
-                                "audio": audio_inputs,
-                            }
-                        )
+                            "batch_categories": batch_categories,
+                            "images": images,
+                            "audio": audio_inputs,
+                            "pdfs": pdf_inputs,
+                        }
+                    )
 
         if not pending_requests:
             return {}
@@ -737,6 +747,8 @@ class Codify:
                 prompt_images[req["identifier"]] = list(req["images"])
             if req["audio"]:
                 prompt_audio[req["identifier"]] = list(req["audio"])
+            if req.get("pdfs"):
+                prompt_pdfs[req["identifier"]] = list(req["pdfs"])
 
         prompts = [req.prompt for req in requests]
         identifiers = [req.identifier for req in requests]
@@ -757,6 +769,7 @@ class Codify:
             reasoning_summary=self.cfg.reasoning_summary,
             prompt_images=prompt_images or None,
             prompt_audio=prompt_audio or None,
+            prompt_pdfs=prompt_pdfs or None,
             **kwargs,
         )
 
@@ -955,6 +968,7 @@ class Codify:
 
         raw_values = df_proc[column_name].tolist()
         original_texts = ["" if pd.isna(val) else str(val) for val in raw_values]
+        warn_if_modality_mismatch(raw_values, self.cfg.modality, column_name=column_name)
 
         additional = (additional_instructions or "").strip() or None
         dynamic_mode = categories is None

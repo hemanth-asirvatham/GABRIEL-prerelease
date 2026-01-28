@@ -16,6 +16,8 @@ from ..utils import (
     safest_json,
     load_image_inputs,
     load_audio_inputs,
+    load_pdf_inputs,
+    warn_if_modality_mismatch,
 )
 from ..utils.logging import announce_prompt_rendering
 from ._attribute_utils import load_persisted_attributes
@@ -149,6 +151,8 @@ class Extract:
         values = df_proc[column_name].tolist()
         texts = [str(v) for v in values]
 
+        warn_if_modality_mismatch(values, self.cfg.modality, column_name=column_name)
+
         base_ids: List[str] = []
         id_to_rows: DefaultDict[str, List[int]] = defaultdict(list)
         id_to_val: Dict[str, Any] = {}
@@ -209,6 +213,7 @@ class Extract:
 
         prompt_images: Optional[Dict[str, List[str]]] = None
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None
+        prompt_pdfs: Optional[Dict[str, List[Dict[str, str]]]] = None
         if self.cfg.modality == "image":
             tmp: Dict[str, List[str]] = {}
             for ident, rows in id_to_rows.items():
@@ -225,6 +230,14 @@ class Extract:
                     for batch_idx in range(len(attr_batches)):
                         tmp_a[f"{ident}_batch{batch_idx}"] = auds
             prompt_audio = tmp_a or None
+        elif self.cfg.modality == "pdf":
+            tmp_p: Dict[str, List[Dict[str, str]]] = {}
+            for ident, rows in id_to_rows.items():
+                pdfs = load_pdf_inputs(values[rows[0]])
+                if pdfs:
+                    for batch_idx in range(len(attr_batches)):
+                        tmp_p[f"{ident}_batch{batch_idx}"] = pdfs
+            prompt_pdfs = tmp_p or None
 
         csv_path = os.path.join(self.cfg.save_dir, f"{base_name}_raw_responses.csv")
 
@@ -274,12 +287,21 @@ class Extract:
                     auds = prompt_audio.get(base_ident)
                     if auds:
                         prompt_audio_all[run_ident] = auds
+        prompt_pdfs_all: Optional[Dict[str, List[Dict[str, str]]]] = None
+        if prompt_pdfs:
+            prompt_pdfs_all = {}
+            for run_ids in run_identifier_lists:
+                for base_ident, run_ident in zip(ids, run_ids):
+                    pdfs = prompt_pdfs.get(base_ident)
+                    if pdfs:
+                        prompt_pdfs_all[run_ident] = pdfs
 
         df_resp_all = await get_all_responses(
             prompts=prompts_all,
             identifiers=ids_all,
             prompt_images=prompt_images_all,
             prompt_audio=prompt_audio_all,
+            prompt_pdfs=prompt_pdfs_all,
             n_parallels=self.cfg.n_parallels,
             model=self.cfg.model,
             save_path=csv_path,

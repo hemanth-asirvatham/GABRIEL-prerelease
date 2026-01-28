@@ -92,7 +92,7 @@ async def rate(
     get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Asks GPT to score each text / image / audio / item on natural language attributes. Output = 0-100 rating.
+    """Asks GPT to score each text / image / audio / pdf / item on natural language attributes. Output = 0-100 rating.
 
     Example Use
     -----------
@@ -103,7 +103,7 @@ async def rate(
     df:
         Source DataFrame containing the passages to rate.
     column_name:
-        Column in ``df`` that holds the passages (text, image, or audio
+        Column in ``df`` that holds the passages (text, image, audio, or PDF
         references depending on ``modality``).
     attributes:
         Mapping of attribute names to natural-language descriptions that the
@@ -131,7 +131,7 @@ async def rate(
         Basename (without the automatic ``_raw_responses`` suffix) for saved
         artifacts.
     modality:
-        One of ``"text"``, ``"entity"``, ``"web"``, ``"image"``, or ``"audio"``
+        One of ``"text"``, ``"entity"``, ``"web"``, ``"image"``, ``"audio"``, or ``"pdf"``
         to control how inputs are packaged into prompts.
     reasoning_effort, reasoning_summary:
         Optional OpenAI metadata that tunes reasoning depth and summary capture.
@@ -435,7 +435,7 @@ async def classify(
     get_all_responses_fn: Optional[Callable[..., Awaitable[pd.DataFrame]]] = None,
     **cfg_kwargs,
 ) -> pd.DataFrame:
-    """Classifies texts / images / audio / items on whether provided labels apply. Output = one or more classes per item.
+    """Classifies texts / images / audio / pdfs / items on whether provided labels apply. Output = one or more classes per item.
 
     Example Use
     -----------
