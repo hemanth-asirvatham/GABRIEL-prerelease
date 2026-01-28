@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -10,9 +11,9 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 TEXTUAL_MODALITIES = {"text", "entity", "web"}
-PATH_MODALITIES = {"image", "audio"}
+PATH_MODALITIES = {"image", "audio", "pdf"}
 ALL_MODALITIES = TEXTUAL_MODALITIES | PATH_MODALITIES
-TABULAR_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+TABULAR_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xls", ".parquet", ".pq", ".feather"}
 IMAGE_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -23,6 +24,18 @@ IMAGE_EXTENSIONS = {
     ".tif",
     ".webp",
     ".svg",
+}
+PDF_EXTENSIONS = {".pdf"}
+TEXT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".rtf",
+    ".html",
+    ".htm",
+    ".xml",
+    ".json",
+    ".csv",
+    ".tsv",
 }
 AUDIO_EXTENSIONS = {
     ".mp3",
@@ -41,7 +54,10 @@ AUDIO_EXTENSIONS = {
 }
 IMAGE_EXTENSION_SUFFIXES = {ext.lstrip(".") for ext in IMAGE_EXTENSIONS}
 AUDIO_EXTENSION_SUFFIXES = {ext.lstrip(".") for ext in AUDIO_EXTENSIONS}
-PATH_MODALITY_SUFFIXES = IMAGE_EXTENSION_SUFFIXES | AUDIO_EXTENSION_SUFFIXES
+PDF_EXTENSION_SUFFIXES = {ext.lstrip(".") for ext in PDF_EXTENSIONS}
+PATH_MODALITY_SUFFIXES = (
+    IMAGE_EXTENSION_SUFFIXES | AUDIO_EXTENSION_SUFFIXES | PDF_EXTENSION_SUFFIXES
+)
 
 
 def load(
@@ -53,6 +69,7 @@ def load(
     save_dir: Optional[str] = None,
     reset_files: bool = False,
     modality: Optional[str] = None,
+    force_text: bool = False,
 ) -> pd.DataFrame:
     """Aggregate files from a folder into a single CSV.
 
@@ -80,8 +97,12 @@ def load(
         instead of being regenerated. Set to ``True`` to overwrite the file.
     modality:
         Optional modality hint. ``"text"``, ``"entity"``, and ``"web"`` are
-        treated as text; ``"image"`` and ``"audio"`` collect file paths. When
+        treated as text; ``"image"``, ``"audio"``, and ``"pdf"`` collect file paths. When
         ``None`` (default) the modality is inferred from the first matching file.
+    force_text:
+        When ``True``, PDF inputs are parsed into text even if the modality is
+        set to ``"pdf"``. When ``False``, PDFs are treated as attachments and
+        stored as file paths.
 
     Returns
     -------
@@ -102,11 +123,23 @@ def load(
 
     extset = {e.lower().lstrip(".") for e in extensions} if extensions else None
     modality = _resolve_modality(folder_path, extset, save_name, modality)
-    is_textual = _is_textual_modality(modality)
+    is_textual = _is_textual_modality(modality) or (modality == "pdf" and force_text)
+
+    if force_text and modality == "pdf":
+        print(
+            "[gabriel.load] force_text=True: PDFs will be parsed into text. "
+            "Consider setting modality='text' (or 'entity'/'web' if appropriate) "
+            "so downstream tasks treat inputs as textual content."
+        )
 
     path_key = "path"
     rows: List[Dict[str, Any]] = []
     max_layers = 0
+
+    warned_pdf = False
+    warned_image = False
+    warned_audio = False
+    has_non_pdf = False
 
     if os.path.isfile(folder_path):
         ext = os.path.splitext(folder_path)[1].lower()
@@ -120,6 +153,15 @@ def load(
             print(f"Loaded existing file from {folder_path}")
             return df
         name = os.path.basename(folder_path)
+        if not force_text:
+            warned_pdf, warned_image, warned_audio = _warn_for_media_mismatch(
+                ext,
+                modality,
+                warned_pdf,
+                warned_image,
+                warned_audio,
+                folder_path,
+            )
         rows.append(
             _build_row(
                 file_path=folder_path,
@@ -136,7 +178,18 @@ def load(
                     continue
                 ext = os.path.splitext(fname)[1].lower()
                 short_ext = ext.lstrip(".")
-                if not _should_include_file(short_ext, modality, extset):
+                if modality == "pdf" and ext != ".pdf":
+                    has_non_pdf = True
+                if not force_text:
+                    warned_pdf, warned_image, warned_audio = _warn_for_media_mismatch(
+                        ext,
+                        modality,
+                        warned_pdf,
+                        warned_image,
+                        warned_audio,
+                        folder_path,
+                    )
+                if not _should_include_file(short_ext, modality, extset, force_text):
                     continue
                 file_path = os.path.join(root, fname)
                 rel = os.path.relpath(file_path, folder_path)
@@ -153,6 +206,13 @@ def load(
                         is_textual=is_textual,
                     )
                 )
+
+    if modality == "pdf" and has_non_pdf:
+        print(
+            "[gabriel.load] Detected non-PDF files in a PDF run. Only PDFs were "
+            "ingested. Set force_text=True if you need to extract text from PDFs; "
+            "non-PDF files will remain excluded."
+        )
 
     df = pd.DataFrame(rows)
     for i in range(1, max_layers + 1):
@@ -192,11 +252,40 @@ def _build_row(
         "tag": tag,
     }
     if is_textual:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
-            row["text"] = fh.read()
+        row["text"] = _extract_text(file_path)
     for i, layer in enumerate(layers, start=1):
         row[f"layer_{i}"] = layer
     return row
+
+
+def _extract_text(file_path: str) -> str:
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in TEXT_EXTENSIONS or not ext:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
+            return fh.read()
+    if ext == ".pdf":
+        pypdf = _optional_import("pypdf", "pypdf")
+        reader = pypdf.PdfReader(file_path)
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    if ext == ".docx":
+        docx = _optional_import("docx", "python-docx")
+        document = docx.Document(file_path)
+        return "\n".join(p.text for p in document.paragraphs).strip()
+    if ext == ".doc":
+        textract = _optional_import("textract", "textract")
+        extracted = textract.process(file_path)
+        return extracted.decode("utf-8", errors="ignore").strip()
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
+        return fh.read()
+
+
+def _optional_import(module_name: str, package_name: str):
+    if importlib.util.find_spec(module_name) is None:
+        raise ImportError(
+            f"Missing optional dependency '{package_name}'. Install it to "
+            f"extract {module_name} documents."
+        )
+    return importlib.import_module(module_name)
 
 
 def _match_tag(name: str, tag_dict: Optional[Dict[str, Any]]) -> Optional[Any]:
@@ -237,6 +326,8 @@ def _detect_modality(
     if not candidate:
         return "text"
     ext = os.path.splitext(candidate)[1].lower()
+    if ext in PDF_EXTENSIONS:
+        return "pdf"
     if ext in IMAGE_EXTENSIONS:
         return "image"
     if ext in AUDIO_EXTENSIONS:
@@ -274,6 +365,7 @@ def _should_include_file(
     short_ext: str,
     modality: str,
     extset: Optional[Set[str]],
+    force_text: bool = False,
 ) -> bool:
     if extset and short_ext not in extset:
         return False
@@ -281,10 +373,42 @@ def _should_include_file(
         return short_ext in IMAGE_EXTENSION_SUFFIXES
     if modality == "audio":
         return short_ext in AUDIO_EXTENSION_SUFFIXES
+    if modality == "pdf":
+        return short_ext in PDF_EXTENSION_SUFFIXES
     # Text-style modalities should skip obvious binary media when no explicit filters
-    if short_ext in PATH_MODALITY_SUFFIXES:
+    if short_ext in PATH_MODALITY_SUFFIXES and not force_text:
         return False
     return True
+
+
+def _warn_for_media_mismatch(
+    ext: str,
+    modality: str,
+    warned_pdf: bool,
+    warned_image: bool,
+    warned_audio: bool,
+    folder_path: str,
+) -> tuple[bool, bool, bool]:
+    if ext in PDF_EXTENSIONS and modality != "pdf" and not warned_pdf:
+        print(
+            f"[gabriel.load] Found PDF files in {folder_path}. "
+            "Set modality='pdf' to attach PDFs directly to GPT calls, or set "
+            "force_text=True to extract text from the PDFs."
+        )
+        warned_pdf = True
+    if ext in IMAGE_EXTENSIONS and modality != "image" and not warned_image:
+        print(
+            f"[gabriel.load] Found image files in {folder_path}. "
+            "Set modality='image' to attach images directly to GPT calls."
+        )
+        warned_image = True
+    if ext in AUDIO_EXTENSIONS and modality != "audio" and not warned_audio:
+        print(
+            f"[gabriel.load] Found audio files in {folder_path}. "
+            "Set modality='audio' to attach audio directly to GPT calls."
+        )
+        warned_audio = True
+    return warned_pdf, warned_image, warned_audio
 
 
 def _resolve_save_directory(folder_path: str, save_dir: Optional[str]) -> str:
@@ -310,6 +434,12 @@ def _read_tabular_file(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
         return pd.read_csv(path)
+    if ext == ".tsv":
+        return pd.read_csv(path, sep="\t")
     if ext in {".xlsx", ".xls"}:
         return pd.read_excel(path)
+    if ext in {".parquet", ".pq"}:
+        return pd.read_parquet(path)
+    if ext == ".feather":
+        return pd.read_feather(path)
     return pd.read_csv(path)

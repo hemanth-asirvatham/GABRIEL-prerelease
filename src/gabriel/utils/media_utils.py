@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 from .image_utils import encode_image
 from .audio_utils import encode_audio
+from .pdf_utils import encode_pdf
 
 
 def load_image_inputs(val: Any) -> List[str]:
@@ -44,4 +45,34 @@ def load_audio_inputs(val: Any) -> List[Dict[str, str]]:
                 encoded.append(enc)
         elif isinstance(aud, dict):
             encoded.append(aud)
+    return encoded
+
+
+def load_pdf_inputs(val: Any) -> List[Dict[str, str]]:
+    """Return a list of PDF dicts from a DataFrame cell."""
+    if not val:
+        return []
+    pdfs = val if isinstance(val, list) else [val]
+    encoded: List[Dict[str, str]] = []
+    for pdf in pdfs:
+        if isinstance(pdf, str) and os.path.exists(pdf):
+            enc = encode_pdf(pdf)
+            if enc:
+                encoded.append(enc)
+        elif isinstance(pdf, dict):
+            encoded.append(pdf)
+        elif isinstance(pdf, str):
+            lowered = pdf.lower()
+            if lowered.startswith("data:application/pdf"):
+                encoded.append({"filename": "document.pdf", "file_data": pdf})
+            elif lowered.startswith("http://") or lowered.startswith("https://"):
+                if lowered.endswith(".pdf"):
+                    encoded.append({"file_url": pdf})
+            else:
+                encoded.append(
+                    {
+                        "filename": "document.pdf",
+                        "file_data": f"data:application/pdf;base64,{pdf}",
+                    }
+                )
     return encoded
