@@ -124,11 +124,19 @@ def load(
     warned_pdf = False
     warned_image = False
     warned_audio = False
+    warned_doc = False
     has_non_pdf = False
     has_pdf = False
 
     if os.path.isfile(folder_path):
         ext = os.path.splitext(folder_path)[1].lower()
+        if ext == ".doc":
+            if not warned_doc:
+                print(
+                    "[gabriel.load] Ignoring legacy .doc files. Please convert them "
+                    "to .docx or PDF before loading."
+                )
+                warned_doc = True
         if ext == ".pdf":
             has_pdf = True
         if is_textual and ext in TABULAR_EXTENSIONS:
@@ -141,29 +149,38 @@ def load(
             print(f"Loaded existing file from {folder_path}")
             return df
         name = os.path.basename(folder_path)
-        warned_pdf, warned_image, warned_audio = _warn_for_media_mismatch(
-            ext,
-            modality,
-            warned_pdf,
-            warned_image,
-            warned_audio,
-            folder_path,
-        )
-        rows.append(
-            _build_row(
-                file_path=folder_path,
-                name=name,
-                layers=(),
-                tag_dict=tag_dict,
-                is_textual=is_textual,
+        if ext != ".doc":
+            warned_pdf, warned_image, warned_audio = _warn_for_media_mismatch(
+                ext,
+                modality,
+                warned_pdf,
+                warned_image,
+                warned_audio,
+                folder_path,
             )
-        )
+            rows.append(
+                _build_row(
+                    file_path=folder_path,
+                    name=name,
+                    layers=(),
+                    tag_dict=tag_dict,
+                    is_textual=is_textual,
+                )
+            )
     else:
         for root, _, files in os.walk(folder_path):
             for fname in files:
                 if fname == save_name:
                     continue
                 ext = os.path.splitext(fname)[1].lower()
+                if ext == ".doc":
+                    if not warned_doc:
+                        print(
+                            "[gabriel.load] Ignoring legacy .doc files. Please convert "
+                            "them to .docx or PDF before loading."
+                        )
+                        warned_doc = True
+                    continue
                 short_ext = ext.lstrip(".")
                 if ext == ".pdf":
                     has_pdf = True
@@ -266,10 +283,7 @@ def _extract_text(file_path: str) -> str:
         document = docx.Document(file_path)
         return "\n".join(p.text for p in document.paragraphs).strip()
     if ext == ".doc":
-        raise ValueError(
-            "Legacy .doc files are not supported. Please convert the file to "
-            ".docx or PDF and try again."
-        )
+        return ""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
         return fh.read()
 
