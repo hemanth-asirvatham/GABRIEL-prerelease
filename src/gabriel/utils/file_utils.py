@@ -266,9 +266,10 @@ def _extract_text(file_path: str) -> str:
         document = docx.Document(file_path)
         return "\n".join(p.text for p in document.paragraphs).strip()
     if ext == ".doc":
-        textract = _optional_import("textract", "textract-py3")
-        extracted = textract.process(file_path)
-        return extracted.decode("utf-8", errors="ignore").strip()
+        raise ValueError(
+            "Legacy .doc files are not supported. Please convert the file to "
+            ".docx or PDF and try again."
+        )
     with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
         return fh.read()
 
