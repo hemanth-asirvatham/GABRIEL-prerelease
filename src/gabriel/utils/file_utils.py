@@ -125,9 +125,12 @@ def load(
     warned_image = False
     warned_audio = False
     has_non_pdf = False
+    has_pdf = False
 
     if os.path.isfile(folder_path):
         ext = os.path.splitext(folder_path)[1].lower()
+        if ext == ".pdf":
+            has_pdf = True
         if is_textual and ext in TABULAR_EXTENSIONS:
             logger.info(
                 "Input path %s is a tabular file; loading it without creating a copy.",
@@ -162,6 +165,8 @@ def load(
                     continue
                 ext = os.path.splitext(fname)[1].lower()
                 short_ext = ext.lstrip(".")
+                if ext == ".pdf":
+                    has_pdf = True
                 if modality == "pdf" and ext != ".pdf":
                     has_non_pdf = True
                 warned_pdf, warned_image, warned_audio = _warn_for_media_mismatch(
@@ -195,6 +200,12 @@ def load(
             "[gabriel.load] Detected non-PDF files in a PDF run. Only PDFs were "
             "ingested. Set modality='text' (or 'entity'/'web') in gabriel.load if you "
             "need to extract text from PDFs and include non-PDF files."
+        )
+    if modality == "pdf" and has_pdf:
+        print(
+            "[gabriel.load] PDF modality attaches PDFs directly (richer layout, figures, and "
+            "images). Set modality='text' (or 'entity'/'web') to extract text-only "
+            "versions of PDFs."
         )
 
     df = pd.DataFrame(rows)
@@ -255,7 +266,7 @@ def _extract_text(file_path: str) -> str:
         document = docx.Document(file_path)
         return "\n".join(p.text for p in document.paragraphs).strip()
     if ext == ".doc":
-        textract = _optional_import("textract", "textract")
+        textract = _optional_import("textract", "textract-py3")
         extracted = textract.process(file_path)
         return extracted.decode("utf-8", errors="ignore").strip()
     with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -305,26 +316,36 @@ def _detect_modality(
     extset: Optional[Set[str]],
     save_name: str,
 ) -> str:
-    candidate = _find_candidate_file(folder_path, extset, save_name)
-    if not candidate:
+    detected: Set[str] = set()
+    for file_path in _iter_candidate_files(folder_path, extset, save_name):
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in PDF_EXTENSIONS:
+            detected.add("pdf")
+        elif ext in IMAGE_EXTENSIONS:
+            detected.add("image")
+        elif ext in AUDIO_EXTENSIONS:
+            detected.add("audio")
+        else:
+            detected.add("text")
+        if "text" in detected:
+            break
+    if not detected:
         return "text"
-    ext = os.path.splitext(candidate)[1].lower()
-    if ext in PDF_EXTENSIONS:
-        return "pdf"
-    if ext in IMAGE_EXTENSIONS:
-        return "image"
-    if ext in AUDIO_EXTENSIONS:
-        return "audio"
+    if "text" in detected:
+        return "text"
+    if len(detected) == 1:
+        return detected.pop()
     return "text"
 
 
-def _find_candidate_file(
+def _iter_candidate_files(
     folder_path: str,
     extset: Optional[Set[str]],
     save_name: str,
-) -> Optional[str]:
+) -> Iterable[str]:
     if os.path.isfile(folder_path):
-        return folder_path
+        yield folder_path
+        return
     for root, _, files in os.walk(folder_path):
         for fname in files:
             if fname == save_name:
@@ -332,8 +353,7 @@ def _find_candidate_file(
             short_ext = os.path.splitext(fname)[1].lower().lstrip(".")
             if extset and short_ext not in extset:
                 continue
-            return os.path.join(root, fname)
-    return None
+            yield os.path.join(root, fname)
 
 
 def _is_textual_modality(modality: str) -> bool:
