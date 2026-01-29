@@ -669,6 +669,7 @@ def _print_run_banner(
     model: str,
     n: int,
     use_batch: bool,
+    modality: Optional[str],
     estimated_cost: Optional[Dict[str, float]],
     max_output_tokens: Optional[int],
     stats: Dict[str, Any],
@@ -687,7 +688,10 @@ def _print_run_banner(
     print(
         f"Prompts: {len(prompts):,} | Words: ~{total_words:,} | Words per prompt: ~{words_per_prompt:,}"
     )
-    print(f"Model: {model} | Mode: {'batch' if use_batch else 'streaming'}")
+    modality_segment = f" | modality: {modality}" if modality else ""
+    print(
+        f"Model: {model} | Mode: {'batch' if use_batch else 'streaming'}{modality_segment}"
+    )
     pricing = _lookup_model_pricing(model)
     if pricing:
         print(
@@ -718,6 +722,25 @@ def _print_run_banner(
         if pricing:
             print("Estimated token usage unavailable for this model.")
         print("Estimated cost unavailable for this model.")
+
+
+def _infer_modality_from_inputs(
+    prompt_images: Optional[Dict[str, List[str]]],
+    prompt_audio: Optional[Dict[str, List[Dict[str, str]]]],
+    prompt_pdfs: Optional[Dict[str, List[Dict[str, str]]]],
+) -> str:
+    present = []
+    if prompt_images:
+        present.append("image")
+    if prompt_audio:
+        present.append("audio")
+    if prompt_pdfs:
+        present.append("pdf")
+    if not present:
+        return "text"
+    if len(present) > 1:
+        return "mixed"
+    return present[0]
 
 
 
@@ -2720,6 +2743,7 @@ async def get_all_responses(
     prompt_web_search_filters: Optional[Dict[str, Dict[str, Any]]] = None,
     *,
     model: str = "gpt-5-mini",
+    modality: Optional[str] = None,
     n: int = 1,
     max_output_tokens: Optional[int] = None,
     estimated_output_tokens_per_prompt: Optional[int] = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT,
@@ -2979,6 +3003,11 @@ async def get_all_responses(
     if estimated_output_tokens_per_prompt <= 0:
         estimated_output_tokens_per_prompt = ESTIMATED_OUTPUT_TOKENS_PER_PROMPT
     dataset_stats = _estimate_dataset_stats(prompts)
+    inferred_modality = modality or _infer_modality_from_inputs(
+        prompt_images,
+        prompt_audio,
+        prompt_pdfs,
+    )
     cost_estimate = _estimate_cost(
         prompts,
         n,
@@ -2993,6 +3022,7 @@ async def get_all_responses(
         model=model,
         n=n,
         use_batch=use_batch,
+        modality=inferred_modality,
         estimated_cost=cost_estimate,
         max_output_tokens=max_output_tokens,
         stats=dataset_stats,
