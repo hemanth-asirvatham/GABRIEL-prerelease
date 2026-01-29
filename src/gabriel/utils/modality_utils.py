@@ -54,8 +54,8 @@ def warn_if_modality_mismatch(
     if pdf_hits == total and modality != "pdf":
         print(
             f"[gabriel] Detected PDFs in column '{column_name}'. "
-            "Set modality='pdf' to attach files directly (or set force_text=True "
-            "when loading if you want plain text extraction)."
+            "Set modality='pdf' to attach files directly, or set modality='text' "
+            "(or 'entity'/'web') to extract plain text instead."
         )
     if image_hits == total and modality != "image":
         print(
@@ -67,6 +67,21 @@ def warn_if_modality_mismatch(
             f"[gabriel] Detected audio-like inputs in column '{column_name}'. "
             "Set modality='audio' to attach audio files correctly."
         )
+    if modality == "pdf" and pdf_hits == 0:
+        print(
+            f"[gabriel] Column '{column_name}' doesn't look like PDF inputs. "
+            "If this is text, consider modality='text' (or 'entity'/'web')."
+        )
+    if modality == "image" and image_hits == 0:
+        print(
+            f"[gabriel] Column '{column_name}' doesn't look like image inputs. "
+            "If this is text, consider modality='text' (or 'entity'/'web')."
+        )
+    if modality == "audio" and audio_hits == 0:
+        print(
+            f"[gabriel] Column '{column_name}' doesn't look like audio inputs. "
+            "If this is text, consider modality='text' (or 'entity'/'web')."
+        )
 
     if modality == "text" and text_word_counts:
         avg_words = sum(text_word_counts) / max(1, len(text_word_counts))
@@ -74,6 +89,13 @@ def warn_if_modality_mismatch(
             print(
                 f"[gabriel] Average word count in column '{column_name}' is {avg_words:.1f} "
                 "words. Confirm you intended modality='text' (rather than 'entity' or 'web')."
+            )
+    if modality in {"entity", "web"} and text_word_counts:
+        avg_words = sum(text_word_counts) / max(1, len(text_word_counts))
+        if avg_words > 30:
+            print(
+                f"[gabriel] Average word count in column '{column_name}' is {avg_words:.1f} "
+                "words. Consider modality='text' for long-form passages."
             )
 
 
