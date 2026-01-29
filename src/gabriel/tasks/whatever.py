@@ -133,6 +133,8 @@ class Whatever:
         prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
         web_search_filters: Optional[Dict[str, Any]] = None,
         reset_files: bool = False,
+        return_original_columns: bool = True,
+        drop_prompts: bool = True,
         parse_json: Optional[bool] = None,
         **kwargs: Any,
     ) -> pd.DataFrame:
@@ -146,6 +148,12 @@ class Whatever:
             parsed structure for each response.  Set to ``False`` to skip the
             extra parsing step and keep the raw JSON text in the ``Response``
             column.
+        return_original_columns:
+            When ``True`` and ``df`` is provided, merge response columns back
+            onto the original DataFrame using the same identifier strategy.
+        drop_prompts:
+            When ``True`` and merging back onto ``df``, drop the prompt column
+            before saving/returning the merged DataFrame.
         """
 
         filters_spec: Dict[str, Any] = dict(
@@ -167,6 +175,7 @@ class Whatever:
             if column_name not in source_data.columns:
                 raise ValueError(f"Column '{column_name}' not found in DataFrame")
             df_input = source_data.reset_index(drop=True)
+            df_proc = df_input.copy()
             prompt_series = df_input[column_name]
             prompt_values = [
                 "" if self._is_missing(val) else str(val)
@@ -182,6 +191,8 @@ class Whatever:
                     raise ValueError("identifier_column must contain unique values")
             else:
                 identifiers_list = self._generate_identifiers(prompt_values)
+
+            df_proc["_gid"] = identifiers_list
 
             image_map: Dict[str, List[str]] = {}
             if image_column is not None:
@@ -238,6 +249,7 @@ class Whatever:
             global_filters = base_filters or None
 
             prompts_list = prompt_values
+            df_source = df_proc
         else:
             if isinstance(source_data, str):
                 prompts_list = [source_data]
@@ -248,6 +260,7 @@ class Whatever:
             )
             image_map = {}
             audio_map = {}
+            df_source = None
 
         if prompt_images:
             if not isinstance(prompt_images, dict):
@@ -318,5 +331,14 @@ class Whatever:
                     "[Whatever] JSON responses are stored as text in the 'Response' column. "
                     "Call `Whatever.extract_json(df)` to parse them into structured objects."
                 )
+
+        if df_source is not None and return_original_columns:
+            merged = df_source.merge(
+                df_clean, left_on="_gid", right_on="Identifier", how="left"
+            ).drop(columns=["_gid"])
+            if drop_prompts and column_name and column_name in merged.columns:
+                merged = merged.drop(columns=[column_name])
+            merged.to_csv(save_path, index=False)
+            return merged
 
         return df_clean
