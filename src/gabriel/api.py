@@ -2079,6 +2079,8 @@ async def whatever(
     n_parallels: int = 650,
     use_dummy: bool = False,
     reset_files: bool = False,
+    return_original_columns: bool = True,
+    drop_prompts: bool = True,
     reasoning_effort: Optional[str] = None,
     reasoning_summary: Optional[str] = None,
     response_fn: Optional[Callable[..., Awaitable[Any]]] = None,
@@ -2128,6 +2130,12 @@ async def whatever(
         If ``True`` return deterministic dummy responses.
     reset_files:
         When ``True`` regenerate outputs even if files already exist.
+    return_original_columns:
+        When ``True`` and ``df`` is provided, merge response columns back onto
+        the input DataFrame using the prompt identifiers.
+    drop_prompts:
+        When ``True`` and merging back onto ``df``, drop the prompt column
+        before saving/returning the result.
     reasoning_effort, reasoning_summary:
         Optional OpenAI reasoning controls.
     response_fn:
@@ -2203,6 +2211,8 @@ async def whatever(
         prompt_audio=prompt_audio,
         web_search_filters=web_search_filters,
         reset_files=reset_files,
+        return_original_columns=return_original_columns,
+        drop_prompts=drop_prompts,
         response_fn=response_fn,
         get_all_responses_fn=get_all_responses_fn,
         **kwargs,
