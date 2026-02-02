@@ -1566,6 +1566,8 @@ async def deduplicate(
     *,
     save_dir: str,
     additional_instructions: Optional[str] = None,
+    modality: str = "entity",
+    max_words_per_text: int = 500,
     model: str = "gpt-5-mini",
     n_parallels: int = 650,
     n_runs: int = 3,
@@ -1596,6 +1598,10 @@ async def deduplicate(
         Directory where deduplication artifacts are written.
     additional_instructions:
         Extra guidance appended to the deduplication prompt.
+    modality:
+        Use ``"entity"`` for short entity strings or ``"text"`` for long-form text snippets.
+    max_words_per_text:
+        Maximum word count for each text snippet when ``modality="text"``.
     model:
         Model name used for overlap detection.
     n_parallels:
@@ -1649,6 +1655,8 @@ async def deduplicate(
         additional_instructions=additional_instructions,
         use_embeddings=use_embeddings,
         group_size=group_size,
+        modality=modality,
+        max_words_per_text=max_words_per_text,
         **cfg_kwargs,
     )
     return await Deduplicate(cfg, template_path=template_path).run(
