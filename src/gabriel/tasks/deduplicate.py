@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -13,7 +14,12 @@ from scipy.cluster.vq import kmeans2
 
 from ..core.prompt_template import PromptTemplate, resolve_template
 from ..utils.openai_utils import get_all_responses
-from ..utils import safest_json, safe_json, get_all_embeddings
+from ..utils import (
+    safest_json,
+    safe_json,
+    get_all_embeddings,
+    warn_if_modality_mismatch,
+)
 from ..utils.logging import announce_prompt_rendering
 
 
@@ -31,6 +37,8 @@ class DeduplicateConfig:
     additional_instructions: Optional[str] = None
     use_embeddings: bool = True
     group_size: int = 500
+    modality: str = "entity"
+    max_words_per_text: int = 500
 
     def __post_init__(self) -> None:
         if self.additional_instructions is not None:
@@ -100,6 +108,7 @@ class Deduplicate:
         *,
         column_name: str,
         output_col: str,
+        raw_texts: Optional[Dict[str, str]] = None,
         reset_files: bool,
         run_idx: int,
         **kwargs: Any,
@@ -110,8 +119,11 @@ class Deduplicate:
 
         batches: List[List[str]] = []
         if use_embeddings:
+            embed_texts = uniques
+            if raw_texts is not None:
+                embed_texts = [raw_texts.get(u, u) for u in uniques]
             emb = await get_all_embeddings(
-                texts=uniques,
+                texts=embed_texts,
                 identifiers=uniques,
                 save_path=os.path.join(self.cfg.save_dir, "deduplicate_embeddings.pkl"),
                 reset_file=reset_files and run_idx == 0,
@@ -143,11 +155,15 @@ class Deduplicate:
         identifiers: List[str] = []
         announce_prompt_rendering("Deduplicate", len(batches) * max(1, self.cfg.n_runs))
         for idx, items in enumerate(batches):
+            raw_terms: Any = items
+            if raw_texts is not None:
+                raw_terms = {ident: raw_texts.get(ident, "") for ident in items}
             prompts.append(
                 self.template.render(
                     group_id=f"deduplicate_{idx:05d}",
-                    raw_terms=items,
+                    raw_terms=raw_terms,
                     additional_instructions=self.cfg.additional_instructions or "",
+                    modality=self.cfg.modality,
                 )
             )
             identifiers.append(f"deduplicate_{idx:05d}")
@@ -230,18 +246,70 @@ class Deduplicate:
 
         df_proc = df.reset_index(drop=True).copy()
         n_runs = nruns if nruns is not None else self.cfg.n_runs
+        values = df_proc[column_name].tolist()
+        warn_if_modality_mismatch(values, self.cfg.modality, column_name=column_name)
         current_col = column_name
+        raw_texts: Optional[Dict[str, str]] = None
+        id_to_original: Dict[str, Any] = {}
+
+        if self.cfg.modality == "text":
+            if self.cfg.group_size > 25:
+                print(
+                    "[Deduplicate] For modality='text', consider a smaller group_size "
+                    "(e.g., 25) to keep prompts concise."
+                )
+            ids: List[Optional[str]] = []
+            truncated: List[Optional[str]] = []
+            truncated_count = 0
+            raw_texts = {}
+            for value in values:
+                if pd.isna(value):
+                    ids.append(None)
+                    truncated.append(None)
+                    continue
+                text = str(value)
+                sha8 = hashlib.sha1(text.encode()).hexdigest()[:8]
+                ids.append(sha8)
+                if sha8 not in id_to_original:
+                    id_to_original[sha8] = value
+                words = text.split()
+                if len(words) > self.cfg.max_words_per_text:
+                    truncated_count += 1
+                    clipped = " ".join(words[: self.cfg.max_words_per_text])
+                else:
+                    clipped = text
+                truncated.append(clipped)
+                raw_texts[sha8] = clipped
+            df_proc["_dedup_id"] = ids
+            df_proc[f"{column_name}_truncated"] = truncated
+            total = sum(1 for v in values if not pd.isna(v))
+            frac = (truncated_count / total * 100) if total else 0.0
+            print(
+                f"[Deduplicate] Truncated {truncated_count}/{total} texts "
+                f"({frac:.2f}%) to max_words_per_text={self.cfg.max_words_per_text}."
+            )
+            current_col = "_dedup_id"
         for i in range(n_runs):
-            if n_runs == 1:
-                output_col = f"mapped_{column_name}"
-            elif i == n_runs - 1:
-                output_col = f"mapped_{column_name}_final"
+            if self.cfg.modality == "text":
+                base = f"mapped_{column_name}_ids"
+                if n_runs == 1:
+                    output_col = base
+                elif i == n_runs - 1:
+                    output_col = f"{base}_final"
+                else:
+                    output_col = f"{base}_run{i + 1}"
             else:
-                output_col = f"mapped_{column_name}_run{i + 1}"
+                if n_runs == 1:
+                    output_col = f"mapped_{column_name}"
+                elif i == n_runs - 1:
+                    output_col = f"mapped_{column_name}_final"
+                else:
+                    output_col = f"mapped_{column_name}_run{i + 1}"
             await self._run_once(
                 df_proc,
                 column_name=current_col,
                 output_col=output_col,
+                raw_texts=raw_texts,
                 reset_files=reset_files,
                 run_idx=i,
                 **kwargs,
@@ -253,6 +321,21 @@ class Deduplicate:
                 total_runs=n_runs,
             )
             current_col = output_col
-        if n_runs > 1:
+        if self.cfg.modality == "text":
+            if n_runs > 1:
+                df_proc[f"mapped_{column_name}_ids"] = df_proc[current_col]
+            final_ids = (
+                df_proc[f"mapped_{column_name}_ids"]
+                if f"mapped_{column_name}_ids" in df_proc.columns
+                else df_proc[current_col]
+            )
+            mapped_texts: List[Any] = []
+            for val in final_ids:
+                if pd.isna(val):
+                    mapped_texts.append(val)
+                else:
+                    mapped_texts.append(id_to_original.get(str(val), val))
+            df_proc[f"mapped_{column_name}"] = mapped_texts
+        elif n_runs > 1:
             df_proc[f"mapped_{column_name}"] = df_proc[current_col]
         return df_proc

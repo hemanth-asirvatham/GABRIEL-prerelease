@@ -13,6 +13,7 @@ from gabriel.utils.openai_utils import get_all_responses, response_to_text
 from gabriel.utils.logging import announce_prompt_rendering
 from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.rate import Rate, RateConfig
+from gabriel.tasks.deduplicate import Deduplicate, DeduplicateConfig
 from gabriel.tasks.seed import Seed, SeedConfig
 
 
@@ -69,6 +70,7 @@ class IdeateConfig:
     seed_additional_instructions: Optional[str] = None
     seed_template_path: Optional[str] = None
     seed_deduplicate: bool = True
+    deduplicate_ideas: bool = True
 
     def __post_init__(self) -> None:
         if self.additional_instructions is not None:
@@ -115,6 +117,9 @@ class Ideate:
         use_seed_entities: Optional[bool] = None,
         seed_config_updates: Optional[Dict[str, Any]] = None,
         seed_run_kwargs: Optional[Dict[str, Any]] = None,
+        deduplicate_ideas: Optional[bool] = None,
+        deduplicate_config_updates: Optional[Dict[str, Any]] = None,
+        deduplicate_run_kwargs: Optional[Dict[str, Any]] = None,
     ) -> pd.DataFrame:
         """Generate a large batch of theories and optionally score them."""
 
@@ -151,6 +156,11 @@ class Ideate:
         use_seed = (
             self.cfg.use_seed_entities if use_seed_entities is None else use_seed_entities
         )
+        use_dedup = (
+            self.cfg.deduplicate_ideas if deduplicate_ideas is None else deduplicate_ideas
+        )
+        dedup_cfg_updates = dict(deduplicate_config_updates or {})
+        dedup_run_kwargs = dict(deduplicate_run_kwargs or {})
 
         raw_df, _ = await self._generate_reports(
             topic,
@@ -163,6 +173,14 @@ class Ideate:
         )
         parsed_df = self._parse_reports(raw_df, topic)
         self._print_random_previews(parsed_df)
+
+        if use_dedup:
+            parsed_df = await self._deduplicate_ideas(
+                parsed_df,
+                reset_files=reset_files,
+                config_updates=dedup_cfg_updates,
+                run_kwargs=dedup_run_kwargs,
+            )
 
         topic_instruction = (
             "Research field/topic the theories are situated in, and should be judged in the context of: "
@@ -402,6 +420,56 @@ class Ideate:
         df_proc["topic"] = topic
         return self._clean_columns(df_proc)
 
+    async def _deduplicate_ideas(
+        self,
+        df: pd.DataFrame,
+        *,
+        reset_files: bool,
+        config_updates: Dict[str, Any],
+        run_kwargs: Dict[str, Any],
+    ) -> pd.DataFrame:
+        print("[Ideate] Deduplicating ideas before scoring.")
+        dedup_save = os.path.join(self.cfg.save_dir, "ideate_deduplicate")
+        base_name = os.path.splitext(self.cfg.file_name)[0]
+        dedup_instruction = (
+            "You do not need exact matches. Deduplicate ideas that are highly similar, "
+            "operate in the same conceptual space, or describe the same underlying theory. "
+            "Pick the representative text as the clearest, best-stated, and most complete version."
+        )
+        extra_instruction = config_updates.get("additional_instructions")
+        cfg_kwargs: Dict[str, Any] = dict(
+            save_dir=dedup_save,
+            file_name=f"{base_name}_deduplicate.csv",
+            model=self.cfg.model,
+            n_parallels=self.cfg.n_parallels,
+            n_runs=1,
+            use_dummy=self.cfg.use_dummy,
+            modality="text",
+            max_words_per_text=500,
+            group_size=25,
+            additional_instructions=dedup_instruction,
+        )
+        cfg_kwargs.update(config_updates)
+        if extra_instruction:
+            cfg_kwargs["additional_instructions"] = (
+                f"{dedup_instruction}\n\n{extra_instruction}"
+            )
+        df_proc = df.copy()
+        if "report_text_original" not in df_proc.columns:
+            df_proc["report_text_original"] = df_proc["report_text"]
+        dedup_cfg = DeduplicateConfig(**cfg_kwargs)
+        dedup_task = Deduplicate(dedup_cfg)
+        dedup_run_opts = dict(run_kwargs)
+        dedup_df = await dedup_task.run(
+            df_proc,
+            column_name="report_text",
+            reset_files=reset_files,
+            **dedup_run_opts,
+        )
+        if "mapped_report_text" in dedup_df.columns:
+            dedup_df["report_text"] = dedup_df["mapped_report_text"]
+        return dedup_df
+
     def _clean_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Drop raw response metadata and present a consistent column order."""
 
@@ -426,6 +494,7 @@ class Ideate:
             "topic",
             "seed_text",
             "report_text",
+            "report_text_original",
             "title",
             "in_a_nutshell",
             "in_one_paragraph",
