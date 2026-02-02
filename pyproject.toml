@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gabriel"
-version = "0.1.0"
+version = "1.0.0"
 description = "LLM-based social-science analysis library"
 authors = [{name = "GABRIEL Contributors"}]
 readme = "README.md"
