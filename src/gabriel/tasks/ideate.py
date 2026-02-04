@@ -29,7 +29,9 @@ _DEF_ATTR_DESCRIPTION = (
     "Give low ratings to anything but a truly exceptional new theory that goes beyond existing work; penalize uncreative and unambitious theories that parrot existing work, "
     "while rewarding clearly new ideas that are clever, logically sensible, and explain important (NOT trivial and vague) things about the world that existing theories don't. "
     "Don't reward focus on niches and fads that don't really matter. Winning theories can be old school or new school, as long as they speak to something genuinely important in the topic and the world. "
-    "Reward interesting and important and clever, not just slapping old work onto something new like AI or quantum or smartphones just for the sake of it. "
+    "Reward interesting and important and clever, not just slapping old work onto something new like quantum or smartphones if it is just for the sake of it. "
+    "Penalize lack of clarity, where jargon or complex writing obfuscates the underlying ideas. Penalize proposals that just try to sound smart by being complicated / are unreadable. Penalize if core ideas aren't truly clear, parsimonious, well written, or presented with the intention to convey understanding. "
+    "Parsimony and clarity are key. "
     "A major contribution to the literature MUST explain something big and significant, NOT tiny effects that don't really matter. "
     "Default to low ratings unless you are fully convinced this is truly brilliant work deserving of research and publication."
 )
@@ -363,9 +365,9 @@ class Ideate:
             "and would lead to completely different theories and ideas if fully explored. ",
             "Again: don't describe a theory, just some details/a domain that would be interesting to pursue a novel theory. ",
             "For each seed, just give some light nudges towards a research focus, NOT the full theory. ",
-            "Each seed should touch on important, non-trivial specific subdomains for research; avoid niches, fads, etc that don't have real significance in the research field or the real world. "
-            "Don't obsess with recent events like AI or quantum or DeFi; can be old school too, not necessarily anything to do with current events. ",
-            "Can be anything, old events or more recent, wacky or traditional, as long as interesting research focus related to the topic."
+            "Each seed should touch on important, non-trivial specific subdomains for research; avoid niches, fads, etc that don't have real significance in the research field or the real world. ",
+            "Don't obsess with recent events like quantum or DeFi; can be old school too, not necessarily anything to do with current events. ",
+            "Can be anything, old events or more recent, wacky or traditional, as long as interesting research focus related to the topic. Present a broad range of seeds across very different interesting angles."
         ]
         base_lines.append("Primary topic focus:")
         base_lines.append(topic.strip())
