@@ -18,9 +18,9 @@ keywords = [
     "research",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
@@ -59,10 +59,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease"
-Repository = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease"
-Documentation = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease/blob/work/README.md"
-Issues = "https://github.com/hemanth-asirvatham/GABRIEL-prerelease/issues"
+Homepage = "https://github.com/openai/GABRIEL"
+Repository = "https://github.com/openai/GABRIEL"
+Documentation = "https://github.com/openai/GABRIEL/blob/main/README.md"
+Issues = "https://github.com/openai/GABRIEL/issues"
 
 [project.scripts]
 gabriel = "gabriel.cli.__main__:main"
