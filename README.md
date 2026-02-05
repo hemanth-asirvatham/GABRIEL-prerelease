@@ -2,7 +2,7 @@
 
 **GABRIEL** (Generalized Attribute Based Ratings Information Extraction Library) turns messy qualitative corpora into analysis-ready datasets with GPT. It handles prompting, batching, retries, checkpointing, and audit trails so you can treat “ask the model” workflows like any other measurement instrument. From rating rhetoric across a million speeches to matching product catalogs, you focus on the research question while GABRIEL handles the operations.
 
-📓 **Tutorial notebook** (start here!): https://colab.research.google.com/drive/1RMUeAWACpViqiUMlPMMwPTKyGU-OX756?usp=sharing — also available as `tutorial_notebook.ipynb` in this repo if you’d like to download and run it locally.
+📓 **Tutorial notebook** (start here!): https://colab.research.google.com/drive/1RMUeAWACpViqiUMlPMMwPTKyGU-OX756?usp=sharing — also available as `gabriel_tutorial_notebook.ipynb` in this repo if you’d like to download and run it locally.
 
 You can install the GABRIEL Python library with `pip install openai-gabriel` and then `import gabriel`.
 
