@@ -70,13 +70,12 @@ The tutorial notebook walks through these ideas step-by-step—from setting up a
 ## Installation
 
 ```bash
-pip install gabriel-openai (not yet operational)
+pip install gabriel-openai
 
-# or work from this prerelease repo
+# or install directly from GitHub
 pip install \
   --force-reinstall \
-  --no-deps \
-  git+https://github.com/hemanth-asirvatham/GABRIEL-prerelease.git@main
+  git+https://github.com/openai/GABRIEL.git@main
 ```
 
 Before running real jobs, point the helpers to your GPT endpoint:
@@ -186,4 +185,8 @@ Tests rely on the built-in dummy responses, so no API key is necessary. Linting 
 
 If you use GABRIEL in your research, please cite:
 
-> The Generalized Attribute Based Ratings Information Extraction Library (GABRIEL). Hemanth Asirvatham and Elliott Mokski (2025). <https://github.com/hemanth-asirvatham/GABRIEL-prerelease>
+> The Generalized Attribute Based Ratings Information Extraction Library (GABRIEL). Hemanth Asirvatham and Elliott Mokski (2026). <https://github.com/openai/GABRIEL>
+
+## License
+
+GABRIEL is released under the Apache 2.0 License. See [LICENSE](LICENSE).
